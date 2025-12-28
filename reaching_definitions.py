@@ -1,6 +1,6 @@
 from collections import defaultdict
 import re
-from pprint import pprint
+from pprint import pprint, pformat
 
 
 
@@ -34,6 +34,9 @@ token_re = re.compile(
 
     |^(?:else\s+)?goto\s+(?P<goto_target>{IDENT})$
         #3: [else] goto <label>
+
+    |^return\s+(?P<return_value>{VALUE})$
+        #4: return <var|num>
     """,
     re.VERBOSE
 )
@@ -72,6 +75,12 @@ def parse_program(text):
             add_to_bb((3, target))
             preds[target].append(current_bb)
             add_to_succs(target)
+            return
+        value = g["return_value"]
+        if value:
+            add_to_bb((4, VALUE(value)))
+            return
+        # будущая операция #5
 
     def item_handler(item):
         item = item.strip()
@@ -130,7 +139,6 @@ def bad_gen_kill_maker(blocks, definitions):
 def gen_kill_maker(blocks, definitions):
     GEN = {bb: 0 for bb in blocks}
     KILL = GEN.copy()
-    defs_by_var = defaultdict(list)
     var_mask = defaultdict(int)
     for i, (v, bb) in enumerate(definitions):
         bit = 1 << i
@@ -145,14 +153,25 @@ def gen_kill_maker(blocks, definitions):
     # pprint(KILL)     # {'BB0': 12, 'BB1': 3, 'BB2': 0}
     return GEN, KILL
 
+def bits_to_defs(definitions, mask):
+    if not mask: return "\u2205"
+    out, i = [], 0
+    while mask:
+        if mask & 1:
+            out.append(definitions[i])
+        mask >>= 1
+        i += 1
+    return ", ".join(f"({d[0]}, {d[1]})" for d in out)
 
 
-def reaching_definitions(BB_F):
+
+def reaching_definitions(BB_F, debug=False):
     blocks, preds, succs = BB_F
-    pprint(blocks)
-    pprint(preds)
-    pprint(succs)
-    print("~" * 77)
+    if debug: 
+        print("blocks:", pformat(blocks))
+        print("preds:",  pformat(preds))
+        print("succs:",  pformat(succs)) # UNUSED
+        print("~" * 77)
 
     definitions = []
     for bb, ops in blocks.items():
@@ -167,10 +186,40 @@ def reaching_definitions(BB_F):
                     seen.add(var)
         local_defs.reverse()
         definitions.extend(local_defs)
-    pprint(definitions)
+    if debug:
+        print("definitions:", pformat(definitions))
 
   # GEN, KILL = bad_gen_kill_maker(blocks, definitions)
     GEN, KILL = gen_kill_maker(blocks, definitions)
+
+    all_bits = (1 << len(definitions)) - 1
+    notKILL = {bb: (~KILL[bb]) & all_bits for bb in blocks}
+    # all_bits нужен для ускорения &-операций с бесконечной длиной единичек слева
+
+    RIN  = {bb: 0 for bb in blocks}
+    ROUT = RIN.copy()
+
+    changed = True
+    while changed:
+        changed = False
+        for bb in blocks: # (Python 3.7+) порядок ключей во время вставки/объявления сохраняется!
+            rin = 0
+            for p in preds[bb]: rin |= ROUT[p] # вспоминаем опять join
+
+            rout = GEN[bb] | (rin & notKILL[bb]) # ради чего весь этот переход set на int
+
+            if rin != RIN[bb] or rout != ROUT[bb]:
+                RIN[bb], ROUT[bb], changed = rin, rout, True
+
+    if debug:
+        for bb in RIN:
+            print()
+            print(f"RIN({bb}): {bits_to_defs(definitions, RIN[bb])}")
+            print(f"ROUT({bb}): {bits_to_defs(definitions, ROUT[bb])}")
+
+    return definitions, GEN, KILL, RIN, ROUT
+
+
 
 
 
@@ -190,4 +239,4 @@ BB2: t = x + y
 
 if __name__ == "__main__":
     BB_F = parse_program(program_0)
-    reaching_definitions(BB_F)
+    reaching_definitions(BB_F, debug=True)
