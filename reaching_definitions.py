@@ -79,6 +79,7 @@ def parse_program(text):
             m = token_re.match(item)
             if m:
                 group_handler(m.groupdict())
+            else: print("\u2622 Непонятный паттерн:", item)
 
     blocks = {}
     preds = defaultdict(list)
@@ -96,9 +97,87 @@ def parse_program(text):
 
 
 
-program = """
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ RD ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+def bad_gen_kill_maker(blocks, definitions):
+    """совсем общий случай, неучитывающий оптимизацию set -> int и правильность порядка в definitions"""
+    index = {d: i for i, d in enumerate(definitions)}
+    print(index)
+
+    GEN, KILL = {}, {}
+    for bb, ops in blocks.items():
+        gen_bits = GEN[bb] = set()
+        kill_bits = KILL[bb] = set()
+        # последнее определение каждой переменной в блоке
+        last = {}
+        for op in ops:
+            if op[0] in (0, 1): # <var> = <var|num> [<+|-|*|/|%> <var|num>]
+                last[op[1]] = (op[1], bb)
+        # GEN(B)
+        for pair in last.values():
+            gen_bits.add(index[pair])
+        # KILL(B)
+        for var in last:
+            for (v, b) in definitions:
+                if v == var and b != bb:
+                    kill_bits.add(index[(v, b)])
+    # pprint(GEN)  # {'BB0': {0, 1}, 'BB1': {2, 3}, 'BB2': {4}}
+    # pprint(KILL) # {'BB0': {2, 3}, 'BB1': {0, 1}, 'BB2': set()}
+    return GEN, KILL
+
+def gen_kill_maker(blocks, definitions):
+    GEN = {bb: 0 for bb in blocks}
+    KILL = GEN.copy()
+    defs_by_var = defaultdict(list)
+    var_mask = defaultdict(int)
+    for i, (v, bb) in enumerate(definitions):
+        bit = 1 << i
+        GEN[bb]     |= bit
+        var_mask[v] |= bit
+    # for (v, bb), i in index.items(): сколько определений, столько и итераций (в случае program_0: 5 шт.)
+    #     KILL[bb] |= var_mask[v] & ~(1 << i)
+    for v, bb in definitions: # сколько блоков, столько и итераций (в случае program_0: 3 шт.) 
+        KILL[bb] |= var_mask[v] & ~GEN[bb]
+    # pprint(GEN)      # {'BB0': 3, 'BB1': 12, 'BB2': 16}
+    # pprint(var_mask) # {'y': 5, 'x': 10, 't': 16}
+    # pprint(KILL)     # {'BB0': 12, 'BB1': 3, 'BB2': 0}
+    return GEN, KILL
+
+
+
+def reaching_definitions(BB_F):
+    blocks, preds, succs = BB_F
+    pprint(blocks)
+    pprint(preds)
+    pprint(succs)
+    print("~" * 77)
+
+    definitions = []
+    for bb, ops in blocks.items():
+        seen = set()
+        local_defs = []
+        # идём с конца, чтобы оставить ПОСЛЕДНИЕ определения
+        for op in reversed(ops):
+            if op[0] in (0, 1): # <var> = <var|num> [<+|-|*|/|%> <var|num>]
+                var = op[1]
+                if var not in seen:
+                    local_defs.append((var, bb))
+                    seen.add(var)
+        local_defs.reverse()
+        definitions.extend(local_defs)
+    pprint(definitions)
+
+  # GEN, KILL = bad_gen_kill_maker(blocks, definitions)
+    GEN, KILL = gen_kill_maker(blocks, definitions)
+
+
+
+program_0 = """
 BB0: x = 10;
      y = x + 2;
+     x = 10; // неправильный алгоритм просто выдаст порядок x,y вместо y,x (будет неудобно читать битовый вектор)
      goto BB1;
 // (x, 0), (x, 1), (y, 0), (y, 1)
 BB1: y = x + y;
@@ -109,7 +188,6 @@ BB2: t = x + y
      return t;
 """
 
-blocks, preds, succs = parse_program(program)
-pprint(blocks)
-pprint(preds)
-pprint(succs)
+if __name__ == "__main__":
+    BB_F = parse_program(program_0)
+    reaching_definitions(BB_F)
