@@ -45,7 +45,7 @@ def parse_program(text):
     def VALUE(item):
         return int(item) if item[0].isdigit() else item
 
-    def group_handler(g):
+    def group_handler(item, g):
         nonlocal current_bb, add_to_bb, add_to_succs
 
         label = g["label"] #0
@@ -55,6 +55,10 @@ def parse_program(text):
             tmp =  succs[label] = []; add_to_succs = tmp.append
             item_handler(g["rest"])
             return
+        if current_bb is None: # достигнут терминатор
+            print("\u2622 deadcode:", item)
+            return
+
         assign0 = g["assign0_var"]
         if assign0:
             add_to_bb((0, assign0, VALUE(g["assign0_rhs"])))
@@ -75,10 +79,12 @@ def parse_program(text):
             add_to_bb((3, target))
             preds[target].append(current_bb)
             add_to_succs(target)
+            current_bb = None
             return
         value = g["return_value"]
         if value:
             add_to_bb((4, VALUE(value)))
+            current_bb = None
             return
         # будущая операция #5
 
@@ -87,7 +93,7 @@ def parse_program(text):
         if item:
             m = token_re.match(item)
             if m:
-                group_handler(m.groupdict())
+                group_handler(item, m.groupdict())
             else: print("\u2622 Непонятный паттерн:", item)
 
     blocks = {}
@@ -235,6 +241,7 @@ BB1: y = x + y;
 // (x, 1), (y, 1)
 BB2: t = x + y
      return t;
+     goto BB0; // (t, BB2) расползается по всему коду, если не сделать return терминатором
 """
 
 if __name__ == "__main__":
