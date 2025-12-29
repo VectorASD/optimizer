@@ -112,6 +112,23 @@ def parse_program(text):
 
 
 
+# utils
+
+def bits_by_index(index, mask):
+    if not mask: return "\u2205"
+    out, i = [], 0
+    while mask:
+        if mask & 1:
+            out.append(index[i])
+        mask >>= 1
+        i += 1
+    
+    return ", ".join(f"({', '.join(map(str, d))})"
+                     if type(d) in (tuple, list) else str(d)
+                     for d in out)
+
+
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ RD ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -159,24 +176,41 @@ def gen_kill_maker(blocks, definitions):
     # pprint(KILL)     # {'BB0': 12, 'BB1': 3, 'BB2': 0}
     return GEN, KILL
 
-def bits_to_defs(definitions, mask):
-    if not mask: return "\u2205"
-    out, i = [], 0
-    while mask:
-        if mask & 1:
-            out.append(definitions[i])
-        mask >>= 1
-        i += 1
-    return ", ".join(f"({', '.join(map(str, d))})" for d in out)
-
 
 
 def reaching_definitions(BB_F, debug=False):
-    blocks, preds, succs = BB_F
+    """
+    «Какие присваивания могут дойти до этой точки?»
+    RD — это forward may‑анализ.
+    Он отвечает на вопрос:
+        «Какие определения переменных могут достигнуть точки p по какому‑то пути?»
+
+    GEN(B) — что блок порождает
+        Это последние присваивания каждой переменной внутри блока.
+        То есть:
+            если блок делает x = ..., то он генерирует определение x.
+        GEN — это «новые определения, которые выходят из блока».
+
+    KILL(B) — что блок убивает
+        Это все старые определения тех переменных, которым блок присваивает.
+        Если блок делает x = ..., то:
+            все предыдущие определения x из других блоков становятся недействительными.
+
+    IN(B) — что может прийти в блок
+        Это объединение (join) OUT всех предшественников.
+        «Какие определения могли прийти в этот блок?»
+
+    OUT(B) — что выходит из блока
+        Это: OUT = GEN ∪ (IN − KILL)
+        То есть:
+            берём всё, что пришло
+            убираем определения переменных, которые блок перезаписал
+            добавляем новые определения, созданные в блоке
+    """
+    blocks, preds, _ = BB_F
     if debug: 
         print("blocks:", pformat(blocks))
         print("preds:",  pformat(preds))
-        # print("succs:",  pformat(succs)) UNUSED
         print("~" * 77)
 
     definitions = []
@@ -196,7 +230,7 @@ def reaching_definitions(BB_F, debug=False):
   # GEN, KILL = bad_gen_kill_maker(blocks, definitions)
     GEN, KILL = gen_kill_maker(blocks, definitions)
     if debug:
-        print("definitions:", pformat(definitions))
+        print("defs:", pformat(definitions))
         print("GEN:", pformat(GEN))
         print("KILL:", pformat(KILL))
 
@@ -222,8 +256,8 @@ def reaching_definitions(BB_F, debug=False):
     if debug:
         for bb in RIN:
             print()
-            print(f"RIN({bb}): {bits_to_defs(definitions, RIN[bb])}")
-            print(f"ROUT({bb}): {bits_to_defs(definitions, ROUT[bb])}")
+            print(f"RIN({bb}): {bits_by_index(definitions, RIN[bb])}")
+            print(f"ROUT({bb}): {bits_by_index(definitions, ROUT[bb])}")
 
     return definitions, GEN, KILL, RIN, ROUT
 
@@ -268,17 +302,47 @@ def AE_gen_kill_maker(blocks):
 
 
 
-def available_expressions(BB_F, debug=False): 
-    blocks, preds, succs = BB_F
+def available_expressions(BB_F, debug=False):
+    """
+    «Какие выражения гарантированно уже вычислены к этой точке?»
+    AE — это forward must‑анализ.
+    Он отвечает на вопрос:
+        «Какое выражение вычислено по ВСЕМ путям, ведущим в точку p?»
+        Если хотя бы один путь не вычислял выражение — оно недоступно.
+
+    GEN(B) — выражения, вычисленные в блоке
+        Это все выражения вида (lhs op rhs), которые вычисляются в блоке.
+        Если блок делает y = x + 2, то выражение (x + 2) становится доступным.
+        GEN — это «выражения, которые блок гарантированно вычисляет».
+
+    KILL(B) — выражения, которые становятся недоступны
+        Если блок присваивает переменной x новое значение:
+            x = ...
+        то ВСЕ выражения, где участвует x (например, x + y, a * x), становятся недоступны.
+        Причина:
+            значение x изменилось, значит старые выражения больше невалидны.
+
+    IN(B) — что доступно на входе
+        Это пересечение (meet) OUT всех предшественников.
+        «Какие выражения вычислены по ВСЕМ путям?»
+        Если хотя бы один путь не вычислял выражение — оно не доступно.
+
+    OUT(B) — что доступно на выходе
+        Это: OUT = GEN ∪ (IN − KILL)
+        То есть:
+            берём выражения, которые были доступны
+            убираем те, чьи переменные изменились
+            добавляем новые выражения, вычисленные в блоке
+    """
+    blocks, preds, _ = BB_F
     if debug: 
         print("blocks:", pformat(blocks))
         print("preds:",  pformat(preds))
-        # print("succs:",  pformat(succs)) UNUSED
         print("~" * 77)
 
     expressions, GEN, KILL = AE_gen_kill_maker(blocks)
     if debug:
-        print("expressions:", pformat(expressions))
+        print("exprs:", pformat(expressions))
         print("GEN:", pformat(GEN))
         print("KILL:", pformat(KILL))
 
@@ -311,10 +375,139 @@ def available_expressions(BB_F, debug=False):
     if debug:
         for bb in RIN:
             print()
-            print(f"AVIN({bb}): {bits_to_defs(expressions, RIN[bb])}")
-            print(f"AVOUT({bb}): {bits_to_defs(expressions, ROUT[bb])}")
+            print(f"AVIN({bb}): {bits_by_index(expressions, RIN[bb])}")
+            print(f"AVOUT({bb}): {bits_by_index(expressions, ROUT[bb])}")
 
     return expressions, GEN, KILL, RIN, ROUT
+
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ LV ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+def collect_variables(blocks):
+    vars_set = set()
+    for bb, ops in blocks.items():
+        for op in ops:
+            kind = op[0]
+            if kind in (0, 1): # <var> = <var|num> [<+|-|*|/|%> <var|num>]
+                vars_set.add(op[1]) # <var> = ...
+                for v in (op[2], op[4] if kind == 1 else None):
+                    if isinstance(v, str):
+                        vars_set.add(v)
+            elif kind == 2: # if (<lhs> <cmp> <rhs>) goto <label>
+                for v in (op[1], op[3]):
+                    if isinstance(v, str): vars_set.add(v)
+            elif kind == 4: # return <value>
+                v = op[1]
+                if isinstance(v, str): vars_set.add(v)
+            # kind == 3: goto — без переменных
+    vars_list = sorted(vars_set) # для детерминированности (косметика)
+    index = {v: i for i, v in enumerate(vars_list)}
+    return vars_list, index
+
+def LV_gen_kill_maker(blocks):
+    vars_list, index = collect_variables(blocks)
+    GEN  = {bb: 0 for bb in blocks}
+    KILL = {bb: 0 for bb in blocks}
+
+    for bb, ops in blocks.items():
+        gen_bits = kill_bits = 0
+        defined = set()
+
+        for op in ops:
+            kind = op[0]
+
+            if kind in (0, 1): # <var> = <var|num> [<+|-|*|/|%> <var|num>]
+                for v in (op[2], op[4] if kind == 1 else None):
+                    if isinstance(v, str) and v not in defined:
+                        gen_bits |= 1 << index[v]
+                var = op[1] # <var> = ...
+                kill_bits |= 1 << index[var]
+                defined.add(var)
+
+            elif kind == 2: # if (<lhs> <cmp> <rhs>) goto <label>
+                for v in (op[1], op[3]):
+                    if isinstance(v, str) and v not in defined:
+                        gen_bits |= 1 << index[v]
+
+            elif kind == 4: # return <value>
+                v = op[1]
+                if isinstance(v, str) and v not in defined:
+                    gen_bits |= 1 << index[v]
+
+        GEN[bb]  = gen_bits
+        KILL[bb] = kill_bits
+
+    return vars_list, GEN, KILL
+
+def live_variables(BB_F, debug=False):
+    """
+    «Какие переменные ещё понадобятся в будущем?»
+    LV — это backward may‑анализ.
+    Он отвечает на вопрос:
+        «Какие переменные будут использованы ПОСЛЕ точки p хотя бы по одному пути?»
+        Если переменная будет использована позже — она активна (live).
+
+    GEN(B) — переменные, использованные ДО первого присваивания им в блоке
+        Если блок делает:
+            y = x + 1
+        то x используется до любого присваивания x → x ∈ GEN.
+        GEN — это «переменные, которые нужны прямо сейчас».
+
+    KILL(B) — переменные, которым присваивают в блоке
+        Если блок делает:
+            x = ...
+        то старое значение x больше не нужно → оно убито.
+        KILL — это «переменные, чьи старые значения становятся неактуальны».
+
+    OUT(B) — что нужно после блока
+        Это объединение (join) IN всех потомков.
+        «Какие переменные нужны в будущем?»
+
+    IN(B) — что нужно до блока
+        Это: IN = GEN ∪ (OUT − KILL)
+        То есть:
+            переменные, которые используются в блоке
+            плюс переменные, которые понадобятся позже
+            минус те, чьи старые значения перезаписаны
+    """
+    blocks, _, succs = BB_F
+    if debug:
+        print("blocks:", pformat(blocks))
+        print("succs:",  pformat(succs))
+        print("~" * 77)
+
+    vars_list, GEN, KILL = LV_gen_kill_maker(blocks)
+    if debug:
+        print("vars:", ", ".join(vars_list))
+        print("GEN:", pformat(GEN))
+        print("KILL:", pformat(KILL))
+
+    LVIN  = {bb: 0 for bb in blocks}
+    LVOUT = LVIN.copy()
+
+    changed = True
+    while changed:
+        changed = False
+        # обратный порядок блоков полезно соблюдать, но не обязательно
+        for bb in reversed(blocks): # <dict_reversekeyiterator>
+            out = 0
+            for s in succs[bb]: out |= LVIN[s]
+
+            _in = GEN[bb] | (out & ~KILL[bb])
+
+            if _in != LVIN[bb] or out != LVOUT[bb]:
+                LVIN[bb], LVOUT[bb], changed = _in, out, True
+
+    if debug:
+        for bb in LVIN:
+            print()
+            print(f"LVIN({bb}): {bits_by_index(vars_list, LVIN[bb])}")
+            print(f"LVOUT({bb}): {bits_by_index(vars_list, LVOUT[bb])}")
+
+    return vars_list, GEN, KILL, LVIN, LVOUT
 
 
 
@@ -358,10 +551,29 @@ BB4: t = a + b;
      return t;
 """
 
+program_2 = """
+// (x, inact), (y, inact), (z, inact)
+BB0: x = 10;
+     y = x + 2;
+     z = x * y;
+     goto BB1;
+// (x, act), (y, inact), (z, inact)
+BB1: y = x - 5;
+     x = x - 1;
+     if (x > 2) goto BB1; else goto BB2;
+// (x, act), (y, act), (z, inact)
+BB2: t = x + y;
+     return t;
+// (x, inact), (y, inact), (z, inact)
+"""
+
 if __name__ == "__main__":
     BB_F = parse_program(program_0)
     reaching_definitions(BB_F, debug=True)
     print("~" * 77)
     BB_F = parse_program(program_1)
     available_expressions(BB_F, debug=True)
+    print("~" * 77)
+    BB_F = parse_program(program_2)
+    live_variables(BB_F, debug=True)
 
