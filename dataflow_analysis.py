@@ -41,6 +41,8 @@ token_re = re.compile(
     re.VERBOSE
 )
 
+dashed_separator = "\n" + "~~~ " * 18 + "~~~\n"
+
 def parse_program(text, debug=False):
     def VALUE(item):
         return int(item) if item[0].isdigit() else item
@@ -112,7 +114,7 @@ def parse_program(text, debug=False):
         print("blocks:", pformat(blocks))
         if debug != "succs": print("preds:",  pformat(preds))
         if debug != "preds": print("succs:",  pformat(succs))
-        print("\n" + "~~~ " * 18 + "~~~\n")
+        print(dashed_separator)
 
     return blocks, preds, succs
 
@@ -230,7 +232,7 @@ while changed:
     for bb in {order}:{meet_code}{transfer_code}{update_code}
 """
 
-    print(full_code)
+    # print(full_code)
     exec(full_code, {}, {
         "blocks": blocks, "all_bits": all_bits,
         "preds": preds, "succs": succs,
@@ -279,32 +281,50 @@ def bad_gen_kill_maker(blocks, definitions):
     # pprint(KILL) # {'BB0': {2, 3}, 'BB1': {0, 1}, 'BB2': set()}
     return GEN, KILL
 
-def RD_gen_kill_maker(blocks):
+def RD_gen_kill_maker(blocks, unique_defs=True):
     definitions = []
-    for bb, ops in blocks.items():
-        seen = set()
-        local_defs = []
-        # идём с конца, чтобы оставить ПОСЛЕДНИЕ определения
-        for op in reversed(ops):
-            if op[0] in (0, 1): # <var> = <var|num> [<+|-|*|/|%> <var|num>]
-                var = op[1]
-                if var not in seen:
-                    local_defs.append((var, bb))
-                    seen.add(var)
-        local_defs.reverse()
-        definitions.extend(local_defs)
+    if unique_defs:
+        for bb, ops in blocks.items():
+            seen = set()
+            local_defs = []
+            # идём с конца, чтобы оставить ПОСЛЕДНИЕ определения
+            for op in reversed(ops):
+                if op[0] in (0, 1): # <var> = <var|num> [<+|-|*|/|%> <var|num>]
+                    var = op[1]
+                    if var not in seen:
+                        local_defs.append((var, bb))
+                        seen.add(var)
+            local_defs.reverse()
+            definitions.extend(local_defs)
+    else: # для SSA
+        bb_vars = {}
+        for bb, ops in blocks.items():
+            vars = bb_vars[bb] = set()
+            for i, op in enumerate(ops):
+                if op[0] in (0, 1): # <var> = <var|num> [<+|-|*|/|%> <var|num>]
+                    definitions.append((op[1], f"{bb}:{i}"))
+                    vars.add(op[1])
 
     GEN = {bb: 0 for bb in blocks}
     KILL = GEN.copy()
     var_mask = defaultdict(int)
-    for i, (v, bb) in enumerate(definitions):
+    for i, (v, origin) in enumerate(definitions):
         bit = 1 << i
+        bb = origin.split(":")[0]
         GEN[bb]     |= bit
         var_mask[v] |= bit
     # for (v, bb), i in index.items(): сколько определений, столько и итераций (в случае program_0: 5 шт.)
     #     KILL[bb] |= var_mask[v] & ~(1 << i)
-    for v, bb in definitions: # сколько блоков, столько и итераций (в случае program_0: 3 шт.) 
-        KILL[bb] |= var_mask[v] & ~GEN[bb]
+
+    if unique_defs:
+        for v, origin in definitions: # сколько блоков, столько и итераций (в случае program_0: 3 шт.) 
+            bb = origin.split(":")[0]
+            KILL[bb] |= var_mask[v] & ~GEN[bb]
+    else:
+        for bb, vars in bb_vars.items():
+            kill_mask = 0
+            for var in vars: kill_mask |= var_mask[var]
+            KILL[bb] = kill_mask & ~GEN[bb]
     # pprint(GEN)      # {'BB0': 3, 'BB1': 12, 'BB2': 16}
     # pprint(var_mask) # {'y': 5, 'x': 10, 't': 16}
     # pprint(KILL)     # {'BB0': 12, 'BB1': 3, 'BB2': 0}
@@ -312,7 +332,7 @@ def RD_gen_kill_maker(blocks):
 
 
 
-def reaching_definitions(BB_F, debug=False):
+def reaching_definitions(BB_F, unique_defs=True, debug=False):
     """
     «Какие присваивания могут дойти до этой точки?»
     RD — это forward may‑анализ.
@@ -343,7 +363,7 @@ def reaching_definitions(BB_F, debug=False):
     """
     blocks = BB_F[0]
   # GEN, KILL = bad_gen_kill_maker(blocks, definitions)
-    definitions, GEN, KILL = RD_gen_kill_maker(blocks)
+    definitions, GEN, KILL = RD_gen_kill_maker(blocks, unique_defs)
     if debug:
         print("defs:", pformat(definitions))
         print("GEN:", pformat(GEN))
