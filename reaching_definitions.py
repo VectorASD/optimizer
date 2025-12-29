@@ -112,7 +112,9 @@ def parse_program(text):
 
 
 
-# utils
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ UTILS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 def bits_by_index(index, mask):
     if not mask: return "\u2205"
@@ -122,10 +124,121 @@ def bits_by_index(index, mask):
             out.append(index[i])
         mask >>= 1
         i += 1
-    
     return ", ".join(f"({', '.join(map(str, d))})"
                      if type(d) in (tuple, list) else str(d)
                      for d in out)
+
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ENGINE ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+def dataflow_analysis(
+    BB_F,
+    GEN,
+    KILL,
+    *,
+    direction="forward",   # "forward" или "backward"
+    meet="or",             # "or" (join) или "and" (meet)
+    entry_bottom=True,     # нужно ли ставить bottom на entry (RD, AE)
+    debug=None
+):
+    """
+    Универсальный движок анализа потока данных.
+    Позволяет реализовать RD, AE, LV, VeryBusy, Anticipated и т.д.
+    """
+    blocks, preds, succs = BB_F
+    if meet == "and" and direction == "backward":
+        raise ValueError("Backward + meet='and' не существует в классических анализах")
+
+    # Вселенная битов
+    all_bits = 0
+    for bb in blocks:
+        all_bits |= GEN[bb] | KILL[bb]
+    # all_bits = (1 << N) - 1 тоже можно, но этот вариант универсальнее
+
+    # anti-KILL одинаков для всех анализов
+    notKILL = {bb: ~KILL[bb] & all_bits for bb in blocks}
+
+    # актуальные настройки в случае meet = "or" (RD, LV)
+    IN  = {bb: 0 for bb in blocks}
+    OUT = IN.copy()
+
+    if meet == "and": # AE
+        for bb in blocks:
+            IN[bb] = all_bits
+        if entry_bottom:
+            entry = next(iter(blocks))
+            IN[entry] = 0
+    # если бы имел смысл Backward + meet='and', то 0 ставится в exit вместо entry
+
+    # порядок обхода
+    order = tuple(reversed(blocks) if direction == "backward" else blocks)
+
+    if direction == "forward":
+        if meet == "or":
+            meet_code = """
+            if preds[bb]:
+                new_IN = 0
+                for p in preds[bb]: new_IN |= OUT[p]
+            else: new_IN = IN[bb] # entry block"""
+        else: # meet == "and"
+            meet_code = """
+            if preds[bb]:
+                new_IN = all_bits
+                for p in preds[bb]: new_IN &= OUT[p]
+            else: new_IN = IN[bb] # entry block"""
+    else: # backward
+        if meet == "or":
+            meet_code = """
+            if succs[bb]:
+                new_OUT = 0
+                for s in succs[bb]: new_OUT |= IN[s]
+            else: new_OUT = OUT[bb] # exit block"""
+        else: # meet == "and" — теоретически
+            meet_code = """
+            if succs[bb]:
+                new_OUT = all_bits
+                for s in succs[bb]: new_OUT &= IN[s]
+            else: new_OUT = OUT[bb] # exit block"""
+
+    # передаточная функция
+    if direction == "forward":
+        transfer_code = """
+            new_OUT = GEN[bb] | (new_IN & notKILL[bb])"""
+    else:
+        transfer_code = """
+            new_IN = GEN[bb] | (new_OUT & notKILL[bb])"""
+
+    # обновление IN/OUT
+    update_code = """
+            if new_IN != IN[bb] or new_OUT != OUT[bb]:
+                IN[bb], OUT[bb] = new_IN, new_OUT
+                changed = True"""
+
+    full_code = f"""
+changed = True
+while changed:
+    changed = False
+    for bb in {order}:{meet_code}{transfer_code}{update_code}
+"""
+
+    print(full_code)
+    exec(full_code, {}, {
+        "blocks": blocks, "all_bits": all_bits,
+        "preds": preds, "succs": succs,
+        "GEN": GEN, "notKILL": notKILL,
+        "IN": IN, "OUT": OUT
+    })
+
+    if debug:
+        prefix, index = debug
+        for bb in blocks:
+            print()
+            print(f"{prefix}IN({bb}): {bits_by_index(index, IN[bb])}")
+            print(f"{prefix}OUT({bb}): {bits_by_index(index, OUT[bb])}")
+    return IN, OUT
 
 
 
@@ -135,6 +248,7 @@ def bits_by_index(index, mask):
 
 def bad_gen_kill_maker(blocks, definitions):
     """совсем общий случай, неучитывающий оптимизацию set -> int и правильность порядка в definitions"""
+    # расчёт definitions теперь перенесён в RD_gen_kill_maker
     index = {d: i for i, d in enumerate(definitions)}
     print(index)
 
@@ -159,7 +273,21 @@ def bad_gen_kill_maker(blocks, definitions):
     # pprint(KILL) # {'BB0': {2, 3}, 'BB1': {0, 1}, 'BB2': set()}
     return GEN, KILL
 
-def gen_kill_maker(blocks, definitions):
+def RD_gen_kill_maker(blocks):
+    definitions = []
+    for bb, ops in blocks.items():
+        seen = set()
+        local_defs = []
+        # идём с конца, чтобы оставить ПОСЛЕДНИЕ определения
+        for op in reversed(ops):
+            if op[0] in (0, 1): # <var> = <var|num> [<+|-|*|/|%> <var|num>]
+                var = op[1]
+                if var not in seen:
+                    local_defs.append((var, bb))
+                    seen.add(var)
+        local_defs.reverse()
+        definitions.extend(local_defs)
+
     GEN = {bb: 0 for bb in blocks}
     KILL = GEN.copy()
     var_mask = defaultdict(int)
@@ -174,7 +302,7 @@ def gen_kill_maker(blocks, definitions):
     # pprint(GEN)      # {'BB0': 3, 'BB1': 12, 'BB2': 16}
     # pprint(var_mask) # {'y': 5, 'x': 10, 't': 16}
     # pprint(KILL)     # {'BB0': 12, 'BB1': 3, 'BB2': 0}
-    return GEN, KILL
+    return definitions, GEN, KILL
 
 
 
@@ -213,52 +341,20 @@ def reaching_definitions(BB_F, debug=False):
         print("preds:",  pformat(preds))
         print("~" * 77)
 
-    definitions = []
-    for bb, ops in blocks.items():
-        seen = set()
-        local_defs = []
-        # идём с конца, чтобы оставить ПОСЛЕДНИЕ определения
-        for op in reversed(ops):
-            if op[0] in (0, 1): # <var> = <var|num> [<+|-|*|/|%> <var|num>]
-                var = op[1]
-                if var not in seen:
-                    local_defs.append((var, bb))
-                    seen.add(var)
-        local_defs.reverse()
-        definitions.extend(local_defs)
-
   # GEN, KILL = bad_gen_kill_maker(blocks, definitions)
-    GEN, KILL = gen_kill_maker(blocks, definitions)
+    definitions, GEN, KILL = RD_gen_kill_maker(blocks)
     if debug:
         print("defs:", pformat(definitions))
         print("GEN:", pformat(GEN))
         print("KILL:", pformat(KILL))
 
-    all_bits = (1 << len(definitions)) - 1
-    notKILL = {bb: (~KILL[bb]) & all_bits for bb in blocks}
-    # all_bits нужен для ускорения &-операций с бесконечной длиной единичек слева
-
-    RIN  = {bb: 0 for bb in blocks}
-    ROUT = RIN.copy()
-
-    changed = True
-    while changed:
-        changed = False
-        for bb in blocks: # (Python 3.7+) порядок ключей во время вставки/объявления сохраняется!
-            rin = 0
-            for p in preds[bb]: rin |= ROUT[p] # вспоминаем опять join
-
-            rout = GEN[bb] | (rin & notKILL[bb]) # ради чего весь этот переход set на int
-
-            if rin != RIN[bb] or rout != ROUT[bb]:
-                RIN[bb], ROUT[bb], changed = rin, rout, True
-
-    if debug:
-        for bb in RIN:
-            print()
-            print(f"RIN({bb}): {bits_by_index(definitions, RIN[bb])}")
-            print(f"ROUT({bb}): {bits_by_index(definitions, ROUT[bb])}")
-
+    RIN, ROUT = dataflow_analysis(
+        BB_F, GEN, KILL,
+        direction="forward",
+        meet="or",         # RD = forward + join
+        entry_bottom=True, # bottom на entry
+        debug=("R", definitions) if debug else None
+    )
     return definitions, GEN, KILL, RIN, ROUT
 
 
@@ -346,39 +442,14 @@ def available_expressions(BB_F, debug=False):
         print("GEN:", pformat(GEN))
         print("KILL:", pformat(KILL))
 
-    all_bits = (1 << len(expressions)) - 1
-    notKILL = {bb: (~KILL[bb]) & all_bits for bb in blocks}
-    # all_bits нужен для ускорения &-операций с бесконечной длиной единичек слева
-
-    # RIN  = {bb: 0 for bb in blocks} фундаментальная ошибка. Раз meet вместо join, то заменяем bottom на top
-    entry = next(iter(blocks))
-    RIN = {bb: all_bits for bb in blocks} # all_bits оказался этим самым top, хоть и создан вообще не для этого
-    RIN[entry] = 0 # top -> bottom для ПЕРВОГО блока
-    ROUT = RIN.copy()
-    print(f"AVIN(init): {RIN}")
-    print(f"AVOUT(init): {ROUT}")
-
-    changed = True
-    while changed:
-        changed = False
-        for bb in blocks: # (Python 3.7+) порядок ключей во время вставки/объявления сохраняется!
-            if preds[bb]:
-                rin = all_bits
-                for p in preds[bb]: rin &= ROUT[p] # вспоминаем опять meet
-            else: rin = 0
-
-            rout = GEN[bb] | (rin & notKILL[bb]) # ради чего весь этот переход set на int
-
-            if rin != RIN[bb] or rout != ROUT[bb]:
-                RIN[bb], ROUT[bb], changed = rin, rout, True
-
-    if debug:
-        for bb in RIN:
-            print()
-            print(f"AVIN({bb}): {bits_by_index(expressions, RIN[bb])}")
-            print(f"AVOUT({bb}): {bits_by_index(expressions, ROUT[bb])}")
-
-    return expressions, GEN, KILL, RIN, ROUT
+    AVIN, AVOUT = dataflow_analysis(
+        BB_F, GEN, KILL,
+        direction="forward",
+        meet="and",        # AE = forward + meet
+        entry_bottom=True, # bottom на entry
+        debug=("AV", expressions) if debug else None
+    )
+    return expressions, GEN, KILL, AVIN, AVOUT
 
 
 
@@ -485,28 +556,12 @@ def live_variables(BB_F, debug=False):
         print("GEN:", pformat(GEN))
         print("KILL:", pformat(KILL))
 
-    LVIN  = {bb: 0 for bb in blocks}
-    LVOUT = LVIN.copy()
-
-    changed = True
-    while changed:
-        changed = False
-        # обратный порядок блоков полезно соблюдать, но не обязательно
-        for bb in reversed(blocks): # <dict_reversekeyiterator>
-            out = 0
-            for s in succs[bb]: out |= LVIN[s]
-
-            _in = GEN[bb] | (out & ~KILL[bb])
-
-            if _in != LVIN[bb] or out != LVOUT[bb]:
-                LVIN[bb], LVOUT[bb], changed = _in, out, True
-
-    if debug:
-        for bb in LVIN:
-            print()
-            print(f"LVIN({bb}): {bits_by_index(vars_list, LVIN[bb])}")
-            print(f"LVOUT({bb}): {bits_by_index(vars_list, LVOUT[bb])}")
-
+    LVIN, LVOUT = dataflow_analysis(
+        BB_F, GEN, KILL,
+        direction="backward",
+        meet="or", # LV: join = OR
+        debug=("LV", vars_list) if debug else None
+    )
     return vars_list, GEN, KILL, LVIN, LVOUT
 
 
@@ -576,4 +631,3 @@ if __name__ == "__main__":
     print("~" * 77)
     BB_F = parse_program(program_2)
     live_variables(BB_F, debug=True)
-
