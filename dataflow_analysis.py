@@ -41,7 +41,7 @@ token_re = re.compile(
     re.VERBOSE
 )
 
-def parse_program(text):
+def parse_program(text, debug=False):
     def VALUE(item):
         return int(item) if item[0].isdigit() else item
 
@@ -107,6 +107,12 @@ def parse_program(text):
         line = line.split("//", 1)[0]
         for item in line.split(";"):
             item_handler(item)
+
+    if debug:
+        print("blocks:", pformat(blocks))
+        if debug != "succs": print("preds:",  pformat(preds))
+        if debug != "preds": print("succs:",  pformat(succs))
+        print("\n" + "~~~ " * 18 + "~~~\n")
 
     return blocks, preds, succs
 
@@ -335,12 +341,7 @@ def reaching_definitions(BB_F, debug=False):
             убираем определения переменных, которые блок перезаписал
             добавляем новые определения, созданные в блоке
     """
-    blocks, preds, _ = BB_F
-    if debug: 
-        print("blocks:", pformat(blocks))
-        print("preds:",  pformat(preds))
-        print("~" * 77)
-
+    blocks = BB_F[0]
   # GEN, KILL = bad_gen_kill_maker(blocks, definitions)
     definitions, GEN, KILL = RD_gen_kill_maker(blocks)
     if debug:
@@ -430,12 +431,7 @@ def available_expressions(BB_F, debug=False):
             убираем те, чьи переменные изменились
             добавляем новые выражения, вычисленные в блоке
     """
-    blocks, preds, _ = BB_F
-    if debug: 
-        print("blocks:", pformat(blocks))
-        print("preds:",  pformat(preds))
-        print("~" * 77)
-
+    blocks = BB_F[0]
     expressions, GEN, KILL = AE_gen_kill_maker(blocks)
     if debug:
         print("exprs:", pformat(expressions))
@@ -544,12 +540,7 @@ def live_variables(BB_F, debug=False):
             плюс переменные, которые понадобятся позже
             минус те, чьи старые значения перезаписаны
     """
-    blocks, _, succs = BB_F
-    if debug:
-        print("blocks:", pformat(blocks))
-        print("succs:",  pformat(succs))
-        print("~" * 77)
-
+    blocks = BB_F[0]
     vars_list, GEN, KILL = LV_gen_kill_maker(blocks)
     if debug:
         print("vars:", ", ".join(vars_list))
@@ -623,11 +614,11 @@ BB2: t = x + y;
 """
 
 if __name__ == "__main__":
-    BB_F = parse_program(program_0)
+    BB_F = parse_program(program_0, debug="preds")
     reaching_definitions(BB_F, debug=True)
     print("~" * 77)
-    BB_F = parse_program(program_1)
+    BB_F = parse_program(program_1, debug="preds")
     available_expressions(BB_F, debug=True)
     print("~" * 77)
-    BB_F = parse_program(program_2)
+    BB_F = parse_program(program_2, debug="succs")
     live_variables(BB_F, debug=True)
