@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import defaultdict, deque
 import re
 from pprint import pprint, pformat
 
@@ -37,6 +37,8 @@ token_re = re.compile(
 
     |^return\s+(?P<return_value>{VALUE})$
         #4: return <var|num>
+        
+        #5: <var> = phi(<var>, ...)
     """,
     re.VERBOSE
 )
@@ -53,8 +55,8 @@ def parse_program(text, debug=False):
         label = g["label"] #0
         if label:
             current_bb = label
-            tmp = blocks[label] = []; add_to_bb    = tmp.append
-            tmp =  succs[label] = []; add_to_succs = tmp.append
+            tmp = blocks[label] = deque(); add_to_bb    = tmp.append
+            tmp =  succs[label] = [];      add_to_succs = tmp.append
             item_handler(g["rest"])
             return
         if current_bb is None: # достигнут терминатор
@@ -289,7 +291,7 @@ def RD_gen_kill_maker(blocks, unique_defs=True):
             local_defs = []
             # идём с конца, чтобы оставить ПОСЛЕДНИЕ определения
             for op in reversed(ops):
-                if op[0] in (0, 1): # <var> = <var|num> [<+|-|*|/|%> <var|num>]
+                if op[0] in (0, 1, 5): # <var> = <var|num> [<+|-|*|/|%> <var|num>] | phi(origins...)
                     var = op[1]
                     if var not in seen:
                         local_defs.append((var, bb))
@@ -301,7 +303,7 @@ def RD_gen_kill_maker(blocks, unique_defs=True):
         for bb, ops in blocks.items():
             vars = bb_vars[bb] = set()
             for i, op in enumerate(ops):
-                if op[0] in (0, 1): # <var> = <var|num> [<+|-|*|/|%> <var|num>]
+                if op[0] in (0, 1, 5): # <var> = <var|num> [<+|-|*|/|%> <var|num>] | phi(<origin>, ...)
                     definitions.append((op[1], f"{bb}:{i}"))
                     vars.add(op[1])
 
