@@ -46,6 +46,21 @@ token_re = re.compile(
     re.VERBOSE
 )
 
+"""
+#0: <var> = <var|num>
+#1: <var> = <var|num> <+|-|*|/|%> <var|num>
+#2: if (<var|num> <cmp> <var|num>) goto <label>
+#3: [else] goto <label>
+#4: return <var|num>
+#5: <var> = phi(<var>, ...)
+#6: <var> = <func>(<var|num>, ...)
+"""
+DEFINED_VARS_IDs = (1, 1, 0, 0, 0, 1, 1)
+ARGLIST_IDs      = (0, 0, 0, 0, 0, 1, 1)
+USED_VARS_IDXs = ((2,), (2, 4), (1, 3), (), (1,), 2, 3)
+
+
+
 def parse_program(text, debug=False):
     def VALUE(item):
         return int(item) if item[0].isdigit() or item[0] == "-" else item
@@ -167,6 +182,57 @@ def stringify_cfg(F, file=None):
 
 
 
+def defined_vars_in_block(insts, vars=None):
+    vars = set() if vars is None else vars
+    add_to_vars = vars.add
+    for inst in insts:
+        if DEFINED_VARS_IDs[inst[0]]:
+            add_to_vars(inst[1])
+    return vars
+
+def defined_vars_in_cfg(BB_F, vars=None):
+    vars = set() if vars is None else vars
+    for insts in BB_F[0].values():
+        defined_vars_in_block(insts, vars)
+    return vars
+
+
+
+def used_vars_in_instr(inst, vars=None):
+    vars = set() if vars is None else vars
+    add_to_vars = vars.add
+    kind = inst[0]
+    if ARGLIST_IDs[kind]:
+        args = inst[USED_VARS_IDXs[kind]]
+        for var in args:
+            if isinstance(var, str): add_to_vars(var)
+    else:
+        for idx in USED_VARS_IDXs[kind]:
+            var = inst[idx]
+            if isinstance(var, str): add_to_vars(var)
+    return vars
+
+def used_vars_in_block(insts, vars=None):
+    vars = set() if vars is None else vars
+    for inst in insts: used_vars_in_instr(inst, vars)
+    return vars
+
+def used_vars_in_cfg(BB_F, vars=None):
+    vars = set() if vars is None else vars
+    for insts in BB_F[0].values():
+        for inst in insts: used_vars_in_instr(inst, vars)
+    return vars
+
+
+
+def all_vars_in_cfg(BB_F, vars=None):
+    vars = set() if vars is None else vars
+    defined_vars_in_cfg(BB_F, vars)
+    used_vars_in_cfg(BB_F, vars)
+    return vars
+
+
+
 program_0 = """
 BB0: x1 = 10
      y1 = x1 + 2
@@ -184,3 +250,11 @@ BB2: t1 = func(x3, y3)
 if __name__ == "__main__":
     F = parse_program(program_0, debug=True)
     stringify_cfg(F)
+
+    for bb, insts in F[0].items():
+        print(f"defined({bb}):", defined_vars_in_block(insts))
+    print("defined all:", defined_vars_in_cfg(F))
+    for bb, insts in F[0].items():
+        print(f"used({bb}):", used_vars_in_block(insts))
+    print("used all:", used_vars_in_cfg(F))
+    print("all:", all_vars_in_cfg(F))

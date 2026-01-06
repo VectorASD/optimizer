@@ -1,5 +1,5 @@
 from utils import dashed_separator, bits_by_index
-from HIR_parser import parse_program, stringify_cfg
+from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg
 from dataflow_analysis import reaching_definitions
 
 from pprint import pprint
@@ -232,7 +232,50 @@ def compute_df(BB_F, IDom, index): # Algorithm DF (Dominance Frontier, Фрон�
 
 
 
-def SSA(BB_F, debug=False):
+def static_insertion(BB_F, all_vars, DF, index_arr): # Algorithm SI
+    blocks, preds, succs = BB_F
+
+    defined_in_block = defaultdict(set)
+    for bb, instrs in blocks.items():
+        defs = defined_vars_in_block(instrs)
+        for v in defs: defined_in_block[v].add(bb)
+
+    pprint(defined_in_block)
+    inserted = set() # (bb, var) → φ уже вставлен
+    for var in all_vars:
+        WL = deque(defined_in_block[var])
+        # print(var, WL)
+        while WL:
+            bb = WL.pop() # pop - обход в глубино (LIFO, stack), popleft - обход в ширину (FIFO, queue)
+            df_mask = DF[bb]
+            # print(" ", bb, df_mask)
+            while df_mask:
+                lsb = df_mask & -df_mask
+                bit_index = lsb.bit_length() - 1
+                df_mask ^= lsb
+
+                y = index_arr[bit_index]
+                # print("   ", y)
+
+                key = (y, v)
+                if key in inserted: continue
+                inserted.add(key)
+
+                preds_y = preds.get(y, ())
+                phi_args = (var,) * len(preds_y)
+                phi_instr = (5, var, phi_args)
+                blocks[y].appendleft(phi_instr)
+
+                if y not in defined_in_block[v]:
+                    defined_in_block[v].add(y)
+                    WL.append(y)
+
+def static_renaming(BB_F, all_vars, dom_tree): # Algorithm SR
+    pass
+
+
+
+def SSA(BB_F, debug=False): # Static Single Assignment
     """ Как из книги...
     BB_F[1].clear()
     BB_F[1].update({
@@ -272,6 +315,15 @@ def SSA(BB_F, debug=False):
         print()
         for bb, bit_mask in DF.items():
             print(f"DF({bb}): {bits_by_index(index_arr, bit_mask)}")
+
+    all_vars = all_vars_in_cfg(BB_F)
+
+    static_insertion(BB_F, all_vars, DF, index_arr)
+    if debug:
+        print(dashed_separator)
+        stringify_cfg(BB_F)
+
+    static_renaming(BB_F, all_vars, dom_tree)
 
 
 
