@@ -1,8 +1,8 @@
+from utils import bits_by_index
+from HIR_parser import parse_program
+
 from collections import defaultdict
 from pprint import pprint, pformat
-
-from HIR_parser import parse_program
-from utils import bits_by_index
 
 
 

@@ -1,4 +1,6 @@
-from dataflow_analysis import parse_program, reaching_definitions, dashed_separator
+from utils import dashed_separator
+from HIR_parser import parse_program
+from dataflow_analysis import reaching_definitions
 
 from pprint import pprint
 from collections import defaultdict, deque

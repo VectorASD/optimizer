@@ -1,8 +1,8 @@
+from utils import dashed_separator
+
 from collections import defaultdict, deque
 import re
 from pprint import pformat
-
-from utils import dashed_separator
 
 
 
@@ -35,8 +35,12 @@ token_re = re.compile(
 
     |^return\s+(?P<return_value>{VALUE})$
         #4: return <var|num>
-        
+
+    |^(?P<call_var>{IDENT})\s*=\s*
+    (?P<call_func>{IDENT})\s*\(\s*(?P<call_args>{VALUE}(?:\s*,\s*{VALUE})*)?\s*\)$
         #5: <var> = phi(<var>, ...)
+        #6: <var> = <func>(<var|num>, ...)
+
     """,
     re.VERBOSE
 )
@@ -86,7 +90,21 @@ def parse_program(text, debug=False):
             add_to_bb((4, VALUE(value)))
             current_bb = None
             return
-        # будущая операция #5
+        call_var = g["call_var"]
+        if call_var:
+            call_func = g["call_func"]
+            raw_args = g["call_args"]
+            call_args = () if raw_args is None else tuple(VALUE(value.strip()) for value in raw_args.split(","))
+            if call_func.lower() == "phi":
+                #5: <var> = phi(<var>, ...)
+                for arg in call_args:
+                    if type(arg) is not str: raise SyntaxError(f"в PHI(...)-аргументах допустимы только имена переменных: {item}")
+                add_to_bb((5, call_var, call_args))
+            else:
+                #6: <var> = <func>(<var|num>, ...)
+                add_to_bb((6, call_var, call_func, call_args))
+            return
+        # будущая операция #7
 
     def item_handler(item):
         item = item.strip()
@@ -128,6 +146,7 @@ BB1: x2 = PHI(x1, x3);
      x3 = x2 - 1;
      if (x3 > 2) goto BB1; else goto BB2;
 BB2: t1 = func(x3, y3);
+     t2 = no_args_func();
      return t1;
 """
 
