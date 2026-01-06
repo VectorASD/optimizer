@@ -146,14 +146,13 @@ def compute_dominators(BB_F): # Algorithm D
     if custom_entry:
         entry = "<entry>"
         for bb in entrances: preds[bb].append(entry)
-        succs[entry] = list(entrances)
+        # succs[entry] = list(entrances)
     else:
         entry = next(iter(entrances))
 
-    index = {bb: 1 << i for i, bb in enumerate(blocks, start=custom_entry)}
+    index_arr = tuple(blocks)
+    index = {bb: 1 << i for i, bb in enumerate(index_arr, start=custom_entry)}
     if custom_entry: index[entry] = 1
-
-    index_arr = (entry, *index) if custom_entry else tuple(index)
 
     TOP = (1 << len(index)) - 1
 
@@ -170,6 +169,13 @@ def compute_dominators(BB_F): # Algorithm D
             for p in preds[bb]: new &= Dom[p]
             new |= shift
             if new != Dom[bb]: Dom[bb], changed = new, True
+
+    if custom_entry:
+        for bb in entrances: preds[bb].pop() # append(entry)
+        # del succs[entry] # succs[entry] = list(entrances)
+        del Dom[entry]
+        for bb in Dom: Dom[bb] >>= 1
+        index = {bb: 1 << i for i, bb in enumerate(blocks)}
 
     return Dom, index, index_arr
 
@@ -205,29 +211,67 @@ def compute_idom(Dom, index, index_arr): # Algorithm DT
 
     # Здесь-то мы и чувствуем всю эту боль в виде O(N³)...
     # Решение! Перейти на более совершенный алгоритм (любой из них), что находит IDom без Dom:
-    # - Algorithm DPO:   O(N × E)
-    # - Lengauer–Tarjan: O((N + E) α(N)); α(N) — обратная функция Аккермана
+    # - Algorithm DPO:        O(N × E)
+    # - Lengauer–Tarjan (LT): O((N + E) α(N)); α(N) — обратная функция Аккермана
     return IDom, dom_tree
+
+def compute_df(BB_F, IDom, index): # Algorithm DF (Dominance Frontier, Фронт Доминирования)
+    blocks, preds, _succs = BB_F
+    DF = {bb: 0 for bb in blocks}
+    for bb, parents in preds.items():
+        print("BLOCK:", bb, parents)
+        shift = index[bb]
+        for parent in parents:
+            r = parent
+            # поднимаемся по дереву доминаторов
+            while r != IDom.get(bb, None):
+                print("  r =", r)
+                DF[r] |= shift
+                r = IDom[r]
+    return DF
 
 
 
 def SSA(BB_F, debug=False):
+    """ Как из книги...
+    BB_F[1].clear()
+    BB_F[1].update({
+        "BB0": [],
+        "BB1": ["BB0", "BB6"],
+        "BB2": ["BB1"],
+        "BB3": ["BB2", "BB7"],
+        "BB4": ["BB1"],
+        "BB5": ["BB4"],
+        "BB6": ["BB4"],
+        "BB7": ["BB5", "BB6"],
+    })
+    """
+
     Dom, index, index_arr = compute_dominators(BB_F)
     # Dom[bb] — это ВСЕ блоки, которые невозможно обойти, чтобы попасть в bb
     if debug:
-        for bb, value in Dom.items():
-            print(f"Dom({bb}): {bits_by_index(index_arr, value)}")
-        print(dashed_separator)
+        for bb, bit_mask in Dom.items():
+            print(f"Dom({bb}): {bits_by_index(index_arr, bit_mask)}")
 
     IDom, dom_tree = compute_idom(Dom, index, index_arr)
     # IDom[bb] - это САМЫЙ ПОСЛЕДНИЙ блок, который невозможно обойти, чтобы попасть в bb
     if debug:
+        print()
         for bb, parent in IDom.items():
             print(f"IDom({bb}) = {parent}")
         print("\tDom tree:")
         L = max(map(len, dom_tree))
         for bb, children in dom_tree.items():
             print(f"{bb:{L}} -> {', '.join(children)}")
+
+    DF = compute_df(BB_F, IDom, index)
+    # DF[bb] имеет пути к вершинам Y, в которых невозможно избежать недоминирующее ребро, т.е.:
+    # 1. существует путь в Y, начинающийся в bb, который идёт по пунктирным рёбрам
+    # 2. но нет пути в Y, который идёт только по сплошным рёбрам DomTree
+    if debug:
+        print()
+        for bb, bit_mask in DF.items():
+            print(f"DF({bb}): {bits_by_index(index_arr, bit_mask)}")
 
 
 
