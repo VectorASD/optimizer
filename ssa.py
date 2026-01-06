@@ -1,4 +1,4 @@
-from utils import dashed_separator
+from utils import dashed_separator, bits_by_index
 from HIR_parser import parse_program, stringify_cfg
 from dataflow_analysis import reaching_definitions
 
@@ -8,7 +8,7 @@ from collections import defaultdict, deque
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ SSA ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~ naive SSA ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 def get_masks(items):
@@ -104,7 +104,7 @@ def rename_variables(blocks, definitions, RIN, shifts):
 
 
 
-def SSA(BB_F, debug=False):
+def naive_SSA(BB_F, debug=False):
     # definitions, GEN, KILL, RIN, ROUT = reaching_definitions(BB_F, debug=debug)
     # print(dashed_separator)
     definitions, GEN, KILL, RIN, ROUT = reaching_definitions(BB_F, unique_defs=False, debug=debug)
@@ -127,6 +127,107 @@ def SSA(BB_F, debug=False):
         print(dashed_separator)
         stringify_cfg(ssa_F)
     return ssa_F
+
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ SSA ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+def compute_dominators(BB_F): # Algorithm D
+    blocks, preds, succs = BB_F
+
+    entrances = set()
+    for bb in blocks:
+        if not preds[bb]:
+            entrances.add(bb)
+
+    custom_entry = len(entrances) > 1
+    if custom_entry:
+        entry = "<entry>"
+        for bb in entrances: preds[bb].append(entry)
+        succs[entry] = list(entrances)
+    else:
+        entry = next(iter(entrances))
+
+    index = {bb: 1 << i for i, bb in enumerate(blocks, start=custom_entry)}
+    if custom_entry: index[entry] = 1
+
+    index_arr = (entry, *index) if custom_entry else tuple(index)
+
+    TOP = (1 << len(index)) - 1
+
+    Dom = {bb: TOP for bb in index}
+    Dom[entry] = index[entry] # Dom(entry) = {entry}
+
+    changed = True
+    while changed:
+        # print(Dom)
+        changed = False
+        for bb, shift in index.items():
+            if bb == entry: continue # preds пустой
+            new = TOP
+            for p in preds[bb]: new &= Dom[p]
+            new |= shift
+            if new != Dom[bb]: Dom[bb], changed = new, True
+
+    return Dom, index, index_arr
+
+def compute_idom(Dom, index, index_arr): # Algorithm DT
+    def blocks_in(mask):
+        while mask:
+            lsb = mask & -mask # выделяем младший установленный бит
+            yield index_arr[lsb.bit_length() - 1]
+            mask ^= lsb        # убираем этот бит
+
+    IDom = {}
+    dom_tree = defaultdict(list)
+    for bb, dom_mask in Dom.items():
+        others = dom_mask & ~index[bb]
+        if not others: continue
+
+        candidates = []
+        items = tuple(blocks_in(others))
+        for d in items:
+            # check: does d2 dominate d?
+            # Dom[d] ⊆ Dom[d2] <=> Dom[d] & Dom[d2] == Dom[d]
+            d_mask = Dom[d]
+            dominated_by_other = any(d2 != d and d_mask & Dom[d2] == d_mask for d2 in items)
+
+            # ближайший доминатор — тот, который не доминируется никем другим из множества
+            if not dominated_by_other:
+                candidates.append(d)
+
+        assert len(candidates) == 1
+        parent = candidates[0]
+        IDom[bb] = parent
+        dom_tree[parent].append(bb)
+
+    # Здесь-то мы и чувствуем всю эту боль в виде O(N³)...
+    # Решение! Перейти на более совершенный алгоритм (любой из них), что находит IDom без Dom:
+    # - Algorithm DPO:   O(N × E)
+    # - Lengauer–Tarjan: O((N + E) α(N)); α(N) — обратная функция Аккермана
+    return IDom, dom_tree
+
+
+
+def SSA(BB_F, debug=False):
+    Dom, index, index_arr = compute_dominators(BB_F)
+    # Dom[bb] — это ВСЕ блоки, которые невозможно обойти, чтобы попасть в bb
+    if debug:
+        for bb, value in Dom.items():
+            print(f"Dom({bb}): {bits_by_index(index_arr, value)}")
+        print(dashed_separator)
+
+    IDom, dom_tree = compute_idom(Dom, index, index_arr)
+    # IDom[bb] - это САМЫЙ ПОСЛЕДНИЙ блок, который невозможно обойти, чтобы попасть в bb
+    if debug:
+        for bb, parent in IDom.items():
+            print(f"IDom({bb}) = {parent}")
+        print("\tDom tree:")
+        L = max(map(len, dom_tree))
+        for bb, children in dom_tree.items():
+            print(f"{bb:{L}} -> {', '.join(children)}")
 
 
 
@@ -161,25 +262,27 @@ BB1: if (c != 0) goto BB2;
 
 BB2: x = 1;
      y = 2;
-     goto BB5;
+     goto BB4;
 
 BB3: x = bar(x);
      y = bar(x);
      x = y;
-     if (x > -2) goto BB7;
+     if (x > -2) goto BB6;
+     goto BB4;
+
+BB4: x = baz(x, y);
      goto BB5;
 
-BB5: x = baz(x, y);
+BB5: if (x > 0) goto BB1;
      goto BB6;
 
-BB6: if (x > 0) goto BB1;
-     goto BB7;
+BB6: return x;
 
-BB7: return x;
+BB7: return 10; // второй entry
 """
 
 if __name__ == "__main__":
-    # BB_F = parse_program(program_0, debug="preds")
-    # SSA(BB_F, debug=True)
+    # bb_F = parse_program(program_0, debug="preds")
+    # naive_SSA(bb_F, debug=True)
     bb_F  = parse_program(program_1, debug="preds")
     ssa_F = SSA(bb_F, debug=True)

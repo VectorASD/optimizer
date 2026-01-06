@@ -8,7 +8,7 @@ import sys
 
 
 IDENT = r"[a-zA-Z_]\w*"
-VALUE = rf"(?:{IDENT}|\d+)"
+VALUE = rf"(?:{IDENT}|\-?\d+)"
 token_re = re.compile(
     rf"""
     ^(?P<label>{IDENT})\:\s*
@@ -48,7 +48,7 @@ token_re = re.compile(
 
 def parse_program(text, debug=False):
     def VALUE(item):
-        return int(item) if item[0].isdigit() else item
+        return int(item) if item[0].isdigit() or item[0] == "-" else item
 
     def group_handler(item, g):
         nonlocal current_bb, add_to_bb, add_to_succs
