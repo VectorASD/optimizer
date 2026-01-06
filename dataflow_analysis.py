@@ -157,7 +157,7 @@ def RD_gen_kill_maker(blocks, unique_defs=True):
             local_defs = []
             # идём с конца, чтобы оставить ПОСЛЕДНИЕ определения
             for op in reversed(ops):
-                if op[0] in (0, 1, 5): # <var> = <var|num> [<+|-|*|/|%> <var|num>] | phi(origins...)
+                if op[0] in (0, 1, 5, 6): # <var> = <var|num> [<+|-|*|/|%> <var|num>] | phi(origins...) | <call>(<var|num>...)
                     var = op[1]
                     if var not in seen:
                         local_defs.append((var, bb))
@@ -169,7 +169,7 @@ def RD_gen_kill_maker(blocks, unique_defs=True):
         for bb, ops in blocks.items():
             vars = bb_vars[bb] = set()
             for i, op in enumerate(ops):
-                if op[0] in (0, 1, 5): # <var> = <var|num> [<+|-|*|/|%> <var|num>] | phi(<origin>, ...)
+                if op[0] in (0, 1, 5, 6): # <var> = <var|num> [<+|-|*|/|%> <var|num>] | phi(<origin>, ...) | <call>(<var|num>...)
                     definitions.append((op[1], f"{bb}:{i}"))
                     vars.add(op[1])
 
@@ -346,18 +346,23 @@ def collect_variables(blocks):
     for bb, ops in blocks.items():
         for op in ops:
             kind = op[0]
-            if kind in (0, 1): # <var> = <var|num> [<+|-|*|/|%> <var|num>]
-                vars_set.add(op[1]) # <var> = ...
-                for v in (op[2], op[4] if kind == 1 else None):
-                    if isinstance(v, str):
-                        vars_set.add(v)
-            elif kind == 2: # if (<lhs> <cmp> <rhs>) goto <label>
-                for v in (op[1], op[3]):
+            match kind:
+                case 0 | 1: # <var> = <var|num> [<+|-|*|/|%> <var|num>]
+                    vars_set.add(op[1]) # <var> = ...
+                    for v in (op[2], op[4] if kind == 1 else None):
+                        if isinstance(v, str):
+                            vars_set.add(v)
+                case 2: # if (<lhs> <cmp> <rhs>) goto <label>
+                    for v in (op[1], op[3]):
+                        if isinstance(v, str): vars_set.add(v)
+                # case 3: goto — без переменных
+                case 4: # return <value>
+                    v = op[1]
                     if isinstance(v, str): vars_set.add(v)
-            elif kind == 4: # return <value>
-                v = op[1]
-                if isinstance(v, str): vars_set.add(v)
-            # kind == 3: goto — без переменных
+                case 5 | 6: # <var> = phi(<var>, ...) | <func>(<var|num>, ...)
+                    vars_set.add(op[1]) # <var> = ...
+                    for origin in op[3 if kind == 6 else 2]:
+                        if isinstance(origin, str): vars_set.add(origin)
     vars_list = sorted(vars_set) # для детерминированности (косметика)
     index = {v: i for i, v in enumerate(vars_list)}
     return vars_list, index
@@ -373,25 +378,30 @@ def LV_gen_kill_maker(blocks):
 
         for op in ops:
             kind = op[0]
-
-            if kind in (0, 1): # <var> = <var|num> [<+|-|*|/|%> <var|num>]
-                for v in (op[2], op[4] if kind == 1 else None):
+            match kind:
+                case 0 | 1: # <var> = <var|num> [<+|-|*|/|%> <var|num>]
+                    for v in (op[2], op[4] if kind == 1 else None):
+                        if isinstance(v, str) and v not in defined:
+                            gen_bits |= 1 << index[v]
+                    var = op[1] # <var> = ...
+                    kill_bits |= 1 << index[var]
+                    defined.add(var)
+                case 2: # if (<lhs> <cmp> <rhs>) goto <label>
+                    for v in (op[1], op[3]):
+                        if isinstance(v, str) and v not in defined:
+                            gen_bits |= 1 << index[v]
+                case 4: # return <value>
+                    v = op[1]
                     if isinstance(v, str) and v not in defined:
                         gen_bits |= 1 << index[v]
-                var = op[1] # <var> = ...
-                kill_bits |= 1 << index[var]
-                defined.add(var)
-
-            elif kind == 2: # if (<lhs> <cmp> <rhs>) goto <label>
-                for v in (op[1], op[3]):
-                    if isinstance(v, str) and v not in defined:
-                        gen_bits |= 1 << index[v]
-
-            elif kind == 4: # return <value>
-                v = op[1]
-                if isinstance(v, str) and v not in defined:
-                    gen_bits |= 1 << index[v]
-
+                case 5 | 6: # <var> = phi(<var>, ...) | <func>(<var|num>, ...)
+                    var = op[1]
+                    kill_bits |= 1 << index[var]
+                    defined.add(var)
+                    if kind == 6:
+                        for v in op[3]:
+                            if isinstance(v, str) and v not in defined:
+                                gen_bits |= 1 << index[v]
         GEN[bb]  = gen_bits
         KILL[bb] = kill_bits
 
