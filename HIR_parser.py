@@ -3,6 +3,7 @@ from utils import dashed_separator
 from collections import defaultdict, deque
 import re
 from pprint import pformat
+import sys
 
 
 
@@ -134,21 +135,52 @@ def parse_program(text, debug=False):
 
     return blocks, preds, succs
 
+def stringify_cfg(F, file=None):
+    blocks, preds, _ = F
+    write = (file or sys.stdout).write
+    for bb, ops in blocks.items():
+        i, L = 0, len(ops)
+        start = f"{bb}: "
+        pad   = " " * len(start)
+        while i < L:
+            first = not i
+            write(start if first else pad)
+            op = ops[i]; i += 1 # ops[i++]
+            match op[0]:
+                case 0: write(f"{op[1]} = {op[2]}")
+                case 1: write(f"{op[1]} = {op[2]} {op[3]} {op[4]}")
+                case 2:
+                    if i < L and ops[i][0] == 3:
+                        next_op = ops[i]; i += 1 # ops[i++]
+                        write(f"if ({op[1]} {op[2]} {op[3]}) goto {op[4]}; else goto {next_op[1]}")
+                    else:
+                        write(f"if ({op[1]} {op[2]} {op[3]}) goto {op[4]}")
+                case 3: write(f"goto {op[1]}")
+                case 4: write(f"return {op[1]}")
+                case 5: write(f"{op[1]} = PHI({', '.join(op[2])})")
+                case 6: write(f"{op[1]} = {op[2]}({', '.join(map(str, op[3]))})")
+                case _: write(f"{op} ???")
+            if first:
+                bb_preds = preds[bb]
+                if bb_preds: write(f"   // preds: {', '.join(map(str, bb_preds))}")
+            write("\n")
+
 
 
 program_0 = """
-BB0: x1 = 10;
-     y1 = x1 + 2;
-     goto BB1;
-BB1: x2 = PHI(x1, x3);
-     y2 = PHI(y1, y3);
-     y3 = x2 + y2;
-     x3 = x2 - 1;
+BB0: x1 = 10
+     y1 = x1 + 2
+     goto BB1
+BB1: x2 = PHI(x1, x3)
+     y2 = PHI(y1, y3)
+     y3 = x2 + y2
+     x3 = x2 - 1
      if (x3 > 2) goto BB1; else goto BB2;
-BB2: t1 = func(x3, y3);
-     t2 = no_args_func();
-     return t1;
+BB2: t1 = func(x3, y3)
+     t2 = no_args_func()
+     return t1
 """
 
 if __name__ == "__main__":
-    parse_program(program_0, debug=True)
+    F = parse_program(program_0, debug=True)
+    stringify_cfg(F)

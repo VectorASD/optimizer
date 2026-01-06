@@ -1,5 +1,5 @@
 from utils import dashed_separator
-from HIR_parser import parse_program
+from HIR_parser import parse_program, stringify_cfg
 from dataflow_analysis import reaching_definitions
 
 from pprint import pprint
@@ -50,7 +50,8 @@ def rename_variables(blocks, definitions, RIN, shifts):
     print("RIN:", RIN)
 
     def renamer(var):
-        return (current[var] if type(var) is str else var)
+        # return (current[var] if type(var) is str else var)
+        return current.get(var, var)
 
     new_blocks = {}
 
@@ -92,6 +93,11 @@ def rename_variables(blocks, definitions, RIN, shifts):
                     _kind, var, origins = inst
                     current[var] = new_varname = def_to_ssa[f"{bb}:{i}"]
                     new_inst = 5, new_varname, tuple(map(ssa_with_shift, origins))
+                case 6: # <var> = <func>(<var|num>, ...)
+                    _kind, var, func_name, func_args = inst
+                    renamed_args = tuple(map(renamer, func_args))
+                    current[var] = new_varname = def_to_ssa[f"{bb}:{i}"]
+                    new_inst = 6, new_varname, func_name, renamed_args
             if new_inst:
                 add_inst(new_inst)
     return new_blocks
@@ -114,8 +120,13 @@ def SSA(BB_F, debug=False):
 
     if debug: print(dashed_separator)
     new_blocks = rename_variables(blocks, definitions, RIN, shifts)
-    if debug: pprint(new_blocks)
-    return new_blocks, prevs, succs
+
+    ssa_F = new_blocks, prevs, succs
+    if debug:
+        pprint(new_blocks)
+        print(dashed_separator)
+        stringify_cfg(ssa_F)
+    return ssa_F
 
 
 
@@ -140,6 +151,35 @@ BB1: y = y + x;
 BB2: return y;
 """
 
+program_1 = """
+BB0: x = 0;
+     y = 0;
+     goto BB1;
+
+BB1: if (c != 0) goto BB2;
+     goto BB3;
+
+BB2: x = 1;
+     y = 2;
+     goto BB5;
+
+BB3: x = bar(x);
+     y = bar(x);
+     x = y;
+     if (x > -2) goto BB7;
+     goto BB5;
+
+BB5: x = baz(x, y);
+     goto BB6;
+
+BB6: if (x > 0) goto BB1;
+     goto BB7;
+
+BB7: return x;
+"""
+
 if __name__ == "__main__":
-    BB_F = parse_program(program_0, debug="preds")
-    SSA(BB_F, debug=True)
+    # BB_F = parse_program(program_0, debug="preds")
+    # SSA(BB_F, debug=True)
+    bb_F  = parse_program(program_1, debug="preds")
+    ssa_F = SSA(bb_F, debug=True)
