@@ -232,42 +232,41 @@ def compute_df(BB_F, IDom, index): # Algorithm DF (Dominance Frontier, Фрон�
 
 
 
-def static_insertion(BB_F, all_vars, DF, index_arr): # Algorithm SI
+def static_insertion(BB_F, all_vars, DF, index_arr, debug=False): # Algorithm SI
     blocks, preds, succs = BB_F
 
     defined_in_block = defaultdict(set)
     for bb, instrs in blocks.items():
         defs = defined_vars_in_block(instrs)
-        for v in defs: defined_in_block[v].add(bb)
+        for var in defs: defined_in_block[var].add(bb)
 
-    pprint(defined_in_block)
-    inserted = set() # (bb, var) → φ уже вставлен
+    if debug: pprint(defined_in_block)
     for var in all_vars:
         WL = deque(defined_in_block[var])
-        # print(var, WL)
+        inserted = set() # устраняет вставку одинаковых phi
+        if debug: print(var, WL)
         while WL:
             bb = WL.pop() # pop - обход в глубино (LIFO, stack), popleft - обход в ширину (FIFO, queue)
             df_mask = DF[bb]
-            # print(" ", bb, df_mask)
+            if debug: print(" ", bb, df_mask)
             while df_mask:
                 lsb = df_mask & -df_mask
                 bit_index = lsb.bit_length() - 1
                 df_mask ^= lsb
 
                 y = index_arr[bit_index]
-                # print("   ", y)
+                if debug: print("   ", y, ("(-)", "(insert)")[y not in inserted])
 
-                key = (y, v)
-                if key in inserted: continue
-                inserted.add(key)
+                if y in inserted: continue
+                inserted.add(y)
 
                 preds_y = preds.get(y, ())
                 phi_args = (var,) * len(preds_y)
                 phi_instr = (5, var, phi_args)
                 blocks[y].appendleft(phi_instr)
 
-                if y not in defined_in_block[v]:
-                    defined_in_block[v].add(y)
+                if y not in defined_in_block[var]:
+                    defined_in_block[var].add(y)
                     WL.append(y)
 
 def static_renaming(BB_F, all_vars, dom_tree): # Algorithm SR
@@ -318,7 +317,7 @@ def SSA(BB_F, debug=False): # Static Single Assignment
 
     all_vars = all_vars_in_cfg(BB_F)
 
-    static_insertion(BB_F, all_vars, DF, index_arr)
+    static_insertion(BB_F, all_vars, DF, index_arr, debug=debug)
     if debug:
         print(dashed_separator)
         stringify_cfg(BB_F)
