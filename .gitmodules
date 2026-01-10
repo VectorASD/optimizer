@@ -1,0 +1,3 @@
+[submodule "external/pegen"]
+	path = external/pegen
+	url = https://github.com/VectorASD/pegen
