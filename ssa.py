@@ -1,5 +1,5 @@
 from utils import dashed_separator, bits_by_index
-from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg, insts_renamer
+from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg, insts_renamer, SSA_Error
 from dataflow_analysis import reaching_definitions
 
 from pprint import pprint
@@ -373,53 +373,60 @@ def SSA(BB_F, debug=False): # Static Single Assignment
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 program_0 = """
-BB0: x = 0;
-     y = 0;
-     if (x >= 10) goto BB2;
-     goto BB1;
-// RDIN: (x, 0), (y, 0),
-// (x, 1), (y, 1)
-BB1: y = y + x;
-     x = x + 1;
-     // x = x + 1;
-     if (x < 10) goto BB1;
-     goto BB2;
-// RDIN: (x, 0), (y, 0),
-// (x, 1), (y, 1)
-BB2: return y;
+BB0: x = 0
+     y = 0
+     if (x >= 10) goto BB2
+     goto BB1
+// RDIN: (x, 0), (y, 0), (x, 1), (y, 1)
+BB1: y = y + x
+     x = x + 1
+     // x = x + 1
+     if (x < 10) goto BB1
+     goto BB2
+// RDIN: (x, 0), (y, 0), (x, 1), (y, 1)
+BB2: return y
 """
 
 program_1 = """
-BB0: x = 0;
-     y = 0;
-     goto BB1;
+BB0: x = 0
+     y = 0
+     c = input()
+     goto BB1
 
-BB1: if (c != 0) goto BB2;
-     goto BB3;
+BB1: if (c != 0) goto BB2
+     goto BB3
 
-BB2: x = 1;
-     y = 2;
-     goto BB4;
+BB2: x = 1
+     y = 2
+     goto BB4
 
-BB3: x = bar(x);
-     y = bar(x);
-     x = y;
-     if (x > -2) goto BB6;
-     goto BB4;
+BB3: x = bar(x)
+     y = bar(x)
+     x = y
+     if (x > -2) goto BB6
+     goto BB4
 
-BB4: x = baz(x, y);
-     goto BB5;
+BB4: x = baz(x, y)
+     goto BB5
 
-BB5: if (x > 0) goto BB1;
-     goto BB6;
+BB5: if (x > 0) goto BB1
+     goto BB6
 
-BB6: return x;
+BB6: return x
 
-BB7: return 10; // второй entry
+BB7: return 10 // второй entry
 """
 
 if __name__ == "__main__":
-    # bb_F = parse_program(program_0, debug="preds")
+    # bb_F = parse_program(program_1, debug="preds")
     # naive_SSA(bb_F, debug=True)
+    # print(dashed_separator * 2)
+
     bb_F  = parse_program(program_1, debug="preds")
-    ssa_F = SSA(bb_F, debug=True)
+    try:
+        ssa_F = SSA(bb_F, debug=True)
+    except SSA_Error as e:
+        print("\nSSA_Error:")
+        print("   ", e)
+        # SSA_Error:
+        #     'c' is undefined: 'if (c != 0) goto BB2; else goto BB3'

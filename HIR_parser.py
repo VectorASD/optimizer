@@ -4,6 +4,7 @@ from collections import defaultdict, deque
 import re
 from pprint import pformat
 import sys
+from io import StringIO
 
 
 
@@ -113,11 +114,8 @@ def parse_program(text, debug=False):
             call_args = () if raw_args is None else tuple(VALUE(value.strip()) for value in raw_args.split(","))
             if call_func.lower() == "phi":
                 print(call_args)
-                if len(call_args) != 2 or not isinstance(call_args[0], str) or isinstance(call_args[1], str):
-                    #5: <var> = phi(<var>, ...)
-                    for arg in call_args:
-                        if type(arg) is not str: raise SyntaxError(f"в PHI(...)-аргументах допустимы только имена переменных: {item}")
-                # else: #5: <var> = phi(<var>, <count>)
+                for arg in call_args:
+                    if type(arg) is not str: raise SyntaxError(f"в PHI(...)-аргументах допустимы только имена переменных: {item}")
                 add_to_bb((5, call_var, call_args))
             else:
                 #6: <var> = <func>(<var|num>, ...)
@@ -153,6 +151,32 @@ def parse_program(text, debug=False):
 
     return blocks, preds, succs
 
+
+
+def stringify_instr(ops, i, write):
+    op = ops[i]; i += 1 # ops[i++]
+    match op[0]:
+        case 0: write(f"{op[1]} = {op[2]}")
+        case 1: write(f"{op[1]} = {op[2]} {op[3]} {op[4]}")
+        case 2:
+            try: next_op = ops[i]; i += 1 # ops[i++]
+            except IndexError: next_op = None
+            if next_op is not None and next_op[0] == 3:
+                write(f"if ({op[1]} {op[2]} {op[3]}) goto {op[4]}; else goto {next_op[1]}")
+            else:
+                write(f"if ({op[1]} {op[2]} {op[3]}) goto {op[4]}")
+        case 3: write(f"goto {op[1]}")
+        case 4: write(f"return {op[1]}")
+        case 5: write(f"{op[1]} = PHI({', '.join(map(str, op[2]))})")
+        case 6: write(f"{op[1]} = {op[2]}({', '.join(map(str, op[3]))})")
+        case _: write(f"{op} ???")
+    return i
+
+def stringify_instr_wrap(ops, i):
+    buff = StringIO()
+    stringify_instr(ops, i, buff.write)
+    return buff.getvalue()
+
 def stringify_cfg(F, file=None):
     blocks, preds, _ = F
     write = (file or sys.stdout).write
@@ -163,21 +187,7 @@ def stringify_cfg(F, file=None):
         while i < L:
             first = not i
             write(start if first else pad)
-            op = ops[i]; i += 1 # ops[i++]
-            match op[0]:
-                case 0: write(f"{op[1]} = {op[2]}")
-                case 1: write(f"{op[1]} = {op[2]} {op[3]} {op[4]}")
-                case 2:
-                    if i < L and ops[i][0] == 3:
-                        next_op = ops[i]; i += 1 # ops[i++]
-                        write(f"if ({op[1]} {op[2]} {op[3]}) goto {op[4]}; else goto {next_op[1]}")
-                    else:
-                        write(f"if ({op[1]} {op[2]} {op[3]}) goto {op[4]}")
-                case 3: write(f"goto {op[1]}")
-                case 4: write(f"return {op[1]}")
-                case 5: write(f"{op[1]} = PHI({', '.join(map(str, op[2]))})")
-                case 6: write(f"{op[1]} = {op[2]}({', '.join(map(str, op[3]))})")
-                case _: write(f"{op} ???")
+            i = stringify_instr(ops, i, write)
             if first:
                 bb_preds = preds[bb]
                 if bb_preds: write(f"   // preds: {', '.join(map(str, bb_preds))}")
@@ -236,16 +246,21 @@ def all_vars_in_cfg(BB_F, vars=None):
 
 
 
+class SSA_Error(Exception): pass
+
 def rename_it(collector, var):
     try: return collector[var][-1]
-    except IndexError: return var
+    except IndexError:
+        raise SSA_Error(f"{var!r} is undefined")
+        # return var
 
-def instr_renamer(inst, counter, collector, pushes):
+def instr_renamer(insts, i, counter, collector, pushes):
     """
     counter = defaultdict(int)
     collector = defaultdict(list)
     pushes = []
     """
+    inst = insts[i]
     kind = inst[0]
     inst = list(inst)
     if ARGLIST_IDs[kind]:
@@ -255,13 +270,21 @@ def instr_renamer(inst, counter, collector, pushes):
         else:
             args_idx = USED_VARS_IDXs[kind]
             args = inst[args_idx]
-            inst[args_idx] = tuple(
-                rename_it(collector, var) if isinstance(var, str) else var
-                for var in args)
+            try:
+                inst[args_idx] = tuple(
+                    rename_it(collector, var) if isinstance(var, str) else var
+                    for var in args)
+            except SSA_Error as e:
+                e.args = (f"{e.args[0]}: {stringify_instr_wrap(insts, i)!r}",)
+                raise e
     else:
-        for idx in USED_VARS_IDXs[kind]:
-            var = inst[idx]
-            if isinstance(var, str): inst[idx] = rename_it(collector, var)
+        try: 
+            for idx in USED_VARS_IDXs[kind]:
+                var = inst[idx]
+                if isinstance(var, str): inst[idx] = rename_it(collector, var)
+        except SSA_Error as e:
+            e.args = (f"{e.args[0]}: {stringify_instr_wrap(insts, i)!r}",)
+            raise e
     if DEFINED_VARS_IDs[kind]:
         var = inst[1]
         counter[var] = n = counter[var] + 1
@@ -273,7 +296,7 @@ def instr_renamer(inst, counter, collector, pushes):
     return tuple(inst)
 
 def insts_renamer(insts, counter, collector, pushes):
-    return deque(instr_renamer(inst, counter, collector, pushes) for inst in insts)
+    return deque(instr_renamer(insts, i, counter, collector, pushes) for i in range(len(insts)))
 
 
 
@@ -295,8 +318,8 @@ program_1 = """
 BB0: x = 10
      y = x + 2
      goto BB1
-BB1: x = PHI(x, 2)
-     y = PHI(y, 2)
+BB1: x = PHI(x)
+     y = PHI(y)
      y = x + y
      x = x - 1
      if (x > 2) goto BB1; else goto BB2;

@@ -242,7 +242,7 @@ def reaching_definitions(BB_F, unique_defs=True, debug=False):
         direction="forward",
         meet="or",         # RD = forward + join
         entry_bottom=True, # bottom на entry
-        debug=("R", definitions) if debug else None
+        debug=(("RD", "R")[unique_defs], definitions) if debug else None
     )
     return definitions, GEN, KILL, RIN, ROUT
 
