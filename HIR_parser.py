@@ -112,9 +112,12 @@ def parse_program(text, debug=False):
             raw_args = g["call_args"]
             call_args = () if raw_args is None else tuple(VALUE(value.strip()) for value in raw_args.split(","))
             if call_func.lower() == "phi":
-                #5: <var> = phi(<var>, ...)
-                for arg in call_args:
-                    if type(arg) is not str: raise SyntaxError(f"в PHI(...)-аргументах допустимы только имена переменных: {item}")
+                print(call_args)
+                if len(call_args) != 2 or not isinstance(call_args[0], str) or isinstance(call_args[1], str):
+                    #5: <var> = phi(<var>, ...)
+                    for arg in call_args:
+                        if type(arg) is not str: raise SyntaxError(f"в PHI(...)-аргументах допустимы только имена переменных: {item}")
+                # else: #5: <var> = phi(<var>, <count>)
                 add_to_bb((5, call_var, call_args))
             else:
                 #6: <var> = <func>(<var|num>, ...)
@@ -172,7 +175,7 @@ def stringify_cfg(F, file=None):
                         write(f"if ({op[1]} {op[2]} {op[3]}) goto {op[4]}")
                 case 3: write(f"goto {op[1]}")
                 case 4: write(f"return {op[1]}")
-                case 5: write(f"{op[1]} = PHI({', '.join(op[2])})")
+                case 5: write(f"{op[1]} = PHI({', '.join(map(str, op[2]))})")
                 case 6: write(f"{op[1]} = {op[2]}({', '.join(map(str, op[3]))})")
                 case _: write(f"{op} ???")
             if first:
@@ -233,6 +236,47 @@ def all_vars_in_cfg(BB_F, vars=None):
 
 
 
+def rename_it(collector, var):
+    try: return collector[var][-1]
+    except IndexError: return var
+
+def instr_renamer(inst, counter, collector, pushes):
+    """
+    counter = defaultdict(int)
+    collector = defaultdict(list)
+    pushes = []
+    """
+    kind = inst[0]
+    inst = list(inst)
+    if ARGLIST_IDs[kind]:
+        if kind == 5: # <var> = phi(<var>, <count>)
+            # print(inst) # [5, 'x', ('x', 3)] -> (5, 'x2', ('x1', 'x3', 'x4'))
+            pass
+        else:
+            args_idx = USED_VARS_IDXs[kind]
+            args = inst[args_idx]
+            inst[args_idx] = tuple(
+                rename_it(collector, var) if isinstance(var, str) else var
+                for var in args)
+    else:
+        for idx in USED_VARS_IDXs[kind]:
+            var = inst[idx]
+            if isinstance(var, str): inst[idx] = rename_it(collector, var)
+    if DEFINED_VARS_IDs[kind]:
+        var = inst[1]
+        counter[var] = n = counter[var] + 1
+        new_var = f"{var}{n}"
+        while new_var in collector: new_var += "_"
+        collector[var].append(new_var)
+        pushes.append(var)
+        inst[1] = new_var
+    return tuple(inst)
+
+def insts_renamer(insts, counter, collector, pushes):
+    return deque(instr_renamer(inst, counter, collector, pushes) for inst in insts)
+
+
+
 program_0 = """
 BB0: x1 = 10
      y1 = x1 + 2
@@ -247,6 +291,20 @@ BB2: t1 = func(x3, y3)
      return t1
 """
 
+program_1 = """
+BB0: x = 10
+     y = x + 2
+     goto BB1
+BB1: x = PHI(x, 2)
+     y = PHI(y, 2)
+     y = x + y
+     x = x - 1
+     if (x > 2) goto BB1; else goto BB2;
+BB2: t = no_args_func()
+     t = func(x, y)
+     return t
+"""
+
 if __name__ == "__main__":
     F = parse_program(program_0, debug=True)
     stringify_cfg(F)
@@ -258,3 +316,13 @@ if __name__ == "__main__":
         print(f"used({bb}):", used_vars_in_block(insts))
     print("used all:", used_vars_in_cfg(F))
     print("all:", all_vars_in_cfg(F))
+
+    F = parse_program(program_1)
+    counter   = defaultdict(int)
+    collector = defaultdict(list)
+    pushes    = []
+    blocks = {bb: insts_renamer(insts, counter, collector, pushes) for bb, insts in F[0].items()}
+    F = blocks, F[1], F[2]
+
+    print(dashed_separator)
+    stringify_cfg(F)

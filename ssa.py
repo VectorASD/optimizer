@@ -1,5 +1,5 @@
 from utils import dashed_separator, bits_by_index
-from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg
+from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg, insts_renamer
 from dataflow_analysis import reaching_definitions
 
 from pprint import pprint
@@ -260,9 +260,9 @@ def static_insertion(BB_F, all_vars, DF, index_arr, debug=False): # Algorithm SI
                 if y in inserted: continue
                 inserted.add(y)
 
-                preds_y = preds.get(y, ())
-                phi_args = (var,) * len(preds_y)
-                phi_instr = (5, var, phi_args)
+                # preds_y = preds.get(y, ())
+                # phi_args = (var, len(preds_y))
+                phi_instr = (5, var, [var])
                 blocks[y].appendleft(phi_instr)
 
                 if y not in defined_in_block[var]:
@@ -270,7 +270,46 @@ def static_insertion(BB_F, all_vars, DF, index_arr, debug=False): # Algorithm SI
                     WL.append(y)
 
 def static_renaming(BB_F, all_vars, dom_tree): # Algorithm SR
-    pass
+    blocks, preds, succs = BB_F
+    counter = defaultdict(int)
+    collector = defaultdict(list)
+    end_collector = defaultdict(dict)
+
+    def rename(bb):
+        pushes = []
+        blocks[bb] = insts_renamer(blocks[bb], counter, collector, pushes)
+
+        for var, stack in collector.items():
+            if stack:
+                end_collector[var][bb] = stack[-1]
+
+        for next_bb in dom_tree[bb]:
+            rename(next_bb)
+
+        for var in pushes:
+            collector[var].pop()
+
+    def rename_phi():
+        for bb, insts in blocks.items():
+            preds_bb = tuple(preds[bb])
+            for inst in insts:
+                if inst[0] != 5: break
+                arr = inst[2]
+                var = arr.pop()
+                names = end_collector[var]
+                arr.extend(names[pred_bb] for pred_bb in preds_bb)
+
+    dom_used = set()
+    dom_update = dom_used.update
+    for bb_arr in dom_tree.values(): dom_update(bb_arr)
+    roots = set(blocks)
+    roots -= dom_used # забавный факт:
+    # каждый запуск скрипта случайно даёт roots = {'BB0', 'BB7'} либо {'BB7', 'BB0'}
+    # у __hash__ есть своя соль...
+
+    for bb in roots:
+        rename(bb)
+    rename_phi()
 
 
 
@@ -323,6 +362,9 @@ def SSA(BB_F, debug=False): # Static Single Assignment
         stringify_cfg(BB_F)
 
     static_renaming(BB_F, all_vars, dom_tree)
+    if debug:
+        print(dashed_separator)
+        stringify_cfg(BB_F)
 
 
 
