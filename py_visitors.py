@@ -49,8 +49,9 @@ def visitors(ast):
         return name
     def free_reg(reg):
         assert isinstance(reg, str)
-        assert reg.startswith("r")
-        regs[int(reg[1:])] = True
+        if not reg.startswith("_"):
+            assert reg.startswith("r")
+            regs[int(reg[1:])] = True
 
     insts = []
     add_inst = insts.append
@@ -126,7 +127,10 @@ compound_stmt:
             # a=(z=star_targets '=' { z })+ b=(yield_expr | star_expressions) !'=' tc=[TYPE_COMMENT] {
             #     ast.Assign(targets=a, value=b, type_comment=tc, LOCATIONS)
             # }
-            visit_star_expression(node.value)
+            reg = visit_star_expression(node.value)
+            for target in node.targets:
+                visit_target(target, reg)
+            free_reg(reg)
         elif name == "AugAssign":
             explore_node(node)
             exit() # TODO
@@ -150,11 +154,12 @@ compound_stmt:
 
     def visit_star_expression(node):
         reg = visit_expression(node) # TODO
-        free_reg(reg)
+        return reg
 
     def get_expression_dict():
         expression_dict = {
             "Constant": visit_Constant,
+            "Name": visit_Name,
         }
         return expression_dict
 
@@ -162,6 +167,12 @@ compound_stmt:
         visitor = expression_dict[type(node).__name__]
         reg = visitor(node)
         return reg
+
+    def visit_target(target, reg):
+        # reg ВСЕГДА приходит из visit_expression
+        name = visit_expression(target)
+        add(0, name, reg) # <var> = <var>
+        free_reg(name)
 
     const_types = type(None), int, float, str, bytes, bool, type(...)
     def visit_Constant(node):
@@ -171,6 +182,12 @@ compound_stmt:
         reg = get_reg()
         add(7, reg, value) # <var> = <const>
         return reg
+
+    def visit_Name(node):
+        name = f"_{node.id}"
+        ctx = type(node.ctx).__name__
+        assert ctx in ("Load", "Store", "Del"), ctx
+        return name
 
 
 
@@ -195,7 +212,7 @@ e = True; f = False
 g = ...; h = None
 i = 0.123; # TODO: j = 5+5j BinOp is Constant! этим занимается Constant Propagation
 kinded = u"123"
-# aa = a
+aa = ab = a
 
 # a, b = c
 # a = b, c
