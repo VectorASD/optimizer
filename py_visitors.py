@@ -39,7 +39,7 @@ def visitors(ast):
         print(node)
 
     regs = []
-    def get_reg():
+    def new_reg():
         for i, free in enumerate(regs):
             if free:
                 regs[i] = False
@@ -128,9 +128,17 @@ compound_stmt:
             #     ast.Assign(targets=a, value=b, type_comment=tc, LOCATIONS)
             # }
             reg = visit_star_expression(node.value)
-            for target in node.targets:
-                visit_target(target, reg)
-            free_reg(reg)
+            if type(reg) is not tuple: reg = (reg,)
+            tmps = tuple(new_reg() for i in range(len(reg)))
+            for tmp, right in zip(tmps, reg):
+                add(0, tmp, right) # <var> = <var>
+            for _reg in reg:
+                free_reg(_reg)
+
+            visit_targets(node.targets, tmps)
+
+            for tmp in tmps:
+                free_reg(tmp)
         elif name == "AugAssign":
             explore_node(node)
             exit() # TODO
@@ -160,6 +168,7 @@ compound_stmt:
         expression_dict = {
             "Constant": visit_Constant,
             "Name": visit_Name,
+            "Tuple": visit_Tuple,
         }
         return expression_dict
 
@@ -168,26 +177,61 @@ compound_stmt:
         reg = visitor(node)
         return reg
 
-    def visit_target(target, reg):
-        # reg ВСЕГДА приходит из visit_expression
-        name = visit_expression(target)
-        add(0, name, reg) # <var> = <var>
-        free_reg(name)
+    def visit_targets(targets, tmps):
+        # каждый элемент tmps ВСЕГДА приходит из visit_expression
+        if len(tmps) > 1:
+            for target in reversed(targets):
+                name = visit_expression(target)
+                if type(name) is tuple:
+                    a, b = len(name), len(tmps)
+                    if a != b: raise ValueError(f"too many values to unpack (expected {a}, got {b})")
+                    for left, tmp in zip(name, tmps):
+                        add(0, left, tmp) # <var> = <var>
+                        free_reg(left)
+                else: # type(name) is int
+                    add(8, name, tmps) # <var> = tuple(<var|num>, ...)
+                    free_reg(name)
+            return
+
+        sized = None
+        reg = tmps[0]
+        for target in reversed(targets):
+            name = visit_expression(target)
+            if type(name) is tuple:
+                reg = tmps[0]
+                if sized is None:
+                    sized = len(name)
+                    add(9, reg, sized) # check |<var>| == <num>
+                elif len(name) != sized:
+                    raise ValueError(f"too many values to unpack (expected {len(name)}, got {sized})")
+                for i, _name in enumerate(name):
+                    add(10, _name, reg, i) # <var> = <var>[<var>|<num>]
+                    free_reg(_name)
+            else: # type(name) is int
+                reg = tmps[0]
+                add(0, name, reg) # <var> = <var>
+                free_reg(name)
 
     const_types = type(None), int, float, str, bytes, bool, type(...)
     def visit_Constant(node):
         assert node.kind in (None, 'u')
         value = node.value
         assert type(value) in const_types, type(value)
-        reg = get_reg()
+        reg = new_reg()
         add(7, reg, value) # <var> = <const>
         return reg
 
     def visit_Name(node):
         name = f"_{node.id}"
-        ctx = type(node.ctx).__name__
-        assert ctx in ("Load", "Store", "Del"), ctx
+        ctx = type(node.ctx)
+        assert ctx in (ast_Load, ast_Store, ast_Del), ctx
         return name
+
+    def visit_Tuple(node):
+        ctx = type(node.ctx)
+        assert ctx in (ast_Load, ast_Store)
+        regs = tuple(map(visit_expression, node.elts))
+        return regs
 
 
 
@@ -214,12 +258,12 @@ i = 0.123; # TODO: j = 5+5j BinOp is Constant! этим занимается Con
 kinded = u"123"
 aa = ab = a
 
-# a, b = c
-# a = b, c
-# a, b = b, a
-# a, b = b, c
-# a, b = c, d
-# a = b, c = d, e
+a = b, c
+a, b = c
+a, b = b, a
+
+v0, v1 = a = b = c = b, c
+d = a, b = a, b = a = c
 
 # print("meow!")
     """

@@ -49,15 +49,19 @@ token_re = re.compile(
 
 definitions = (
   # HIR:
-    (1, (2,),   "#0: <var> = <var|num>"),
-    (1, (2, 4), "#1: <var> = <var|num> <+|-|*|/|%> <var|num>"),
-    (0, (1, 3), "#2: if (<var|num> <cmp> <var|num>) goto <label>"),
-    (0, (),     "#3: [else] goto <label>"),
-    (0, (1,),   "#4: return <var|num>"),
-    (1, 2,      "#5: <var> = phi(<var>, ...)"),
-    (1, 3,      "#6: <var> = <func>(<var|num>, ...)"),
+    (1, (2,),      "# 0: <var> = <var|num>"),
+    (1, (2, 4),    "# 1: <var> = <var|num> <+|-|*|/|%> <var|num>"),
+    (0, (1, 3),    "# 2: if (<var|num> <cmp> <var|num>) goto <label>"),
+    (0, (),        "# 3: [else] goto <label>"),
+    (0, (1,),      "# 4: return <var|num>"),
+    (1, 2,         "# 5: <var> = phi(<var>, ...)"),
+    (1, 3,         "# 6: <var> = <func>(<var|num>, ...)"),
   # python:
-    (1, (),     "#7: <var> = <const>"),
+    (1, (),        "# 7: <var> = <const>"),
+    (1, 2,         "# 8: <var> = tuple(<var|num>, ...)"),
+    (0, (1,),      "# 9: check |<var>| == <num>"),
+    (1, (2, 3),    "#10: <var> = <var>[<var>|<num>]"),
+    (0, (1, 2, 3), "#11: <var>[<var>|<num>] = <var|num>"),
 )
 DEFINED_VARS_IDs = tuple(_def[0] for _def in definitions)
 ARGLIST_IDs      = tuple(isinstance(_def[1], int) for _def in definitions)
@@ -174,6 +178,10 @@ def stringify_instr(ops, i, write):
         case 6: write(f"{op[1]} = {op[2]}({', '.join(map(str, op[3]))})")
 
         case 7: write(f"{op[1]} = {op[2]}")
+        case 8: write(f"{op[1]} = ({', '.join(op[2])})")
+        case 9: write(f"check |{op[1]}| == {op[2]}")
+        case 10: write(f"{op[1]} = {op[2]}[{op[3]}]")
+        case 11: write(f"{op[1]}[{op[2]}] = {op[3]}")
 
         case _: write(f"{op} ???")
     return i
@@ -205,7 +213,8 @@ def defined_vars_in_block(insts, vars=None):
     vars = set() if vars is None else vars
     add_to_vars = vars.add
     for inst in insts:
-        if DEFINED_VARS_IDs[inst[0]]:
+        kind = inst[0]
+        if DEFINED_VARS_IDs[kind]:
             add_to_vars(inst[1])
     return vars
 
