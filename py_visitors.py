@@ -52,6 +52,9 @@ def visitors(ast):
         if not reg.startswith("_"):
             assert reg.startswith("r")
             regs[int(reg[1:])] = True
+    def free_regs(*regs):
+        for reg in regs:
+            free_reg(reg)
 
     insts = []
     add_inst = insts.append
@@ -127,18 +130,16 @@ compound_stmt:
             # a=(z=star_targets '=' { z })+ b=(yield_expr | star_expressions) !'=' tc=[TYPE_COMMENT] {
             #     ast.Assign(targets=a, value=b, type_comment=tc, LOCATIONS)
             # }
-            reg = visit_star_expression(node.value)
-            if type(reg) is not tuple: reg = (reg,)
-            tmps = tuple(new_reg() for i in range(len(reg)))
-            for tmp, right in zip(tmps, reg):
-                add(0, tmp, right) # <var> = <var>
-            for _reg in reg:
-                free_reg(_reg)
 
-            visit_targets(node.targets, tmps)
+            tmps = visit_star_expression(node.value)
+            tmps = name2reg(tmps)
 
-            for tmp in tmps:
-                free_reg(tmp)
+            sized = [None]
+            for targets in reversed(node.targets):
+                targets = visit_expression(targets)
+                visit_targets(targets, tmps, sized)
+
+            free_recurs(tmps)
         elif name == "AugAssign":
             explore_node(node)
             exit() # TODO
@@ -169,6 +170,7 @@ compound_stmt:
             "Constant": visit_Constant,
             "Name": visit_Name,
             "Tuple": visit_Tuple,
+            "Subscript": visit_Subscript,
         }
         return expression_dict
 
@@ -177,40 +179,63 @@ compound_stmt:
         reg = visitor(node)
         return reg
 
-    def visit_targets(targets, tmps):
-        # каждый элемент tmps ВСЕГДА приходит из visit_expression
-        if len(tmps) > 1:
-            for target in reversed(targets):
-                name = visit_expression(target)
-                if type(name) is tuple:
-                    a, b = len(name), len(tmps)
-                    if a != b: raise ValueError(f"too many values to unpack (expected {a}, got {b})")
-                    for left, tmp in zip(name, tmps):
-                        add(0, left, tmp) # <var> = <var>
-                        free_reg(left)
-                else: # type(name) is int
-                    add(8, name, tmps) # <var> = tuple(<var|num>, ...)
-                    free_reg(name)
+    def free_recurs(regs):
+        if type(regs) is tuple:
+            for reg in regs:
+                free_recurs(reg)
+            return
+        free_reg(regs)
+    def name2reg(name):
+        if type(name) is tuple: return to_regs_recurs(name)
+        if name[0] == "r": return name
+        reg = new_reg()
+        add(0, reg, name) # <var> = <var>
+        return reg
+    def to_regs_recurs(tmps):
+        return tuple(map(name2reg, tmps))
+
+    def pack_recurs(name, tmps):
+        regs = tuple((pack_recurs(new_reg(), tmp) if type(tmp) is tuple else tmp) for tmp in tmps)
+        add(8, name, regs) # <var> = tuple(<var|num>, ...)
+        for reg in regs: free_reg(reg)
+        return name
+    def unpack_recurs(left, right):
+        for i, _left in enumerate(left):
+            if type(_left) is tuple:
+                reg = new_reg()
+                add(10, reg, right, i) # <var> = <var>[<var>|<num>]
+                add(9, reg, len(_left)) # check |<var>| == <num>
+                unpack_recurs(_left, reg)
+                free_reg(reg)
+            else:
+                add(10, _left, right, i) # <var> = <var>[<var>|<num>]
+
+    def visit_targets(left, right, sized):
+        # каждый элемент right ВСЕГДА приходит из visit_expression
+        if type(right) is tuple:
+            if type(left) is tuple:
+                L, R = len(left), len(right)
+                if L != R: raise ValueError(f"too many values to unpack (expected {L}, got {R})")
+                sized = [None]
+                for _left, _right in zip(left, right):
+                    visit_targets(_left, _right, sized)
+            else: # type(left) is str
+                pack_recurs(left, right)
+                free_reg(left)
             return
 
-        sized = None
-        reg = tmps[0]
-        for target in reversed(targets):
-            name = visit_expression(target)
-            if type(name) is tuple:
-                reg = tmps[0]
-                if sized is None:
-                    sized = len(name)
-                    add(9, reg, sized) # check |<var>| == <num>
-                elif len(name) != sized:
-                    raise ValueError(f"too many values to unpack (expected {len(name)}, got {sized})")
-                for i, _name in enumerate(name):
-                    add(10, _name, reg, i) # <var> = <var>[<var>|<num>]
-                    free_reg(_name)
-            else: # type(name) is int
-                reg = tmps[0]
-                add(0, name, reg) # <var> = <var>
-                free_reg(name)
+        if type(left) is tuple:
+            size = sized[0]
+            new_size = len(left)
+            if size is None:
+                sized[0] = new_size
+                add(9, right, new_size) # check |<var>| == <num>
+            elif new_size != size:
+                raise ValueError(f"too many values to unpack (expected {new_size}, got {size})")
+            unpack_recurs(left, right)
+        else: # type(left) is str
+            add(0, left, right) # <var> = <var>
+            free_reg(right)
 
     const_types = type(None), int, float, str, bytes, bool, type(...)
     def visit_Constant(node):
@@ -224,7 +249,7 @@ compound_stmt:
     def visit_Name(node):
         name = f"_{node.id}"
         ctx = type(node.ctx)
-        assert ctx in (ast_Load, ast_Store, ast_Del), ctx
+        assert ctx in (ast_Load, ast_Store), ctx
         return name
 
     def visit_Tuple(node):
@@ -233,23 +258,39 @@ compound_stmt:
         regs = tuple(map(visit_expression, node.elts))
         return regs
 
+    def visit_Subscript(node):
+        ctx = type(node.ctx)
+        assert ctx in (ast_Load, ast_Store)
+        value = visit_expression(node.value)
+        slice = visit_expression(node.slice)
+        result = new_reg()
+        add(10, result, value, slice) # <var> = <var>[<var>|<num>]
+        free_regs(value, slice)
+        return result
+
+
+
+    def TEMPLATE(node):
+        explore_node(node)
+        exit() # TODO
+
 
 
     statement_dict = get_statement_dict()
     expression_dict = get_expression_dict()
 
     visit_Module(ast)
-    print("REGS:", regs)
-    assert all(regs), "Не все регистры освобождены!"
 
     preds = succs = {"_": ()}
     F = {"_": insts}, preds, succs
     stringify_cfg(F)
 
+    print("REGS:", regs)
+    assert all(regs), "Не все регистры освобождены!"
 
 
-if __name__ == "__main__":
-    source = """
+
+source_0 = """
 a = 1; b = 0x30
 c = "meow"; d = b"lol"
 e = True; f = False
@@ -265,7 +306,18 @@ a, b = b, a
 v0, v1 = a = b = c = b, c
 d = a, b = a, b = a = c
 
-# print("meow!")
-    """
-    ast = parse_it(source)
+packed = 1, 2, (3, 4), (a, 5)
+(a, (b, c)), d = r = (d, (c, b)), a
+(a, (b, c)), d = r
+"""
+
+source_1 = """
+a = 6
+arr = 1, 2, 3, (4, 5), a
+a = arr[0]
+b = arr[a]
+"""
+
+if __name__ == "__main__":
+    ast = parse_it(source_0)
     visitors(ast)
