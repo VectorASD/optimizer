@@ -172,6 +172,8 @@ compound_stmt:
             "Tuple": visit_Tuple,
             "Subscript": visit_Subscript,
             "Attribute": visit_Attribute,
+            "BinOp": visit_BinOp,
+            "Compare": visit_Compare,
         }
         return expression_dict
 
@@ -248,7 +250,7 @@ compound_stmt:
             add(0, left, right) # <var> = <var>
             free_reg(right)
 
-    const_types = type(None), int, float, str, bytes, bool, type(...)
+    const_types = type(None), int, float, complex, str, bytes, bool, type(...)
     def visit_Constant(node):
         assert node.kind in (None, 'u')
         value = node.value
@@ -307,9 +309,37 @@ compound_stmt:
             return result
         return AttributeSetter(value, attr)
 
+    BinOp2str = {
+        ast_Add: "+",
+        ast_Sub: "-",
+        ast_Mult: "*",
+        ast_MatMult: "@",
+        ast_Div: "/",
+        ast_FloorDiv: "//",
+        ast_Mod: "%",
+        ast_Pow: "**",
+        ast_BitOr: "|",
+        ast_BitAnd: "&",
+        ast_BitXor: "^",
+        ast_RShift: ">>",
+        ast_LShift: "<<",
+    }
+    def visit_BinOp(node):
+        left = visit_expression(node.left)
+        op = BinOp2str[type(node.op)]
+        right = visit_expression(node.right)
+        free_regs(left, right)
+        result = new_reg()
+        add(1, result, left, op, right) # <var> = <var|num> <+|-|*|/|%|...> <var|num>
+        return result
+
+    def visit_Compare(node):
+        explore_node(node)
+        exit() # TODO
 
 
-    def TEMPLATE(node):
+
+    def visit_(node):
         explore_node(node)
         exit() # TODO
 
@@ -365,6 +395,30 @@ arr.a, (arr.b, arr.c) = arr.d, (arr.e, arr.f)
 (5).yeah = a = (7).attr
 """
 
+source_2 = """
+a = 5+5j
+b = 15-8
+c = 7*8
+d = 25@7
+e = 25/7
+f = 25//7
+g = 25%7
+h = 2**15
+
+a = 5 | 9
+b = 5 & 9
+c = 5 ^ 9
+d = 25 >> 2
+e = 25 << 2
+
+# a = b == c
+# a = b != c
+# a = b < c
+# a = b > c
+# a = b <= c
+# a = b >= c
+"""
+
 if __name__ == "__main__":
-    ast = parse_it(source_1)
+    ast = parse_it(source_2)
     visitors(ast)
