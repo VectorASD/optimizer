@@ -168,8 +168,21 @@ compound_stmt:
 
             free_recurs(tmps)
         elif name == "AugAssign":
-            explore_node(node)
-            exit() # TODO
+            # a=single_target b=augassign ~ c=(yield_expr | star_expressions) {
+            #     ast.AugAssign(target = a, op=b, value=c, LOCATIONS)
+            # }
+
+            target = visit_expression(node.target)
+            op = BinOp2str[type(node.op)]
+            value = visit_expression(node.value)
+            if callable(target):
+                reg = target.get()
+                add(1, reg, reg, op, value) # <var> = <var|num> <+|-|*|/|%|...> <var|num>
+                target(reg)
+                free_reg(value)
+            else:
+                add(1, target, target, op, value) # <var> = <var|num> <+|-|*|/|%|...> <var|num>
+                free_regs(target, value)
         else: # name == "AnnAssign":
             explore_node(node)
             exit() # TODO
@@ -180,9 +193,8 @@ compound_stmt:
         exit() # TODO
 
     def visit_Expr(node):
-        # star_expressions
-        explore_node(node)
-        exit() # TODO
+        reg = visit_expression(node.value)
+        free_reg(reg)
 
 
 
@@ -203,6 +215,7 @@ compound_stmt:
             "Compare": visit_Compare,
             "UnaryOp": visit_UnaryOp,
             "BoolOp": visit_BoolOp,
+            "Call": visit_Call,
         }
         return expression_dict
 
@@ -229,7 +242,7 @@ compound_stmt:
     def pack_recurs(name, tmps):
         regs = tuple((pack_recurs(new_reg(), tmp) if type(tmp) is tuple else tmp) for tmp in tmps)
         add(8, name, regs) # <var> = tuple(<var|num>, ...)
-        for reg in regs: free_reg(reg)
+        free_regs(*regs)
         return name
     def unpack_recurs(left, right):
         for i, _left in enumerate(left):
@@ -307,6 +320,10 @@ compound_stmt:
             value, slice = self.i
             add(11, value, slice, reg) # <var>[<var>|<num>] = <var|num>
             free_regs(value, slice, reg)
+        def get(self):
+            result = new_reg()
+            add(10, result, *self.i) # <var> = <var>[<var>|<num>]
+            return result
     def visit_Subscript(node):
         ctx = type(node.ctx)
         assert ctx in (ast_Load, ast_Store)
@@ -326,6 +343,10 @@ compound_stmt:
             value, attr = self.i
             add(13, value, attr, reg) # <var>.<var> = <var|num>
             free_regs(value, reg)
+        def get(self):
+            result = new_reg()
+            add(12, result, *self.i) # <var> = <var>.<var>
+            return result
     def visit_Attribute(node):
         ctx = type(node.ctx)
         assert ctx in (ast_Load, ast_Store)
@@ -429,6 +450,15 @@ compound_stmt:
             on_block(next_block)
         return acc
 
+    def visit_Call(node):
+        args = tuple(map(visit_expression, node.args))
+        func = visit_expression(node.func)
+        assert not node.keywords # TODO
+        free_regs(func, *args)
+        result = new_reg()
+        add(6, result, func, args) # <var> = <func>(<var|num>, ...)
+        return result
+
 
 
     def visit_(node):
@@ -517,6 +547,13 @@ unar = not a
 
 boolop = b == c and b != d and b < e
 boolop = 0 or 8
+
+a += 10
+a >>= 2
+a[0] += 7
+a.attr <<= 1
+
+print(a, b, c)
 """
 
 # print(ast_operator.__doc__) # all 13
