@@ -71,6 +71,7 @@ def visitors(ast):
         add_inst = blocks[name].append
         current_block = name
     def add(*inst):
+        # print(regs, inst)
         add_inst(inst)
     def control(*a):
         if len(a) == 1:
@@ -163,7 +164,7 @@ compound_stmt:
 
             sized = [None]
             for targets in reversed(node.targets):
-                targets = visit_expression(targets)
+                targets = visit_star_expression(targets)
                 visit_targets(targets, tmps, sized)
 
             free_recurs(tmps)
@@ -200,10 +201,6 @@ compound_stmt:
 
     # expressions
 
-    def visit_star_expression(node):
-        reg = visit_expression(node) # TODO
-        return reg
-
     def get_expression_dict():
         expression_dict = {
             "Constant": visit_Constant,
@@ -217,7 +214,16 @@ compound_stmt:
             "BoolOp": visit_BoolOp,
             "Call": visit_Call,
         }
-        return expression_dict
+        star_expression_dict = {
+            **expression_dict,
+            "Tuple": visit_Tuple2,
+        }
+        return expression_dict, star_expression_dict
+
+    def visit_star_expression(node):
+        visitor = star_expression_dict[type(node).__name__]
+        reg = visitor(node)
+        return reg
 
     def visit_expression(node):
         visitor = expression_dict[type(node).__name__]
@@ -264,7 +270,8 @@ compound_stmt:
         if type(right) is tuple:
             if type(left) is tuple:
                 L, R = len(left), len(right)
-                if L != R: raise ValueError(f"too many values to unpack (expected {L}, got {R})")
+                if L < R: raise ValueError(f"too many values to unpack (expected {L}, got {R})")
+                elif L > R: raise ValueError(f"not enough values to unpack (expected {L}, got {R})")
                 sized = [None]
                 for _left, _right in zip(left, right):
                     visit_targets(_left, _right, sized)
@@ -283,8 +290,10 @@ compound_stmt:
             if size is None:
                 sized[0] = new_size
                 add(9, right, new_size) # check |<var>| == <num>
-            elif new_size != size:
+            elif new_size < size:
                 raise ValueError(f"too many values to unpack (expected {new_size}, got {size})")
+            elif new_size > size:
+                raise ValueError(f"not enough values to unpack (expected {new_size}, got {size})")
             unpack_recurs(left, right)
         elif callable(left):
             left(right)
@@ -308,6 +317,14 @@ compound_stmt:
         return name
 
     def visit_Tuple(node):
+        ctx = type(node.ctx)
+        assert ctx in (ast_Load, ast_Store)
+        regs = tuple(map(visit_expression, node.elts))
+        result = new_reg()
+        pack_recurs(result, regs)
+        return result
+
+    def visit_Tuple2(node):
         ctx = type(node.ctx)
         assert ctx in (ast_Load, ast_Store)
         regs = tuple(map(visit_expression, node.elts))
@@ -345,7 +362,7 @@ compound_stmt:
             free_regs(value, reg)
         def get(self):
             result = new_reg()
-            add(12, result, *self.i) # <var> = <var>.<var>
+            add(12, result, *self.i) # <var> = <var>.<attr>
             return result
     def visit_Attribute(node):
         ctx = type(node.ctx)
@@ -355,7 +372,7 @@ compound_stmt:
         if ctx is ast_Load:
             free_regs(value)
             result = new_reg()
-            add(12, result, value, attr) # <var> = <var>.<var>
+            add(12, result, value, attr) # <var> = <var>.<attr>
             return result
         return AttributeSetter(value, attr)
 
@@ -390,6 +407,7 @@ compound_stmt:
         ast_LtE: "<=",
         ast_Gt: ">",
         ast_GtE: ">=",
+
         ast_Is: "is",
         ast_IsNot: "is not",
         ast_In: "in",
@@ -468,17 +486,27 @@ compound_stmt:
 
 
     statement_dict = get_statement_dict()
-    expression_dict = get_expression_dict()
+    expression_dict, star_expression_dict = get_expression_dict()
 
     visit_Module(ast)
     if blocks[current_block][-1][0] != 4:
         add(4, "_None") # return <var|num>
 
     F = blocks, preds, succs
-    stringify_cfg(F)
 
-    print("REGS:", regs)
-    assert all(regs), "Не все регистры освобождены!"
+    if not all(regs):
+        stringify_cfg(F)
+        print("REGS:", regs)
+        raise AssertionError("Не все регистры освобождены!")
+
+    module = (F,)
+    return module
+
+
+
+def py_visitor(code):
+    ast = parse_it(code)
+    return visitors(ast)
 
 
 
@@ -562,5 +590,5 @@ print(a, b, c)
 # print(ast_boolop.__doc__) # and all 2!
 
 if __name__ == "__main__":
-    ast = parse_it(source_2)
-    visitors(ast)
+    for F in py_visitor(source_2):
+        stringify_cfg(F)

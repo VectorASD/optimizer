@@ -62,7 +62,7 @@ definitions = (
     (0, (1,),      "# 9: check |<var>| == <num>"),
     (1, (2, 3),    "#10: <var> = <var>[<var>|<num>]"),
     (0, (1, 2, 3), "#11: <var>[<var>|<num>] = <var|num>"),
-    (1, (2, 3),    "#12: <var> = <var>.<var>"),
+    (1, (2, 3),    "#12: <var> = <var>.<attr>"),
     (0, (1, 2, 3), "#13: <var>.<var> = <var|num>"),
     (0, (2,),      "#14: goto <label> if <var> else <label>"),
     (1, (2,),      "#15: <var> = <+|-|~|not ><var|num>"),
@@ -181,7 +181,7 @@ def stringify_instr(ops, i, write):
         case 5: write(f"{op[1]} = PHI({', '.join(map(str, op[2]))})")
         case 6: write(f"{op[1]} = {op[2]}({', '.join(map(str, op[3]))})")
 
-        case 7: write(f"{op[1]} = {op[2]}")
+        case 7: write(f"{op[1]} = {op[2]!r}")
         case 8: write(f"{op[1]} = ({', '.join(op[2])})")
         case 9: write(f"check |{op[1]}| == {op[2]}")
         case 10: write(f"{op[1]} = {op[2]}[{op[3]}]")
