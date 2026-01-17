@@ -56,10 +56,35 @@ def visitors(ast):
         for reg in regs:
             free_reg(reg)
 
-    insts = []
-    add_inst = insts.append
+    blocks, preds, succs = {}, {}, {}
+    add_inst = None
+    current_block = None
+    def new_block():
+        name = f"b{len(blocks)}"
+        blocks[name] = []
+        preds[name] = set()
+        succs[name] = set()
+        return name
+    def on_block(name = None):
+        nonlocal add_inst, current_block
+        name = name or new_block()
+        add_inst = blocks[name].append
+        current_block = name
     def add(*inst):
         add_inst(inst)
+    def control(*a):
+        if len(a) == 1:
+            label = a[0]
+            add(3, label) # goto <label>
+            preds[label].add(current_block)
+            succs[current_block].add(label)
+            return
+        yeah, reg, nop = a # assert len(a) == 3
+        add(14, yeah, reg, nop) # goto <label> if <var> else <label>
+        preds[yeah].add(current_block)
+        preds[nop].add(current_block)
+        succs[current_block].update((yeah, nop))
+    on_block()
 
 
 
@@ -333,9 +358,44 @@ compound_stmt:
         add(1, result, left, op, right) # <var> = <var|num> <+|-|*|/|%|...> <var|num>
         return result
 
+    Compare2str = {
+        ast_Eq: "==",
+        ast_NotEq: "!=",
+        ast_Lt: "<",
+        ast_LtE: "<=",
+        ast_Gt: ">",
+        ast_GtE: ">=",
+        ast_Is: "is",
+        ast_IsNot: "is not",
+        ast_In: "in",
+        ast_NotIn: "not in",
+    }
     def visit_Compare(node):
-        explore_node(node)
-        exit() # TODO
+        left = visit_expression(node.left)
+        acc = None
+        last_i = len(node.comparators) - 1
+        many = last_i > 0
+        if many: block_names = tuple(new_block() for i in range(last_i + 1))
+
+        for op, (i, comparator) in zip(node.ops, enumerate(node.comparators)):
+            op = Compare2str[type(op)]
+            right = visit_expression(comparator)
+            free_reg(right)
+            result = new_reg()
+            add(1, result, left, op, right) # <var> = <var|num> <+|-|*|/|%|...> <var|num>
+            print(result, left, op, comparator)
+            if acc:
+                add(1, acc, acc, "&", result) # <var> &= <var>
+                free_reg(result)
+            else:
+                acc = result
+            if many:
+                next_block = block_names[i]
+                if i == last_i: control(next_block) # goto <label>
+                else: control(next_block, acc, block_names[-1]) # goto <label> if <var> else <label>
+                on_block(next_block)
+        free_reg(left)
+        return acc
 
 
 
@@ -350,8 +410,7 @@ compound_stmt:
 
     visit_Module(ast)
 
-    preds = succs = {"_": ()}
-    F = {"_": insts}, preds, succs
+    F = blocks, preds, succs
     stringify_cfg(F)
 
     print("REGS:", regs)
@@ -411,13 +470,13 @@ c = 5 ^ 9
 d = 25 >> 2
 e = 25 << 2
 
-# a = b == c
-# a = b != c
-# a = b < c
-# a = b > c
-# a = b <= c
-# a = b >= c
+a = b == c != d < e
+a = b < c
+a = b <= c
+a = b > c
+a = b >= c
 """
+print(vars(ast_cmpop))
 
 if __name__ == "__main__":
     ast = parse_it(source_2)

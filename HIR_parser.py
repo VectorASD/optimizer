@@ -50,7 +50,7 @@ token_re = re.compile(
 definitions = (
   # HIR:
     (1, (2,),      "# 0: <var> = <var|num>"),
-    (1, (2, 4),    "# 1: <var> = <var|num> <+|-|*|/|%> <var|num>"),
+    (1, (2, 4),    "# 1: <var> = <var|num> <+|-|*|/|%|...> <var|num>"),
     (0, (1, 3),    "# 2: if (<var|num> <cmp> <var|num>) goto <label>"),
     (0, (),        "# 3: [else] goto <label>"),
     (0, (1,),      "# 4: return <var|num>"),
@@ -64,6 +64,7 @@ definitions = (
     (0, (1, 2, 3), "#11: <var>[<var>|<num>] = <var|num>"),
     (1, (2, 3),    "#12: <var> = <var>.<var>"),
     (0, (1, 2, 3), "#13: <var>.<var> = <var|num>"),
+    (0, (2,),      "#14: goto <label> if <var> else <label>"),
 )
 DEFINED_VARS_IDs = tuple(_def[0] for _def in definitions)
 ARGLIST_IDs      = tuple(isinstance(_def[1], int) for _def in definitions)
@@ -186,6 +187,7 @@ def stringify_instr(ops, i, write):
         case 11: write(f"{op[1]}[{op[2]}] = {op[3]}")
         case 12: write(f"{op[1]} = {op[2]}.{op[3]}")
         case 13: write(f"{op[1]}.{op[2]} = {op[3]}")
+        case 14: write(f"goto {op[1]} if {op[2]} else {op[3]}")
 
         case _: write(f"{op} ???")
     return i
