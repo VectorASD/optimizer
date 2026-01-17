@@ -80,6 +80,8 @@ def visitors(ast):
             succs[current_block].add(label)
             return
         yeah, reg, nop = a # assert len(a) == 3
+        if yeah == nop:
+            return control(yeah)
         add(14, yeah, reg, nop) # goto <label> if <var> else <label>
         preds[yeah].add(current_block)
         preds[nop].add(current_block)
@@ -199,6 +201,8 @@ compound_stmt:
             "Attribute": visit_Attribute,
             "BinOp": visit_BinOp,
             "Compare": visit_Compare,
+            "UnaryOp": visit_UnaryOp,
+            "BoolOp": visit_BoolOp,
         }
         return expression_dict
 
@@ -383,7 +387,6 @@ compound_stmt:
             free_reg(right)
             result = new_reg()
             add(1, result, left, op, right) # <var> = <var|num> <+|-|*|/|%|...> <var|num>
-            print(result, left, op, comparator)
             if acc:
                 add(1, acc, acc, "&", result) # <var> &= <var>
                 free_reg(result)
@@ -391,10 +394,39 @@ compound_stmt:
                 acc = result
             if many:
                 next_block = block_names[i]
-                if i == last_i: control(next_block) # goto <label>
-                else: control(next_block, acc, block_names[-1]) # goto <label> if <var> else <label>
+                control(next_block, acc, block_names[-1]) # goto <label> if <var> else <label>
                 on_block(next_block)
         free_reg(left)
+        return acc
+
+    UnaryOp2str = {
+        ast_UAdd: "+",
+        ast_USub: "-",
+        ast_Invert: "~",
+        ast_Not: "not",
+    }
+    def visit_UnaryOp(node):
+        op = UnaryOp2str[type(node.op)]
+        operand = visit_expression(node.operand)
+        free_reg(operand)
+        result = new_reg()
+        add(15, result, op, operand) # <var> = <+|-|~|not ><var|num>
+        return result
+
+    def visit_BoolOp(node):
+        block_names = tuple(new_block() for i in range(len(node.values)))
+        acc = None
+        is_and = type(node.op) is ast_And
+        for value, next_block in zip(node.values, block_names):
+            result = visit_expression(value)
+            if acc:
+                add(0, acc, result) # <var> = <var>
+                free_reg(result)
+            else:
+                acc = result
+            if is_and: control(next_block, acc, block_names[-1]) # goto <label> if <var> else <label>
+            else: control(block_names[-1], acc, next_block) # goto <label> if <var> else <label>
+            on_block(next_block)
         return acc
 
 
@@ -409,6 +441,8 @@ compound_stmt:
     expression_dict = get_expression_dict()
 
     visit_Module(ast)
+    if blocks[current_block][-1][0] != 4:
+        add(4, "_None") # return <var|num>
 
     F = blocks, preds, succs
     stringify_cfg(F)
@@ -475,8 +509,20 @@ a = b < c
 a = b <= c
 a = b > c
 a = b >= c
+
+unar = +a
+unar = -a
+unar = ~a
+unar = not a
+
+boolop = b == c and b != d and b < e
+boolop = 0 or 8
 """
-print(vars(ast_cmpop))
+
+# print(ast_operator.__doc__) # all 13
+# print(ast_cmpop.__doc__) # all 10
+# print(ast_unaryop.__doc__) # all 4
+# print(ast_boolop.__doc__) # and all 2!
 
 if __name__ == "__main__":
     ast = parse_it(source_2)
