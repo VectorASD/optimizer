@@ -49,27 +49,48 @@ token_re = re.compile(
 
 definitions = (
   # HIR:
-    (1, (2,),      "# 0: <var> = <var|num>"),
-    (1, (2, 4),    "# 1: <var> = <var|num> <+|-|*|/|%|...> <var|num>"),
-    (0, (1, 3),    "# 2: if (<var|num> <cmp> <var|num>) goto <label>"),
-    (0, (),        "# 3: [else] goto <label>"),
-    (0, (1,),      "# 4: return <var|num>"),
-    (1, 2,         "# 5: <var> = phi(<var>, ...)"),
-    (1, 3,         "# 6: <var> = <func>(<var|num>, ...)"),
+    (1, 0, (2,),      "# 0: <var> = <var|num>"),
+    (1, 0, (2, 4),    "# 1: <var> = <var|num> <+|-|*|/|%|...> <var|num>"),
+    (0, 0, (1, 3),    "# 2: if (<var|num> <cmp> <var|num>) goto <label>"),
+    (0, 0, (),        "# 3: [else] goto <label>"),
+    (0, 0, (1,),      "# 4: return <var|num>"),
+    (1, 0, (),        "# 5: <var> = phi(<var>, ...)"),
+    (1, 3, (2,),      "# 6: <var> = <func>(<var|num>, ...)"),
   # python:
-    (1, (),        "# 7: <var> = <const>"),
-    (1, 2,         "# 8: <var> = tuple(<var|num>, ...)"),
-    (0, (1,),      "# 9: check |<var>| == <num>"),
-    (1, (2, 3),    "#10: <var> = <var>[<var>|<num>]"),
-    (0, (1, 2, 3), "#11: <var>[<var>|<num>] = <var|num>"),
-    (1, (2, 3),    "#12: <var> = <var>.<attr>"),
-    (0, (1, 2, 3), "#13: <var>.<var> = <var|num>"),
-    (0, (2,),      "#14: goto <label> if <var> else <label>"),
-    (1, (2,),      "#15: <var> = <+|-|~|not ><var|num>"),
+    (1, 0, (),        "# 7: <var> = <const>"),
+    (1, 2, (),        "# 8: <var> = tuple(<var|num>, ...)"),
+    (0, 0, (1,),      "# 9: check |<var>| == <num>"),
+    (1, 0, (2, 3),    "#10: <var> = <var>[<var>|<num>]"),
+    (0, 0, (1, 2, 3), "#11: <var>[<var>|<num>] = <var|num>"),
+    (1, 0, (2,),      "#12: <var> = <var>.<attr>"),
+    (0, 0, (1, 3),    "#13: <var>.<attr> = <var|num>"),
+    (0, 0, (2,),      "#14: goto <label> if <var> else <label>"),
+    (1, 0, (3,),      "#15: <var> = <+|-|~|not ><var|num>"),
 )
-DEFINED_VARS_IDs = tuple(_def[0] for _def in definitions)
-ARGLIST_IDs      = tuple(isinstance(_def[1], int) for _def in definitions)
-USED_VARS_IDXs = tuple(_def[1] for _def in definitions)
+
+
+
+_a = lambda inst, add: add(inst[1])
+_b = lambda inst, add: None
+defined_getters = tuple(_a if _def[0] else _b for _def in definitions)
+
+uses_getters = []
+for _def in definitions:
+    code = ["def get(inst, add):"]
+    if _def[1]:
+        code.extend((
+            f"    for var in inst[{_def[1]}]:",
+             "        if isinstance(var, str): add(var)",
+        ))
+    for idx in _def[2]:
+        code.extend((
+            f"    var = inst[{idx}]",
+             "    if isinstance(var, str): add(var)",
+        ))
+    if len(code) == 1: code[0] += " pass"
+    locs = {}
+    exec("\n".join(code), locs)
+    uses_getters.append(locs["get"])
 
 
 
@@ -219,44 +240,39 @@ def stringify_cfg(F, file=None):
 
 def defined_vars_in_block(insts, vars=None):
     vars = set() if vars is None else vars
-    add_to_vars = vars.add
+    vars_add = vars.add
     for inst in insts:
-        kind = inst[0]
-        if DEFINED_VARS_IDs[kind]:
-            add_to_vars(inst[1])
+        defined_getters[inst[0]](inst, vars_add)
     return vars
 
 def defined_vars_in_cfg(BB_F, vars=None):
     vars = set() if vars is None else vars
+    vars_add = vars.add
     for insts in BB_F[0].values():
-        defined_vars_in_block(insts, vars)
+        for inst in insts:
+            defined_getters[inst[0]](inst, vars_add)
     return vars
 
 
 
 def used_vars_in_instr(inst, vars=None):
     vars = set() if vars is None else vars
-    add_to_vars = vars.add
-    kind = inst[0]
-    if ARGLIST_IDs[kind]:
-        args = inst[USED_VARS_IDXs[kind]]
-        for var in args:
-            if isinstance(var, str): add_to_vars(var)
-    else:
-        for idx in USED_VARS_IDXs[kind]:
-            var = inst[idx]
-            if isinstance(var, str): add_to_vars(var)
+    uses_getters[inst[0]](inst, vars.add)
     return vars
 
 def used_vars_in_block(insts, vars=None):
     vars = set() if vars is None else vars
-    for inst in insts: used_vars_in_instr(inst, vars)
+    vars_add = vars.add
+    for inst in insts:
+        uses_getters[inst[0]](inst, vars_add)
     return vars
 
 def used_vars_in_cfg(BB_F, vars=None):
     vars = set() if vars is None else vars
+    vars_add = vars.add
     for insts in BB_F[0].values():
-        for inst in insts: used_vars_in_instr(inst, vars)
+        for inst in insts:
+            uses_getters[inst[0]](inst, vars_add)
     return vars
 
 
@@ -271,55 +287,57 @@ def all_vars_in_cfg(BB_F, vars=None):
 
 class SSA_Error(Exception): pass
 
-def rename_it(collector, var):
-    try: return collector[var][-1]
-    except IndexError:
-        raise SSA_Error(f"{var!r} is undefined")
-        # return var
+renamers = []
+for _def in definitions:
+    code = ["def rename(insts, i, counter, collector, pushes):"]
+    code.append("    inst = list(insts[i])")
+    if _def[1] or _def[2]:
+        code.append("    try:")
+        for idx in _def[2]:
+            code.extend((
+                f"        var = inst[{idx}]",
+                f"        if isinstance(var, str): inst[{idx}] = collector[var][-1]",
+            ))
+        if _def[1]:
+            code.extend((
+                 "        arr = []; append = arr.append",
+                f"        for var in inst[{_def[1]}]:",
+                 "            if isinstance(var, str): append(collector[var][-1])",
+                f"        inst[{_def[1]}] = tuple(arr)",
+            ))
+        code.extend((
+            "    except IndexError:",
+            "        raise SSA_Error(f'{var!r} is undefined: {stringify_instr_wrap(insts, i)!r}')",
+        ))
+    if _def[0]:
+        code.append("""
+    var = inst[1]
+    new_var = f"%{counter[0]}"
+    counter[0] += 1
+    collector[var].append(new_var)
+    pushes.append(var)
+    inst[1] = new_var""")
+    # counter[var] = n = counter[var] + 1
+    # new_var = f"{var}{n}"
+    # while new_var in collector: new_var += "_"
 
-def instr_renamer(insts, i, counter, collector, pushes):
+    code.append("    return tuple(inst)")
+    if len(code) == 3: code = (code[0] + " return insts[i]",)
+    locs = {"SSA_Error": SSA_Error, "stringify_instr_wrap": stringify_instr_wrap}
+    exec("\n".join(code), locs)
+    renamers.append(locs["rename"])
+
+
+
+def insts_renamer(insts, counter, collector, pushes):
     """
-    counter = defaultdict(int)
+    counter = [0] # defaultdict(int)
     collector = defaultdict(list)
     pushes = []
     """
-    inst = insts[i]
-    kind = inst[0]
-    inst = list(inst)
-    if ARGLIST_IDs[kind]:
-        if kind == 5: # <var> = phi(<var>, <count>)
-            # print(inst) # [5, 'x', ('x', 3)] -> (5, 'x2', ('x1', 'x3', 'x4'))
-            pass
-        else:
-            args_idx = USED_VARS_IDXs[kind]
-            args = inst[args_idx]
-            try:
-                inst[args_idx] = tuple(
-                    rename_it(collector, var) if isinstance(var, str) else var
-                    for var in args)
-            except SSA_Error as e:
-                e.args = (f"{e.args[0]}: {stringify_instr_wrap(insts, i)!r}",)
-                raise e
-    else:
-        try: 
-            for idx in USED_VARS_IDXs[kind]:
-                var = inst[idx]
-                if isinstance(var, str): inst[idx] = rename_it(collector, var)
-        except SSA_Error as e:
-            e.args = (f"{e.args[0]}: {stringify_instr_wrap(insts, i)!r}",)
-            raise e
-    if DEFINED_VARS_IDs[kind]:
-        var = inst[1]
-        counter[var] = n = counter[var] + 1
-        new_var = f"{var}{n}"
-        while new_var in collector: new_var += "_"
-        collector[var].append(new_var)
-        pushes.append(var)
-        inst[1] = new_var
-    return tuple(inst)
-
-def insts_renamer(insts, counter, collector, pushes):
-    return deque(instr_renamer(insts, i, counter, collector, pushes) for i in range(len(insts)))
+    return deque(
+        renamers[inst[0]](insts, i, counter, collector, pushes)
+        for i, inst in enumerate(insts))
 
 
 
@@ -364,8 +382,10 @@ if __name__ == "__main__":
     print("all:", all_vars_in_cfg(F))
 
     F = parse_program(program_1)
-    counter   = defaultdict(int)
+    counter   = [0] # defaultdict(int)
     collector = defaultdict(list)
+    for name in ("func", "no_args_func"):
+        collector[name].append(name)
     pushes    = []
     blocks = {bb: insts_renamer(insts, counter, collector, pushes) for bb, insts in F[0].items()}
     F = blocks, F[1], F[2]
