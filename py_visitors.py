@@ -207,6 +207,10 @@ compound_stmt:
                 add(9, reg, len(_left)) # check |<var>| == <num>
                 unpack_recurs(_left, reg)
                 free_reg(reg)
+            elif callable(_left):
+                tmp = new_reg()
+                add(10, tmp, right, i) # <var> = <var>[<var>|<num>]
+                _left(tmp)
             else:
                 add(10, _left, right, i) # <var> = <var>[<var>|<num>]
 
@@ -219,6 +223,10 @@ compound_stmt:
                 sized = [None]
                 for _left, _right in zip(left, right):
                     visit_targets(_left, _right, sized)
+            elif callable(left):
+                tmp = new_reg()
+                pack_recurs(tmp, right)
+                left(tmp)
             else: # type(left) is str
                 pack_recurs(left, right)
                 free_reg(left)
@@ -233,6 +241,8 @@ compound_stmt:
             elif new_size != size:
                 raise ValueError(f"too many values to unpack (expected {new_size}, got {size})")
             unpack_recurs(left, right)
+        elif callable(left):
+            left(right)
         else: # type(left) is str
             add(0, left, right) # <var> = <var>
             free_reg(right)
@@ -258,15 +268,24 @@ compound_stmt:
         regs = tuple(map(visit_expression, node.elts))
         return regs
 
+    class SubscriptSetter:
+        def __init__(self, value, slice):
+            self.i = value, slice
+        def __call__(self, reg):
+            value, slice = self.i
+            add(11, value, slice, reg) # <var>[<var>|<num>] = <var|num>
+            free_regs(value, slice, reg)
     def visit_Subscript(node):
         ctx = type(node.ctx)
         assert ctx in (ast_Load, ast_Store)
         value = visit_expression(node.value)
         slice = visit_expression(node.slice)
-        result = new_reg()
-        add(10, result, value, slice) # <var> = <var>[<var>|<num>]
-        free_regs(value, slice)
-        return result
+        if ctx is ast_Load:
+            free_regs(value, slice)
+            result = new_reg()
+            add(10, result, value, slice) # <var> = <var>[<var>|<num>]
+            return result
+        return SubscriptSetter(value, slice)
 
 
 
@@ -316,8 +335,11 @@ a = 6
 arr = 1, 2, 3, (4, 5), a
 a = arr[0]
 b = arr[a]
+arr[b] = 5
+(((arr[0], a), b), arr[1]), c = arr
+arr[0], (arr[1], arr[2]) = arr[3], (arr[4], arr[5])
 """
 
 if __name__ == "__main__":
-    ast = parse_it(source_0)
+    ast = parse_it(source_1)
     visitors(ast)
