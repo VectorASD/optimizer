@@ -171,6 +171,7 @@ compound_stmt:
             "Name": visit_Name,
             "Tuple": visit_Tuple,
             "Subscript": visit_Subscript,
+            "Attribute": visit_Attribute,
         }
         return expression_dict
 
@@ -287,6 +288,25 @@ compound_stmt:
             return result
         return SubscriptSetter(value, slice)
 
+    class AttributeSetter:
+        def __init__(self, value, attr):
+            self.i = value, attr
+        def __call__(self, reg):
+            value, attr = self.i
+            add(13, value, attr, reg) # <var>.<var> = <var|num>
+            free_regs(value, reg)
+    def visit_Attribute(node):
+        ctx = type(node.ctx)
+        assert ctx in (ast_Load, ast_Store)
+        value = visit_expression(node.value)
+        attr = node.attr
+        if ctx is ast_Load:
+            free_regs(value)
+            result = new_reg()
+            add(12, result, value, attr) # <var> = <var>.<var>
+            return result
+        return AttributeSetter(value, attr)
+
 
 
     def TEMPLATE(node):
@@ -338,6 +358,11 @@ b = arr[a]
 arr[b] = 5
 (((arr[0], a), b), arr[1]), c = arr
 arr[0], (arr[1], arr[2]) = arr[3], (arr[4], arr[5])
+arr.a, (arr.b, arr.c) = arr.d, (arr.e, arr.f)
+
+# all of these are syntactically correct constructions:
+(5)[8] = (5)[9]
+(5).yeah = a = (7).attr
 """
 
 if __name__ == "__main__":
