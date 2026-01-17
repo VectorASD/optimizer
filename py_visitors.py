@@ -4,6 +4,7 @@ from HIR_parser import stringify_cfg
 import sys
 import traceback
 from pprint import pprint
+from collections import deque
 
 
 
@@ -61,9 +62,9 @@ def visitors(ast):
     current_block = None
     def new_block():
         name = f"b{len(blocks)}"
-        blocks[name] = []
-        preds[name] = set()
-        succs[name] = set()
+        blocks[name] = deque()
+        preds[name] = []
+        succs[name] = []
         return name
     def on_block(name = None):
         nonlocal add_inst, current_block
@@ -71,22 +72,22 @@ def visitors(ast):
         add_inst = blocks[name].append
         current_block = name
     def add(*inst):
-        # print(regs, inst)
+        # print(inst)
         add_inst(inst)
     def control(*a):
         if len(a) == 1:
             label = a[0]
             add(3, label) # goto <label>
-            preds[label].add(current_block)
-            succs[current_block].add(label)
+            preds[label].append(current_block)
+            succs[current_block].append(label)
             return
         yeah, reg, nop = a # assert len(a) == 3
         if yeah == nop:
             return control(yeah)
         add(14, yeah, reg, nop) # goto <label> if <var> else <label>
-        preds[yeah].add(current_block)
-        preds[nop].add(current_block)
-        succs[current_block].update((yeah, nop))
+        preds[yeah].append(current_block)
+        preds[nop].append(current_block)
+        succs[current_block].extend((yeah, nop))
     on_block()
 
 
@@ -159,12 +160,12 @@ compound_stmt:
             #     ast.Assign(targets=a, value=b, type_comment=tc, LOCATIONS)
             # }
 
-            tmps = visit_star_expression(node.value)
+            tmps = visit_assign_expression(node.value)
             tmps = name2reg(tmps)
 
             sized = [None]
             for targets in reversed(node.targets):
-                targets = visit_star_expression(targets)
+                targets = visit_assign_expression(targets)
                 visit_targets(targets, tmps, sized)
 
             free_recurs(tmps)
@@ -214,14 +215,14 @@ compound_stmt:
             "BoolOp": visit_BoolOp,
             "Call": visit_Call,
         }
-        star_expression_dict = {
+        assign_expression_dict = {
             **expression_dict,
-            "Tuple": visit_Tuple2,
+            "Tuple": visit_assignTuple,
         }
-        return expression_dict, star_expression_dict
+        return expression_dict, assign_expression_dict
 
-    def visit_star_expression(node):
-        visitor = star_expression_dict[type(node).__name__]
+    def visit_assign_expression(node):
+        visitor = assign_expression_dict[type(node).__name__]
         reg = visitor(node)
         return reg
 
@@ -324,10 +325,10 @@ compound_stmt:
         pack_recurs(result, regs)
         return result
 
-    def visit_Tuple2(node):
+    def visit_assignTuple(node):
         ctx = type(node.ctx)
         assert ctx in (ast_Load, ast_Store)
-        regs = tuple(map(visit_expression, node.elts))
+        regs = tuple(map(visit_assign_expression, node.elts))
         return regs
 
     class SubscriptSetter:
@@ -358,7 +359,7 @@ compound_stmt:
             self.i = value, attr
         def __call__(self, reg):
             value, attr = self.i
-            add(13, value, attr, reg) # <var>.<var> = <var|num>
+            add(13, value, attr, reg) # <var>.<attr> = <var|num>
             free_regs(value, reg)
         def get(self):
             result = new_reg()
@@ -486,7 +487,7 @@ compound_stmt:
 
 
     statement_dict = get_statement_dict()
-    expression_dict, star_expression_dict = get_expression_dict()
+    expression_dict, assign_expression_dict = get_expression_dict()
 
     visit_Module(ast)
     if blocks[current_block][-1][0] != 4:

@@ -219,13 +219,13 @@ def compute_df(BB_F, IDom, index): # Algorithm DF (Dominance Frontier, Фрон�
     blocks, preds, _succs = BB_F
     DF = {bb: 0 for bb in blocks}
     for bb, parents in preds.items():
-        print("BLOCK:", bb, parents)
+        # print("BLOCK:", bb, parents)
         shift = index[bb]
         for parent in parents:
             r = parent
             # поднимаемся по дереву доминаторов
             while r != IDom.get(bb, None):
-                print("  r =", r)
+                # print("  r =", r)
                 DF[r] |= shift
                 r = IDom[r]
     return DF
@@ -269,11 +269,13 @@ def static_insertion(BB_F, all_vars, DF, index_arr, debug=False): # Algorithm SI
                     defined_in_block[var].add(y)
                     WL.append(y)
 
-def static_renaming(BB_F, all_vars, dom_tree): # Algorithm SR
+def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
     blocks, preds, succs = BB_F
-    counter = defaultdict(int)
+    counter = [0] # defaultdict(int) теперь счётчик общий
     collector = defaultdict(list)
     end_collector = defaultdict(dict)
+
+    for name in predefined: collector[name].append(name)
 
     def rename(bb):
         pushes = []
@@ -313,7 +315,7 @@ def static_renaming(BB_F, all_vars, dom_tree): # Algorithm SR
 
 
 
-def SSA(BB_F, debug=False): # Static Single Assignment
+def SSA(BB_F, debug=False, predefined=()): # Static Single Assignment
     """ Как из книги...
     BB_F[1].clear()
     BB_F[1].update({
@@ -361,7 +363,7 @@ def SSA(BB_F, debug=False): # Static Single Assignment
         print(dashed_separator)
         stringify_cfg(BB_F)
 
-    static_renaming(BB_F, all_vars, dom_tree)
+    static_renaming(BB_F, all_vars, dom_tree, predefined)
     if debug:
         print(dashed_separator)
         stringify_cfg(BB_F)

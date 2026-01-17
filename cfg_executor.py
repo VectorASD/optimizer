@@ -1,5 +1,7 @@
 from py_visitors import py_visitor
 from HIR_parser import stringify_cfg
+from ssa import SSA
+from utils import dashed_separator
 
 
 
@@ -62,7 +64,7 @@ def executor(module):
         memory[var] = func(left, right)
 
     def code_2(*_): # 2: if (<var|num> <cmp> <var|num>) goto <label>
-        raise RuntimeError("not released code_2")
+        raise RuntimeError("py_visitors не может дать HIR-ветвление (if без else)!!!")
 
     def code_3(label): # 3: [else] goto <label>
         raise Goto(label)
@@ -71,8 +73,8 @@ def executor(module):
         var = memory[var] if isinstance(var, str) else var
         raise Result(var)
 
-    def code_5(*_): # 5: <var> = phi(<var>, ...)
-        raise RuntimeError("not released code_5")
+    def code_5(var, branches): # 5: <var> = phi(<var>, ...)
+        memory[var] = memory[branches[cur_idx]]
 
     def code_6(var, func, args): # 6: <var> = <func>(<var|num>, ...)
         func = memory[func]
@@ -123,22 +125,34 @@ def executor(module):
             it = iter(inst)
             dispatch[next(it)](*it)
 
-    def run_func(func):
-        blocks, preds, succs = F
+    def make_preds2idx(preds):
+        return {
+            block: {pred: i for i, pred in enumerate(predz)}
+            for block, predz in preds.items()}
+
+    def run_func(id):
+        nonlocal cur_idx
+        blocks, preds, succs = module[id]
+        func_preds2idx = preds2idx[id]
         block = "b0"
         while True:
             try:
                 run_block(blocks[block])
-                raise RuntimeError("Exit without Goto and Result!") from None
+                raise RuntimeError("Function exited without Goto and Result!") from None
             except Goto as e:
+                pred_block = block
                 block = e.args[0]
+                cur_idx = func_preds2idx[block][pred_block]
             except Result as res:
                 return res.args[0]
             except KeyError as e:
                 raise NameError(e.args[0]) from None
 
+    preds2idx = tuple(make_preds2idx(func[1]) for func in module)
+    cur_idx = None
+
     memory = {**builtins}
-    result = run_func(module[0])
+    result = run_func(0)
     if result is not None: print("RESULT:", result)
 
 
@@ -172,4 +186,14 @@ if __name__ == "__main__":
     module = py_visitor(source)
     for F in module:
         stringify_cfg(F)
+
+    print(dashed_separator)
+    executor(module)
+    print(dashed_separator)
+
+    for F in module:
+        SSA(F, predefined=tuple(builtins))
+        stringify_cfg(F)
+
+    print(dashed_separator)
     executor(module)
