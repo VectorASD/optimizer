@@ -245,10 +245,10 @@ def defined_vars_in_block(insts, vars=None):
         defined_getters[inst[0]](inst, vars_add)
     return vars
 
-def defined_vars_in_cfg(BB_F, vars=None):
+def defined_vars_in_cfg(blocks, vars=None):
     vars = set() if vars is None else vars
     vars_add = vars.add
-    for insts in BB_F[0].values():
+    for insts in blocks.values():
         for inst in insts:
             defined_getters[inst[0]](inst, vars_add)
     return vars
@@ -267,20 +267,20 @@ def used_vars_in_block(insts, vars=None):
         uses_getters[inst[0]](inst, vars_add)
     return vars
 
-def used_vars_in_cfg(BB_F, vars=None):
+def used_vars_in_cfg(blocks, vars=None):
     vars = set() if vars is None else vars
     vars_add = vars.add
-    for insts in BB_F[0].values():
+    for insts in blocks.values():
         for inst in insts:
             uses_getters[inst[0]](inst, vars_add)
     return vars
 
 
 
-def all_vars_in_cfg(BB_F, vars=None):
+def all_vars_in_cfg(blocks, vars=None):
     vars = set() if vars is None else vars
-    defined_vars_in_cfg(BB_F, vars)
-    used_vars_in_cfg(BB_F, vars)
+    defined_vars_in_cfg(blocks, vars)
+    used_vars_in_cfg(blocks, vars)
     return vars
 
 
@@ -327,6 +327,34 @@ for _def in definitions:
     exec("\n".join(code), locs)
     renamers.append(locs["rename"])
 
+ssa_renamers = []
+for _def in definitions:
+    code = ["def rename(inst, renamer):",
+            "    inst = list(inst)"]
+    for idx in _def[2]:
+        code.extend((
+            f"    var = inst[{idx}]",
+            f"    if isinstance(var, str): inst[{idx}] = renamer(var, var)",
+        ))
+    if _def[1]:
+        code.extend((
+             "    arr = []; append = arr.append",
+            f"    for var in inst[{_def[1]}]:",
+             "        if isinstance(var, str): append(renamer(var, var))",
+            f"    inst[{_def[1]}] = tuple(arr)",
+        ))
+    # if _def[0]:
+    #     code.extend((
+    #         "    var = inst[1]",
+    #         "    if isinstance(var, str): inst[1] = renamer(var, var)",
+    #     ))
+
+    code.append("    return tuple(inst)")
+    if len(code) == 3: code = (code[0] + " return inst",)
+    locs = {}
+    exec("\n".join(code), locs)
+    ssa_renamers.append(locs["rename"])
+
 
 
 def insts_renamer(insts, counter, collector, pushes):
@@ -335,9 +363,22 @@ def insts_renamer(insts, counter, collector, pushes):
     collector = defaultdict(list)
     pushes = []
     """
-    return deque(
+    return tuple(
         renamers[inst[0]](insts, i, counter, collector, pushes)
         for i, inst in enumerate(insts))
+
+def ssa_insts_renamer(insts, name2name):
+    renamer = name2name.get
+    return [
+        ssa_renamers[inst[0]](inst, renamer)
+        for inst in insts]
+
+def ssa_cfg_renamer(blocks, name2name):
+    renamer = name2name.get
+    for block, insts in blocks.items():
+        blocks[block] = [
+            ssa_renamers[inst[0]](inst, renamer)
+            for inst in insts]
 
 
 
@@ -372,14 +413,15 @@ BB2: t = no_args_func()
 if __name__ == "__main__":
     F = parse_program(program_0, debug=True)
     stringify_cfg(F)
+    blocks = F[0]
 
     for bb, insts in F[0].items():
         print(f"defined({bb}):", defined_vars_in_block(insts))
-    print("defined all:", defined_vars_in_cfg(F))
+    print("defined all:", defined_vars_in_cfg(blocks))
     for bb, insts in F[0].items():
         print(f"used({bb}):", used_vars_in_block(insts))
-    print("used all:", used_vars_in_cfg(F))
-    print("all:", all_vars_in_cfg(F))
+    print("used all:", used_vars_in_cfg(blocks))
+    print("all:", all_vars_in_cfg(blocks))
 
     F = parse_program(program_1)
     counter   = [0] # defaultdict(int)

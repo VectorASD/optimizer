@@ -356,7 +356,7 @@ def SSA(BB_F, debug=False, predefined=()): # Static Single Assignment
         for bb, bit_mask in DF.items():
             print(f"DF({bb}): {bits_by_index(index_arr, bit_mask)}")
 
-    all_vars = all_vars_in_cfg(BB_F)
+    all_vars = all_vars_in_cfg(BB_F[0])
 
     static_insertion(BB_F, all_vars, DF, index_arr, debug=debug)
     if debug:

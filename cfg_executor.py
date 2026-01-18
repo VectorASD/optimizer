@@ -1,4 +1,5 @@
 from py_visitors import py_visitor
+from ssa_optimizations import main_loop
 from HIR_parser import stringify_cfg
 from ssa import SSA
 from utils import dashed_separator
@@ -193,6 +194,7 @@ if __name__ == "__main__":
 
     for F in module:
         SSA(F, predefined=tuple(builtins))
+        main_loop(F)
         stringify_cfg(F)
 
     print(dashed_separator)
