@@ -2,7 +2,7 @@ from py_visitors import py_visitor
 from ssa_optimizations import main_loop
 from HIR_parser import stringify_cfg
 from ssa import SSA
-from utils import dashed_separator
+from utils import dashed_separator, bin_ops, unar_ops
 
 
 
@@ -15,41 +15,6 @@ builtins["_struct"] = struct
 
 class Result(Exception): pass
 class Goto(Exception): pass
-
-bin_ops = {
-    "+": lambda a, b: a + b,
-    "-": lambda a, b: a - b,
-    "*": lambda a, b: a * b,
-    "@": lambda a, b: a @ b,
-    "/": lambda a, b: a / b,
-    "//": lambda a, b: a // b,
-    "%": lambda a, b: a % b,
-    "**": lambda a, b: a ** b,
-
-    "|": lambda a, b: a | b,
-    "&": lambda a, b: a & b,
-    "^": lambda a, b: a ^ b,
-    ">>": lambda a, b: a >> b,
-    "<<": lambda a, b: a << b,
-
-    "==": lambda a, b: a == b,
-    "!=": lambda a, b: a != b,
-    "<": lambda a, b: a < b,
-    "<=": lambda a, b: a <= b,
-    ">": lambda a, b: a > b,
-    ">=": lambda a, b: a >= b,
-
-    "in": lambda a, b: a in b,
-    "not in": lambda a, b: a not in b,
-    "is": lambda a, b: a is b,
-    "is not": lambda a, b: a is not b,
-}
-unar_ops = {
-    "+": lambda a: +a,
-    "-": lambda a: -a,
-    "~": lambda a: ~a,
-    "not": lambda a: not a,
-}
 
 
 
@@ -167,11 +132,13 @@ b = 1, 2, 3
 print("ab:", a, b)
 a, b = b, a
 print("ab:", a, b)
-print("ins:", 3 in a, 4 in a, 5 not in a)
+aa = a
+print("ins:", 3 in aa, 4 in a, 5 not in a)
 a, b, c = a
 print("unpacked:", a, b, c)
 
 arr = list((a, b, c))
+print("arr[a]:", arr[a])
 arr[0] = 7
 print("arr:", arr)
 print(bytes.fromhex("9fa5"))
@@ -194,7 +161,7 @@ if __name__ == "__main__":
 
     for F in module:
         SSA(F, predefined=tuple(builtins))
-        main_loop(F)
+        main_loop(F, builtins)
         print(dashed_separator)
         stringify_cfg(F)
 

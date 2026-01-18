@@ -49,28 +49,29 @@ token_re = re.compile(
 
 definitions = (
   # HIR:
-    (1, 0, (2,),      "# 0: <var> = <var|num>"),
-    (1, 0, (2, 4),    "# 1: <var> = <var|num> <+|-|*|/|%|...> <var|num>"),
-    (0, 0, (1, 3),    "# 2: if (<var|num> <cmp> <var|num>) goto <label>"),
-    (0, 0, (),        "# 3: [else] goto <label>"),
-    (0, 0, (1,),      "# 4: return <var|num>"),
-    (1, 2, (),        "# 5: <var> = phi(<var>, ...)"),
-    (1, 3, (2,),      "# 6: <var> = <func>(<var|num>, ...)"),
+    (1, 0, (2,),      0, "# 0: <var> = <var|num>"),
+    (1, 0, (2, 4),    0, "# 1: <var> = <var|num> <+|-|*|/|%|...> <var|num>"),
+    (0, 0, (1, 3),    1, "# 2: if (<var|num> <cmp> <var|num>) goto <label>"),
+    (0, 0, (),        1, "# 3: [else] goto <label>"),
+    (0, 0, (1,),      1, "# 4: return <var|num>"),
+    (1, 2, (),        0, "# 5: <var> = phi(<var>, ...)"),
+    (1, 3, (2,),      1, "# 6: <var> = <func>(<var|num>, ...)"),
   # python:
-    (1, 0, (),        "# 7: <var> = <const>"),
-    (1, 2, (),        "# 8: <var> = tuple(<var|num>, ...)"),
-    (0, 0, (1,),      "# 9: check |<var>| == <num>"),
-    (1, 0, (2, 3),    "#10: <var> = <var>[<var>|<num>]"),
-    (0, 0, (1, 2, 3), "#11: <var>[<var>|<num>] = <var|num>"),
-    (1, 0, (2,),      "#12: <var> = <var>.<attr>"),
-    (0, 0, (1, 3),    "#13: <var>.<attr> = <var|num>"),
-    (0, 0, (2,),      "#14: goto <label> if <var> else <label>"),
-    (1, 0, (3,),      "#15: <var> = <+|-|~|not ><var|num>"),
+    (1, 0, (),        0, "# 7: <var> = <const>"),
+    (1, 2, (),        0, "# 8: <var> = tuple(<var|num>, ...)"),
+    (0, 0, (1,),      1, "# 9: check |<var>| == <num>"),
+    (1, 0, (2, 3),    0, "#10: <var> = <var>[<var>|<num>]"),
+    (0, 0, (1, 2, 3), 1, "#11: <var>[<var>|<num>] = <var|num>"),
+    (1, 0, (2,),      0, "#12: <var> = <var>.<attr>"),
+    (0, 0, (1, 3),    1, "#13: <var>.<attr> = <var|num>"),
+    (0, 0, (2,),      1, "#14: goto <label> if <var> else <label>"),
+    (1, 0, (3,),      0, "#15: <var> = <+|-|~|not ><var|num>"),
 )
 
 
 
 HAS_LHS = tuple(_def[0] for _def in definitions)
+WITH_SIDE_EFFECT = tuple(_def[3] for _def in definitions)
 
 uses_getters = []
 for _def in definitions:

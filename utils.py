@@ -14,3 +14,40 @@ def bits_by_index(index, mask):
 is_termux = "com.termux" in sys.prefix
 
 dashed_separator = "\n" + "~~~ " * (15 if is_termux else 18) + "~~~\n"
+
+
+
+bin_ops = {
+    "+": lambda a, b: a + b,
+    "-": lambda a, b: a - b,
+    "*": lambda a, b: a * b,
+    "@": lambda a, b: a @ b,
+    "/": lambda a, b: a / b,
+    "//": lambda a, b: a // b,
+    "%": lambda a, b: a % b,
+    "**": lambda a, b: a ** b,
+
+    "|": lambda a, b: a | b,
+    "&": lambda a, b: a & b,
+    "^": lambda a, b: a ^ b,
+    ">>": lambda a, b: a >> b,
+    "<<": lambda a, b: a << b,
+
+    "==": lambda a, b: a == b,
+    "!=": lambda a, b: a != b,
+    "<": lambda a, b: a < b,
+    "<=": lambda a, b: a <= b,
+    ">": lambda a, b: a > b,
+    ">=": lambda a, b: a >= b,
+
+    "in": lambda a, b: a in b,
+    "not in": lambda a, b: a not in b,
+    "is": lambda a, b: a is b,
+    "is not": lambda a, b: a is not b,
+}
+unar_ops = {
+    "+": lambda a: +a,
+    "-": lambda a: -a,
+    "~": lambda a: ~a,
+    "not": lambda a: not a,
+}
