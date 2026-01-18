@@ -54,7 +54,7 @@ definitions = (
     (0, 0, (1, 3),    "# 2: if (<var|num> <cmp> <var|num>) goto <label>"),
     (0, 0, (),        "# 3: [else] goto <label>"),
     (0, 0, (1,),      "# 4: return <var|num>"),
-    (1, 0, (),        "# 5: <var> = phi(<var>, ...)"),
+    (1, 2, (),        "# 5: <var> = phi(<var>, ...)"),
     (1, 3, (2,),      "# 6: <var> = <func>(<var|num>, ...)"),
   # python:
     (1, 0, (),        "# 7: <var> = <const>"),
@@ -70,9 +70,7 @@ definitions = (
 
 
 
-_a = lambda inst, add: add(inst[1])
-_b = lambda inst, add: None
-defined_getters = tuple(_a if _def[0] else _b for _def in definitions)
+HAS_LHS = tuple(_def[0] for _def in definitions)
 
 uses_getters = []
 for _def in definitions:
@@ -242,7 +240,8 @@ def defined_vars_in_block(insts, vars=None):
     vars = set() if vars is None else vars
     vars_add = vars.add
     for inst in insts:
-        defined_getters[inst[0]](inst, vars_add)
+        if HAS_LHS[inst[0]]:
+            vars_add(inst[1])
     return vars
 
 def defined_vars_in_cfg(blocks, vars=None):
@@ -250,7 +249,8 @@ def defined_vars_in_cfg(blocks, vars=None):
     vars_add = vars.add
     for insts in blocks.values():
         for inst in insts:
-            defined_getters[inst[0]](inst, vars_add)
+            if HAS_LHS[inst[0]]:
+                vars_add(inst[1])
     return vars
 
 
@@ -288,10 +288,10 @@ def all_vars_in_cfg(blocks, vars=None):
 class SSA_Error(Exception): pass
 
 renamers = []
-for _def in definitions:
+for kind, _def in enumerate(definitions):
     code = ["def rename(insts, i, counter, collector, pushes):"]
     code.append("    inst = list(insts[i])")
-    if _def[1] or _def[2]:
+    if kind != 5 and (_def[1] or _def[2]):
         code.append("    try:")
         for idx in _def[2]:
             code.extend((

@@ -1,3 +1,5 @@
+import sys
+
 def bits_by_index(index, mask):
     if not mask: return "\u2205"
     out = []
@@ -9,4 +11,6 @@ def bits_by_index(index, mask):
                      if type(d) in (tuple, list) else str(d)
                      for d in out)
 
-dashed_separator = "\n" + "~~~ " * 18 + "~~~\n"
+is_termux = "com.termux" in sys.prefix
+
+dashed_separator = "\n" + "~~~ " * (15 if is_termux else 18) + "~~~\n"

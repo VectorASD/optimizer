@@ -195,6 +195,7 @@ if __name__ == "__main__":
     for F in module:
         SSA(F, predefined=tuple(builtins))
         main_loop(F)
+        print(dashed_separator)
         stringify_cfg(F)
 
     print(dashed_separator)
