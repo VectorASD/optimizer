@@ -2,6 +2,8 @@ from utils import dashed_separator
 
 import builtins
 
+builtins = vars(builtins)
+
 
 
 def builtins_walker(builtins):
@@ -224,6 +226,7 @@ FOLDING = (
     "sum",
     "tuple",
 )
+FOLDING_SET = set(f"_{name}" for name in FOLDING if callable(builtins[name]))
 
 
 
@@ -410,8 +413,6 @@ DUNDER_FOLDING = (
 DUNDER_FOLDING_SET = set(DUNDER_FOLDING)
 
 
-
-builtins = vars(builtins)
 
 if __name__ == "__main__ (old)":
     builtins_walker(builtins)
@@ -818,3 +819,8 @@ FOLDING_ATTRIBUTE_DICT = {}
 for pair in FOLDING_ATTRIBUTES:
     obj, attr = pair.split(".", 1)
     FOLDING_ATTRIBUTE_DICT[getattr(builtins[obj], attr)] = pair, obj, attr
+
+for obj in FOLDING:
+    value = builtins[obj]
+    if callable(value):
+        FOLDING_ATTRIBUTE_DICT[value] = f"builtins.{value}", "builtins", obj

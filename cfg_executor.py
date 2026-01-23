@@ -11,6 +11,11 @@ builtins = {f"_{name}": builtin for name, builtin in vars(builtins).items()}
 import struct
 builtins["_struct"] = struct
 
+def fake_input(*a):
+    print(*a, end=""); print(7)
+    return 7
+builtins["_input"] = fake_input
+
 
 
 class Result(Exception): pass
@@ -148,6 +153,9 @@ print(0 or 5, 5 or 0)
 
 struct.atttr = "MEOW!" * 3
 print(struct.atttr)
+
+print(range(5, 7))
+deadcode = 1, bytes.fromhex, range(5, int(input("stop: ")))
 """
 
 if __name__ == "__main__":
@@ -161,7 +169,7 @@ if __name__ == "__main__":
 
     for F in module:
         SSA(F, predefined=tuple(builtins))
-        main_loop(F, builtins)
+        main_loop(F, builtins, debug=True)
         print(dashed_separator)
         stringify_cfg(F)
 

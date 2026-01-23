@@ -1,6 +1,6 @@
 from HIR_parser import all_vars_in_cfg, ssa_cfg_renamer, HAS_LHS, uses_getters, WITHOUT_SIDE_EFFECT
 from utils import bin_ops, unar_ops
-from folding import FOLDING_ATTRIBUTE_DICT
+from folding import FOLDING_ATTRIBUTE_DICT, FOLDING_SET
 
 from collections import defaultdict, deque
 
@@ -127,7 +127,7 @@ def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
 
 
 
-def dead_code_elimination(blocks, index): # DCE
+def dead_code_elimination(blocks, index, rewrite_bb=True): # DCE
     use_count = [0] * len(index)
     idx2uses = [None] * len(index)
     idx2can_delete = [None] * len(index)
@@ -143,7 +143,9 @@ def dead_code_elimination(blocks, index): # DCE
             if HAS_LHS[kind]:
                 idx = index[inst[1]]
                 idx2uses[idx] = uses
-                idx2can_delete[idx] = WITHOUT_SIDE_EFFECT[kind]
+                if kind == 6: # <var> = <func>(<var|num>, ...)
+                    idx2can_delete[idx] = inst[2] in FOLDING_SET
+                else: idx2can_delete[idx] = WITHOUT_SIDE_EFFECT[kind]
     # print(*idx2inst, sep="\n")
 
     queue = []
@@ -163,9 +165,9 @@ def dead_code_elimination(blocks, index): # DCE
                     queue_append(use_idx)
         queue = new_queue
 
-    old_size = sum(map(len, blocks.values()))
+    new_blocks = blocks if rewrite_bb else {}
     for bb, insts in blocks.items():
-        blocks[bb] = new_insts = []
+        new_blocks[bb] = new_insts = []
         add = new_insts.append
         for inst in insts:
             kind = inst[0]
@@ -174,13 +176,16 @@ def dead_code_elimination(blocks, index): # DCE
                 if use_count[idx] or not idx2can_delete[idx]:
                     add(inst)
             else: add(inst)
-    new_size = sum(map(len, blocks.values()))
 
-    print(f"DCE: {old_size} -> {new_size}")
+    return new_blocks
+
+def fake_DCE(blocks, index):
+    tmp_blocks = dead_code_elimination(blocks, index, rewrite_bb=False)
+    return sum(map(len, tmp_blocks.values()))
 
 
 
-def main_loop(F, builtins):
+def main_loop(F, builtins, debug=False):
     blocks, preds, succs = F
 
     all_vars = all_vars_in_cfg(blocks)
@@ -191,10 +196,15 @@ def main_loop(F, builtins):
 
     builtin_consts = tuple((name, builtins[name]) for name in name_vars)
 
+    if debug: print("original:", sum(map(len, blocks.values())))
+
     copy_propagation(blocks, index, index_arr) # CP
+    if debug: print("add CP:", fake_DCE(blocks, index))
+
     constant_propogation_and_folding(blocks, index, builtin_consts) # ConstProp
     dead_code_elimination(blocks, index) # DCE
+    if debug: print("add ConstProp:", sum(map(len, blocks.values())))
 
-# original: 91 instructions
-# add CP: 74 instructions
-# add ConstProp: 61 instructions
+# original: 103 instructions
+# add CP: 80 instructions
+# add ConstProp: 65 instructions
