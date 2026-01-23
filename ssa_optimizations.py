@@ -1,9 +1,8 @@
-from HIR_parser import all_vars_in_cfg, ssa_cfg_renamer, HAS_LHS, uses_getters, WITH_SIDE_EFFECT
+from HIR_parser import all_vars_in_cfg, ssa_cfg_renamer, HAS_LHS, uses_getters, WITHOUT_SIDE_EFFECT
 from utils import bin_ops, unar_ops
+from folding import FOLDING_ATTRIBUTE_DICT
 
 from collections import defaultdict, deque
-
-WITHOUT_SIDE_EFFECT = tuple(not flag for flag in WITH_SIDE_EFFECT)
 
 
 
@@ -50,14 +49,20 @@ def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
         return lambda arr: arr[index]
     def scope_for_12(attr):
         return lambda obj: getattr(obj, attr)
+    def call_folding(func, *attrs):
+        is_folding = FOLDING_ATTRIBUTE_DICT.get(func)
+        if is_folding is None: return Undef
+        # print("CALL:", func, attrs, is_folding)
+        return func(*attrs)
 
     queue = []
     queue_append = queue.append
     for insts in blocks.values():
         for inst in insts:
             kind = inst[0]
-            if kind in (1, 8, 10, 12, 15):
+            if kind in (1, 6, 8, 10, 12, 15):
                 # 1: <var> = <var> <+|-|*|/|%|...> <var>
+                # 6: <var> = <func>(<var|num>, ...)
                 # 8: <var> = tuple(<var>, ...)
                 #10: <var> = <var>[<var>|<num>]
                 #12: <var> = <var>.<attr>
@@ -66,6 +71,7 @@ def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
                 uses_getters[kind](inst, uses.append)
                 match kind:
                     case 1: op = bin_ops[inst[3]]
+                    case 6: op = call_folding
                     case 8: op = lambda *a: tuple(a)
                     case 10:
                         if isinstance(inst[3], int):
@@ -88,6 +94,7 @@ def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
                 queue_append(idx)
 
     for name, value in builtin_consts:
+        if name == "_struct": continue # TODO
         idx = index[name]
         idx2value[idx] = value
         queue_append(idx)
@@ -102,9 +109,11 @@ def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
                 if not idx2count[user]:
                     uses, op = idx2uses[user]
                     args = (idx2value[use] for use in uses)
-                    idx2value[user] = op(*args) # constant folding
-                    queue_append(user)
-                    # print("released:", user, "   ", idx2value[user])
+                    value = op(*args) # constant folding
+                    if value is not Undef:
+                        idx2value[user] = value
+                        queue_append(user)
+                        # print("released:", user, "   ", idx2value[user])
         queue = new_queue
 
     for insts in blocks.values():
@@ -188,4 +197,4 @@ def main_loop(F, builtins):
 
 # original: 91 instructions
 # add CP: 74 instructions
-# add ConstProp: 63 instructions
+# add ConstProp: 61 instructions

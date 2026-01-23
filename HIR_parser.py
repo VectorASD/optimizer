@@ -72,19 +72,20 @@ definitions = (
 
 HAS_LHS = tuple(_def[0] for _def in definitions)
 WITH_SIDE_EFFECT = tuple(_def[3] for _def in definitions)
+WITHOUT_SIDE_EFFECT = tuple(not flag for flag in WITH_SIDE_EFFECT)
 
 uses_getters = []
 for _def in definitions:
     code = ["def get(inst, add):"]
-    if _def[1]:
-        code.extend((
-            f"    for var in inst[{_def[1]}]:",
-             "        if isinstance(var, str): add(var)",
-        ))
     for idx in _def[2]:
         code.extend((
             f"    var = inst[{idx}]",
              "    if isinstance(var, str): add(var)",
+        ))
+    if _def[1]:
+        code.extend((
+            f"    for var in inst[{_def[1]}]:",
+             "        if isinstance(var, str): add(var)",
         ))
     if len(code) == 1: code[0] += " pass"
     locs = {}

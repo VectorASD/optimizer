@@ -411,13 +411,13 @@ DUNDER_FOLDING_SET = set(DUNDER_FOLDING)
 
 
 
+builtins = vars(builtins)
+
 if __name__ == "__main__ (old)":
-    builtins = vars(builtins)
     builtins_walker(builtins)
     print(len(builtins)) # 159 шт.
 
 if __name__ == "__main__":
-    builtins = vars(builtins)
     # checked = set(attr for attr in sorted(dir(tuple) + dir(int)) if attr[0] == "_")
     for name in FOLDING:
         builtin = builtins[name]
@@ -812,4 +812,9 @@ FOLDING_ATTRIBUTES = (
     'tuple.count',
     'tuple.index',
 )
-FOLDING_ATTRIBUTES = set(FOLDING_ATTRIBUTES)
+FOLDING_ATTRIBUTE_SET = set(FOLDING_ATTRIBUTES)
+
+FOLDING_ATTRIBUTE_DICT = {}
+for pair in FOLDING_ATTRIBUTES:
+    obj, attr = pair.split(".", 1)
+    FOLDING_ATTRIBUTE_DICT[getattr(builtins[obj], attr)] = pair, obj, attr
