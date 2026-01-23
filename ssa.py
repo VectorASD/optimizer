@@ -224,7 +224,7 @@ def compute_df(BB_F, IDom, index): # Algorithm DF (Dominance Frontier, Фрон�
         for parent in parents:
             r = parent
             # поднимаемся по дереву доминаторов
-            while r != IDom.get(bb, None):
+            while r != IDom.get(bb):
                 # print("  r =", r)
                 DF[r] |= shift
                 r = IDom[r]
@@ -368,6 +368,8 @@ def SSA(BB_F, debug=False, predefined=()): # Static Single Assignment
         print(dashed_separator)
         stringify_cfg(BB_F)
 
+    return IDom, dom_tree, DF
+
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -426,7 +428,7 @@ if __name__ == "__main__":
 
     bb_F  = parse_program(program_1, debug="preds")
     try:
-        ssa_F = SSA(bb_F, debug=True)
+        SSA(bb_F, debug=True, predefined=("input", "bar", "baz"))
     except SSA_Error as e:
         print("\nSSA_Error:")
         print("   ", e)

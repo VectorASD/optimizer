@@ -1,4 +1,5 @@
-from HIR_parser import all_vars_in_cfg, ssa_cfg_renamer, HAS_LHS, uses_getters, WITHOUT_SIDE_EFFECT
+from ssa import SSA
+from HIR_parser import all_vars_in_cfg, ssa_cfg_renamer, HAS_LHS, uses_getters, WITHOUT_SIDE_EFFECT, ssa_hash
 from utils import bin_ops, unar_ops
 from folding import FOLDING_ATTRIBUTE_DICT, FOLDING_SET
 
@@ -185,26 +186,103 @@ def fake_DCE(blocks, index):
 
 
 
+def make_chain(r, IDom):
+    chain = []; append = chain.append
+    while r:
+        append(r)
+        r = IDom.get(r)
+    chain.reverse()
+    return chain
+
+def common_block(chain, chain2):
+    pop = chain.pop
+    for _ in range(max(0, len(chain) - len(chain2))):
+        pop()
+    i = len(chain) - 1
+    while chain[i] != chain2[i]:
+        i -= 1
+        pop()
+    return chain[i]
+
+def common_subexpression_elimination(blocks, IDom): # CSE
+    subs = defaultdict(set)
+    for bb, insts in blocks.items():
+        for i, inst in enumerate(insts):
+            kind = inst[0]
+            if WITHOUT_SIDE_EFFECT[kind] or kind == 6 and inst[2] in FOLDING_SET:
+                subs[(kind, inst[2:])].add((bb, i, inst[1]))
+
+    queue = (key for key, bb_set in subs.items() if len(bb_set) > 1)
+
+    for key in queue:
+        sub = subs[key]
+        defs = iter(sub)
+        bb = next(defs)[0]
+        chain = make_chain(bb, IDom)
+        for next_def in defs:
+            next_bb = next_def[0]
+            if next_bb != bb: bb = common_block(chain, make_chain(next_bb, IDom))
+
+        commons = []; add = commons.append
+        for next_bb, i, name in sub:
+            if next_bb == bb: add((i, name))
+
+        root = blocks[bb]
+        if commons:
+            if len(commons) > 1:
+                save_i, new_name = min(commons)
+                for i, name in commons:
+                    if i != save_i:
+                        root[i] = (0, name, new_name) # local CSE
+            else: new_name = commons[0][1]
+        else:
+            new_name = min(sub, key=lambda x: x[2])[2]
+            term = root.pop()
+            root.append((key[0], new_name, *key[1]))
+            root.append(term)
+
+        for next_bb, i, name in sub:
+            if next_bb != bb:
+                if name != new_name:
+                    blocks[next_bb][i] = (0, name, new_name) # global CSE
+                else: blocks[next_bb][i] = None
+
+    for bb, block in blocks.items():
+        blocks[bb] = list(filter(bool, block))
+
+
+
 def main_loop(F, builtins, debug=False):
+    IDom, dom_tree, DF = SSA(F, predefined=tuple(builtins))
+
     blocks, preds, succs = F
 
-    all_vars = all_vars_in_cfg(blocks)
-    name_vars = tuple(name for name in all_vars if name[0] != "%")
-    num_vars = len(all_vars) - len(name_vars)
-    index_arr = (*(f"%{n}" for n in range(num_vars)), *name_vars)
-    index = {name: n for n, name in enumerate(index_arr)}
+    prev_hash = None
+    for i in range(50):
+        all_vars = all_vars_in_cfg(blocks)
+        name_vars = tuple(name for name in all_vars if name[0] != "%")
+        # num_vars = len(all_vars) - len(name_vars)
+        index_arr = tuple(all_vars) # (*(f"%{n}" for n in range(num_vars)), *name_vars)
+        index = {name: n for n, name in enumerate(index_arr)}
 
-    builtin_consts = tuple((name, builtins[name]) for name in name_vars)
+        builtin_consts = tuple((name, builtins[name]) for name in name_vars)
 
-    if debug: print("original:", sum(map(len, blocks.values())))
+        if debug: print("original:", sum(map(len, blocks.values())))
 
-    copy_propagation(blocks, index, index_arr) # CP
-    if debug: print("add CP:", fake_DCE(blocks, index))
+        copy_propagation(blocks, index, index_arr) # CP
+        if debug: print("add CP:", fake_DCE(blocks, index))
 
-    constant_propogation_and_folding(blocks, index, builtin_consts) # ConstProp
-    dead_code_elimination(blocks, index) # DCE
-    if debug: print("add ConstProp:", sum(map(len, blocks.values())))
+        constant_propogation_and_folding(blocks, index, builtin_consts) # ConstProp
+        dead_code_elimination(blocks, index) # DCE
+        if debug: print("add ConstProp:", sum(map(len, blocks.values())))
+
+        common_subexpression_elimination(blocks, IDom)
+
+        next_hash = ssa_hash(F)
+        if next_hash == prev_hash: break
+        prev_hash = next_hash
 
 # original: 103 instructions
 # add CP: 80 instructions
 # add ConstProp: 65 instructions
+# add CSE+loop: 50 instructions

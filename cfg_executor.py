@@ -1,7 +1,6 @@
 from py_visitors import py_visitor
 from ssa_optimizations import main_loop
 from HIR_parser import stringify_cfg
-from ssa import SSA
 from utils import dashed_separator, bin_ops, unar_ops
 
 
@@ -93,7 +92,10 @@ def executor(module):
 
     def run_block(block):
         for inst in block:
-            it = iter(inst)
+            try: it = iter(inst)
+            except TypeError as e:
+                if inst is None: continue
+                raise e from None
             dispatch[next(it)](*it)
 
     def make_preds2idx(preds):
@@ -134,6 +136,10 @@ print("I can calculate it:", 1+2)
 
 a = -5
 b = 1, 2, 3
+
+print(0 and 5, 5 and 0)
+print(0 or 5, 5 or 0)
+
 print("ab:", a, b)
 a, b = b, a
 print("ab:", a, b)
@@ -147,9 +153,6 @@ print("arr[a]:", arr[a])
 arr[0] = 7
 print("arr:", arr)
 print(bytes.fromhex("9fa5"))
-
-print(0 and 5, 5 and 0)
-print(0 or 5, 5 or 0)
 
 struct.atttr = "MEOW!" * 3
 print(struct.atttr)
@@ -168,7 +171,6 @@ if __name__ == "__main__":
     print(dashed_separator)
 
     for F in module:
-        SSA(F, predefined=tuple(builtins))
         main_loop(F, builtins, debug=True)
         print(dashed_separator)
         stringify_cfg(F)

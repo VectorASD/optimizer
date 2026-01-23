@@ -5,6 +5,7 @@ import re
 from pprint import pformat
 import sys
 from io import StringIO
+from hashlib import sha256
 
 
 
@@ -187,6 +188,9 @@ def parse_program(text, debug=False):
 
 def stringify_instr(ops, i, write):
     op = ops[i]; i += 1 # ops[i++]
+    if op is None:
+        write("...")
+        return i
     match op[0]:
         case 0: write(f"{op[1]} = {op[2]}")
         case 1: write(f"{op[1]} = {op[2]} {op[3]} {op[4]}")
@@ -235,6 +239,17 @@ def stringify_cfg(F, file=None):
                 bb_preds = preds[bb]
                 if bb_preds: write(f"   // preds: {', '.join(map(str, bb_preds))}")
             write("\n")
+
+def ssa_hash(F):
+    hasher = sha256()
+    write = lambda str: hasher.update(str.encode("utf-8"))
+    for bb, ops in F[0].items():
+        i, L = 0, len(ops)
+        write(f"{bb}:")
+        while i < L:
+            i = stringify_instr(ops, i, write)
+            write(";")
+    return hasher.digest()
 
 
 
