@@ -1,5 +1,5 @@
 from utils import dashed_separator, bits_by_index
-from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg, insts_renamer, SSA_Error
+from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg, insts_renamer, SSA_Error, ValueHost
 from dataflow_analysis import reaching_definitions
 
 from pprint import pprint
@@ -271,15 +271,15 @@ def static_insertion(BB_F, all_vars, DF, index_arr, debug=False): # Algorithm SI
 
 def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
     blocks, preds, succs = BB_F
-    counter = [0] # defaultdict(int) теперь счётчик общий
-    collector = defaultdict(list)
-    end_collector = defaultdict(dict)
 
-    for name in predefined: collector[name].append(name)
+    value_host = ValueHost(predefined)
+    collector = value_host.collector
+    end_collector = defaultdict(dict)
+    stack_push = value_host.stack_push
 
     def rename(bb):
-        pushes = []
-        blocks[bb] = insts_renamer(blocks[bb], counter, collector, pushes)
+        stack_pop = stack_push()
+        blocks[bb] = insts_renamer(blocks[bb], value_host)
 
         for var, stack in collector.items():
             if stack:
@@ -288,8 +288,7 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
         for next_bb in dom_tree[bb]:
             rename(next_bb)
 
-        for var in pushes:
-            collector[var].pop()
+        stack_pop()
 
     def rename_phi():
         for bb, insts in blocks.items():
@@ -312,6 +311,8 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
     for bb in roots:
         rename(bb)
     rename_phi()
+
+    return value_host
 
 
 
@@ -363,12 +364,12 @@ def SSA(BB_F, debug=False, predefined=()): # Static Single Assignment
         print(dashed_separator)
         stringify_cfg(BB_F)
 
-    static_renaming(BB_F, all_vars, dom_tree, predefined)
+    value_host = static_renaming(BB_F, all_vars, dom_tree, predefined)
     if debug:
         print(dashed_separator)
         stringify_cfg(BB_F)
 
-    return IDom, dom_tree, DF
+    return IDom, dom_tree, DF, value_host
 
 
 

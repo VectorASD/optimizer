@@ -22,13 +22,13 @@ class Goto(Exception): pass
 
 
 
-def executor(module):
+def executor(module, memory):
     def code_0(var, setter): # 0: <var> = <var|num>
-        memory[var] = memory[setter] if isinstance(setter, str) else setter
+        memory[var] = setter if isinstance(setter, int) else memory[setter]
 
     def code_1(var, left, op, right): # 1: <var> = <var|num> <+|-|*|/|%|...> <var|num>
-        left = memory[left] if isinstance(left, str) else left
-        right = memory[right] if isinstance(right, str) else right
+        left = left if isinstance(left, int) else memory[left]
+        right = right if isinstance(right, int) else memory[right]
         try: func = bin_ops[op]
         except KeyError: raise RuntimeError(f"bin op {op!r} is not defined!") from None
         memory[var] = func(left, right)
@@ -40,7 +40,7 @@ def executor(module):
         raise Goto(label)
 
     def code_4(var): # 4: return <var|num>
-        var = memory[var] if isinstance(var, str) else var
+        var = var if isinstance(var, int) else memory[var]
         raise Result(var)
 
     def code_5(var, branches): # 5: <var> = phi(<var>, ...)
@@ -48,13 +48,13 @@ def executor(module):
 
     def code_6(var, func, args): # 6: <var> = <func>(<var|num>, ...)
         func = memory[func]
-        memory[var] = func(*(memory[arg] if isinstance(arg, str) else arg for arg in args))
+        memory[var] = func(*(arg if isinstance(arg, int) else memory[arg] for arg in args))
 
     def code_7(var, const): # 7: <var> = <const>
         memory[var] = const
 
     def code_8(var, items): # 8: <var> = tuple(<var|num>, ...)
-        memory[var] = tuple(memory[item] if isinstance(item, str) else item for item in items)
+        memory[var] = tuple(item if isinstance(item, int) else memory[item] for item in items)
 
     def code_9(var, size): # 9: check |<var>| == <num>
         real_size = len(memory[var])
@@ -62,26 +62,26 @@ def executor(module):
         elif real_size > size: raise ValueError(f"not enough values to unpack (expected {real_size}, got {size})")
 
     def code_10(var, arr, idx): #10: <var> = <var>[<var>|<num>]
-        idx = memory[idx] if isinstance(idx, str) else idx
+        idx = idx if isinstance(idx, int) else memory[idx]
         memory[var] = memory[arr][idx]
 
     def code_11(arr, idx, value): #11: <var>[<var>|<num>] = <var|num>
-        idx = memory[idx] if isinstance(idx, str) else idx
-        value = memory[value] if isinstance(value, str) else value
+        idx = idx if isinstance(idx, int) else memory[idx]
+        value = value if isinstance(value, int) else memory[value]
         memory[arr][idx] = value
 
     def code_12(var, var2, attr): #12: <var> = <var>.<attr>
         memory[var] = getattr(memory[var2], attr)
 
     def code_13(var, attr, value): #13: <var>.<var> = <var|num>
-        value = memory[value] if isinstance(value, str) else value
+        value = value if isinstance(value, int) else memory[value]
         setattr(memory[var], attr, value)
 
     def code_14(yeah, var, nop): #14: goto <label> if <var> else <label>
         raise Goto(yeah if memory[var] else nop)
 
     def code_15(var, op, right): #15: <var> = <+|-|~|not ><var|num>
-        right = memory[right] if isinstance(right, str) else right
+        right = right if isinstance(right, int) else memory[right]
         try: func = unar_ops[op]
         except KeyError: raise RuntimeError(f"unar op {op!r} is not defined!") from None
         memory[var] = func(right)
@@ -92,6 +92,7 @@ def executor(module):
 
     def run_block(block):
         for inst in block:
+            # print(inst)
             try: it = iter(inst)
             except TypeError as e:
                 if inst is None: continue
@@ -124,7 +125,6 @@ def executor(module):
     preds2idx = tuple(make_preds2idx(func[1]) for func in module)
     cur_idx = None
 
-    memory = {**builtins}
     result = run_func(0)
     if result is not None: print("RESULT:", result)
 
@@ -167,13 +167,18 @@ if __name__ == "__main__":
         stringify_cfg(F)
 
     print(dashed_separator)
-    executor(module)
+    memory = {**builtins}
+    executor(module, memory)
     print(dashed_separator)
 
+    memory = {}
     for F in module:
-        main_loop(F, builtins, debug=True)
+        value_host = main_loop(F, builtins, debug=True)
+        for value in value_host.index:
+            if value.label is not None:
+                memory[value] = builtins[value.label]
         print(dashed_separator)
         stringify_cfg(F)
 
     print(dashed_separator)
-    executor(module)
+    executor(module, memory)

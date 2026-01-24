@@ -207,7 +207,7 @@ def stringify_instr(ops, i, write):
         case 6: write(f"{op[1]} = {op[2]}({', '.join(map(str, op[3]))})")
 
         case 7: write(f"{op[1]} = {op[2]!r}")
-        case 8: write(f"{op[1]} = ({', '.join(op[2])})")
+        case 8: write(f"{op[1]} = ({', '.join(map(str, op[2]))})")
         case 9: write(f"check |{op[1]}| == {op[2]}")
         case 10: write(f"{op[1]} = {op[2]}[{op[3]}]")
         case 11: write(f"{op[1]}[{op[2]}] = {op[3]}")
@@ -304,22 +304,70 @@ def all_vars_in_cfg(blocks, vars=None):
 
 class SSA_Error(Exception): pass
 
+class Value:
+    def __init__(self, n, label=None):
+        self.n = n
+        self.label = label
+        self.for_repr = n, label
+    def __repr__(self):
+        n, label = self.for_repr
+        return f"%{n}" if label is None else f"{label}→%{n}"
+
+class ValueHost:
+    def __init__(self, predefined):
+        self.counter = 0
+        self.collector = defaultdict(list)
+        self.index = []
+        self.for_get = set(predefined), self.collector, self.index.append
+
+    def stack_push(self):
+        pushes = []
+        self.for_add = self.collector, pushes.append, self.index.append 
+        def stack_pop():
+            collector = self.collector
+            for var in pushes:
+                collector[var].pop()
+        return stack_pop
+
+    def add(self, inst):
+        var = inst[1]
+        inst[1] = new_var = Value(self.counter)
+        self.counter += 1
+
+        collector, pushes_append, index_append = self.for_add
+        collector[var].append(new_var)
+        pushes_append(var)
+        index_append(new_var)
+
+    def get(self, var):
+        try: return self.collector[var][-1]
+        except IndexError as e:
+            predefined, collector, index_append = self.for_get
+            if var not in predefined: raise e from None
+        new_var = Value(self.counter, var)
+        self.counter += 1
+        collector[var].append(new_var)
+        index_append(new_var)
+        return new_var
+
 renamers = []
 for kind, _def in enumerate(definitions):
-    code = ["def rename(insts, i, counter, collector, pushes):"]
-    code.append("    inst = list(insts[i])")
+    code = [
+        "def rename(insts, i, value_host):",
+        "    inst = list(insts[i])",
+    ]
     if kind != 5 and (_def[1] or _def[2]):
         code.append("    try:")
         for idx in _def[2]:
             code.extend((
                 f"        var = inst[{idx}]",
-                f"        if isinstance(var, str): inst[{idx}] = collector[var][-1]",
+                f"        if isinstance(var, str): inst[{idx}] = value_host.get(var)",
             ))
         if _def[1]:
             code.extend((
-                 "        arr = []; append = arr.append",
+                 "        arr = []; append = arr.append; get = value_host.get",
                 f"        for var in inst[{_def[1]}]:",
-                 "            if isinstance(var, str): append(collector[var][-1])",
+                 "            if isinstance(var, str): append(get(var))",
                 f"        inst[{_def[1]}] = tuple(arr)",
             ))
         code.extend((
@@ -327,20 +375,11 @@ for kind, _def in enumerate(definitions):
             "        raise SSA_Error(f'{var!r} is undefined: {stringify_instr_wrap(insts, i)!r}')",
         ))
     if _def[0]:
-        code.append("""
-    var = inst[1]
-    new_var = f"%{counter[0]}"
-    counter[0] += 1
-    collector[var].append(new_var)
-    pushes.append(var)
-    inst[1] = new_var""")
-    # counter[var] = n = counter[var] + 1
-    # new_var = f"{var}{n}"
-    # while new_var in collector: new_var += "_"
+        code.append("    value_host.add(inst)")
 
     code.append("    return tuple(inst)")
     if len(code) == 3: code = (code[0] + " return insts[i]",)
-    locs = {"SSA_Error": SSA_Error, "stringify_instr_wrap": stringify_instr_wrap}
+    locs = {"SSA_Error": SSA_Error, "stringify_instr_wrap": stringify_instr_wrap, "Value": Value}
     exec("\n".join(code), locs)
     renamers.append(locs["rename"])
 
@@ -374,14 +413,9 @@ for _def in definitions:
 
 
 
-def insts_renamer(insts, counter, collector, pushes):
-    """
-    counter = [0] # defaultdict(int)
-    collector = defaultdict(list)
-    pushes = []
-    """
+def insts_renamer(insts, value_host):
     return tuple(
-        renamers[inst[0]](insts, i, counter, collector, pushes)
+        renamers[inst[0]](insts, i, value_host)
         for i, inst in enumerate(insts))
 
 def ssa_insts_renamer(insts, name2name):

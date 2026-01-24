@@ -253,12 +253,13 @@ def common_subexpression_elimination(blocks, IDom): # CSE
 
 
 def main_loop(F, builtins, debug=False):
-    IDom, dom_tree, DF = SSA(F, predefined=tuple(builtins))
+    IDom, dom_tree, DF, value_host = SSA(F, predefined=tuple(builtins))
+    print(value_host.index)
 
     blocks, preds, succs = F
 
     prev_hash = None
-    for i in range(50):
+    for i in range(0):
         all_vars = all_vars_in_cfg(blocks)
         name_vars = tuple(name for name in all_vars if name[0] != "%")
         # num_vars = len(all_vars) - len(name_vars)
@@ -276,11 +277,13 @@ def main_loop(F, builtins, debug=False):
         dead_code_elimination(blocks, index) # DCE
         if debug: print("add ConstProp:", sum(map(len, blocks.values())))
 
-        common_subexpression_elimination(blocks, IDom)
+        # common_subexpression_elimination(blocks, IDom)
 
         next_hash = ssa_hash(F)
         if next_hash == prev_hash: break
         prev_hash = next_hash
+
+    return value_host
 
 # original: 103 instructions
 # add CP: 80 instructions
