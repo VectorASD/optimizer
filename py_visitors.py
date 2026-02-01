@@ -253,18 +253,21 @@ compound_stmt:
         return name
     def unpack_recurs(left, right):
         for i, _left in enumerate(left):
+            const = new_reg()
+            add(7, const, i) # <var> = <const>
             if type(_left) is tuple:
                 reg = new_reg()
-                add(10, reg, right, i) # <var> = <var>[<var|num>]
+                add(10, reg, right, const) # <var> = <var>[<var>]
                 add(9, reg, len(_left)) # check |<var>| == <num>
                 unpack_recurs(_left, reg)
                 free_reg(reg)
             elif callable(_left):
                 tmp = new_reg()
-                add(10, tmp, right, i) # <var> = <var>[<var|num>]
+                add(10, tmp, right, const) # <var> = <var>[<var>]
                 _left(tmp)
             else:
-                add(10, _left, right, i) # <var> = <var>[<var|num>]
+                add(10, _left, right, const) # <var> = <var>[<var>]
+            free_reg(const)
 
     def visit_targets(left, right, sized):
         # каждый элемент right ВСЕГДА приходит из visit_expression
@@ -340,7 +343,7 @@ compound_stmt:
             free_regs(value, slice, reg)
         def get(self):
             result = new_reg()
-            add(10, result, *self.i) # <var> = <var>[<var|num>]
+            add(10, result, *self.i) # <var> = <var>[<var>]
             return result
     def visit_Subscript(node):
         ctx = type(node.ctx)

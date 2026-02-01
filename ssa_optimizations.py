@@ -42,8 +42,6 @@ def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
     idx2uses = [None] * len(index)
     idx2value = [Undef] * len(index)
 
-    def scope_for_10(index):
-        return lambda arr: arr[index]
     def scope_for_12(attr):
         return lambda obj: getattr(obj, attr)
     def call_folding(func, *attrs):
@@ -61,7 +59,7 @@ def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
                 # 1: <var> = <var> <+|-|*|/|%|...> <var>
                 # 6: <var> = <func>(<var|num>, ...)
                 # 8: <var> = tuple(<var>, ...)
-                #10: <var> = <var>[<var>|<num>]
+                #10: <var> = <var>[<var>]
                 #12: <var> = <var>.<attr>
                 #15: <var> = <+|-|~|not ><var>
                 uses = []
@@ -70,10 +68,7 @@ def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
                     case 1: op = bin_ops[inst[3]]
                     case 6: op = call_folding
                     case 8: op = lambda *a: tuple(a)
-                    case 10:
-                        if isinstance(inst[3], int):
-                            op = scope_for_10(inst[3])
-                        else: op = lambda arr, index: arr[index]
+                    case 10: op = lambda arr, index: arr[index]
                     case 12: op = scope_for_12(inst[3])
                     case 15: op = unar_ops[inst[2]] 
 

@@ -58,9 +58,8 @@ def executor(module, memory):
         if real_size < size: raise ValueError(f"too many values to unpack (expected {real_size}, got {size})")
         elif real_size > size: raise ValueError(f"not enough values to unpack (expected {real_size}, got {size})")
 
-    def code_10(var, arr, idx): #10: <var> = <var>[<var|num>]
-        idx = idx if isinstance(idx, int) else memory[idx]
-        memory[var] = memory[arr][idx]
+    def code_10(var, arr, idx): #10: <var> = <var>[<var>]
+        memory[var] = memory[arr][memory[idx]]
 
     def code_11(arr, idx, value): #11: <var>[<var>] = <var>
         memory[arr][memory[idx]] = memory[value]
