@@ -432,33 +432,12 @@ for kind, _def in enumerate(definitions):
     exec("\n".join(code), locs)
     renamers.append(locs["rename"])
 
-ssa_renamers = []
-for _def in definitions:
-    code = ["def rename(inst, renamer):",
-            "    inst = list(inst)"]
-    for idx in _def[2]:
-        code.extend((
-            f"    var = inst[{idx}]",
-            f"    if isinstance(var, str): inst[{idx}] = renamer(var, var)",
-        ))
-    if _def[1]:
-        code.extend((
-             "    arr = []; append = arr.append",
-            f"    for var in inst[{_def[1]}]:",
-             "        if isinstance(var, str): append(renamer(var, var))",
-            f"    inst[{_def[1]}] = tuple(arr)",
-        ))
-    # if _def[0]:
-    #     code.extend((
-    #         "    var = inst[1]",
-    #         "    if isinstance(var, str): inst[1] = renamer(var, var)",
-    #     ))
+def insts_renamer(insts, value_host):
+    return [
+        renamers[inst[0]](insts, i, value_host)
+        for i, inst in enumerate(insts)]
 
-    code.append("    return tuple(inst)")
-    if len(code) == 3: code = (code[0] + " return inst",)
-    locs = {}
-    exec("\n".join(code), locs)
-    ssa_renamers.append(locs["rename"])
+
 
 uses_V_getters = []
 for _def in definitions:
@@ -477,13 +456,6 @@ for _def in definitions:
     locs = {"Value": Value}
     exec("\n".join(code), locs)
     uses_V_getters.append(locs["get"])
-
-
-
-def insts_renamer(insts, value_host):
-    return [
-        renamers[inst[0]](insts, i, value_host)
-        for i, inst in enumerate(insts)]
 
 
 
