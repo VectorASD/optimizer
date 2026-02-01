@@ -477,22 +477,9 @@ for _def in definitions:
 
 
 def insts_renamer(insts, value_host):
-    return tuple(
-        renamers[inst[0]](insts, i, value_host)
-        for i, inst in enumerate(insts))
-
-def ssa_insts_renamer(insts, name2name):
-    renamer = name2name.get
     return [
-        ssa_renamers[inst[0]](inst, renamer)
-        for inst in insts]
-
-def ssa_cfg_renamer(blocks, name2name):
-    renamer = name2name.get
-    for block, insts in blocks.items():
-        blocks[block] = [
-            ssa_renamers[inst[0]](inst, renamer)
-            for inst in insts]
+        renamers[inst[0]](insts, i, value_host)
+        for i, inst in enumerate(insts)]
 
 
 

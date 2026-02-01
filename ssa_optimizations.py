@@ -1,5 +1,5 @@
 from ssa import SSA
-from HIR_parser import stringify_cfg, all_vars_in_cfg, HAS_LHS, uses_V_getters, WITHOUT_SIDE_EFFECT, ssa_hash, Value
+from HIR_parser import stringify_cfg, HAS_LHS, uses_V_getters, WITHOUT_SIDE_EFFECT, ssa_hash, Value
 from utils import bin_ops, unar_ops
 from folding import FOLDING_ATTRIBUTE_DICT, FOLDING_SET
 
@@ -31,16 +31,29 @@ def copy_propagation(blocks, value_host): # CP
                 dst = queue_pop()
                 queue_extend(graph[dst])
                 rename(dst, src)
+    value_host.shift()
+
+
+
+def self_assign_elemination(blocks): # SAE
+    for bb, insts in blocks.items():
+        blocks[bb] = new_insts = []
+        add = new_insts.append
+        for inst in insts:
+            if inst[0] == 0 and inst[1].n == inst[2].n: # %5 = %5
+                continue
+            add(inst)
 
 
 
 class Undef: pass
 
-def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
-    idx2users = tuple([] for i in range(len(index)))
-    idx2count = [0] * len(index)
-    idx2uses = [None] * len(index)
-    idx2value = [Undef] * len(index)
+def constant_propogation_and_folding(blocks, value_host, builtins): # ConstProp
+    size = len(value_host.index)
+    idx2users = tuple([] for i in range(size))
+    idx2count = [0] * size
+    idx2uses = [None] * size
+    idx2value = [Undef] * size
 
     def scope_for_12(attr):
         return lambda obj: getattr(obj, attr)
@@ -63,7 +76,7 @@ def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
                 #12: <var> = <var>.<attr>
                 #15: <var> = <+|-|~|not ><var>
                 uses = []
-                uses_getters[kind](inst, uses.append)
+                uses_V_getters[kind](inst, uses.append)
                 match kind:
                     case 1: op = bin_ops[inst[3]]
                     case 6: op = call_folding
@@ -72,24 +85,27 @@ def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
                     case 12: op = scope_for_12(inst[3])
                     case 15: op = unar_ops[inst[2]] 
 
-                idx = index[inst[1]]
-                uses = tuple(index[use] for use in uses)
+                idx = inst[1].n
+                uses = tuple(uses)
                 # print(idx, uses)
                 for use in uses:
                     idx2users[use].append(idx)
                 idx2count[idx] = len(uses)
                 idx2uses[idx] = uses, op
-            elif kind == 7:
-                idx = index[inst[1]]
+
+            elif kind == 7: # <var> = <const>
+                idx = inst[1].n
                 value = inst[2]
                 idx2value[idx] = value
                 queue_append(idx)
 
-    for name, value in builtin_consts:
-        if name == "_struct": continue # TODO
-        idx = index[name]
-        idx2value[idx] = value
-        queue_append(idx)
+    for value in value_host.index:
+        name = value.label
+        if name is not None:
+            if name == "_struct": continue # TODO
+            idx = value.n
+            idx2value[idx] = builtins[name]
+            queue_append(idx)
 
     while queue:
         # print("•", queue)
@@ -105,7 +121,7 @@ def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
                     if value is not Undef:
                         idx2value[user] = value
                         queue_append(user)
-                        # print("released:", user, "   ", idx2value[user])
+                        # print(f"released: {user:2}     {idx2value[user]}")
         queue = new_queue
 
     for insts in blocks.values():
@@ -113,7 +129,7 @@ def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
             kind = inst[0]
             if HAS_LHS[kind]:
                 var = inst[1]
-                value = idx2value[index[var]]
+                value = idx2value[var.n]
                 if value is not Undef:
                     insts[i] = (7, var, value)
 
@@ -125,22 +141,16 @@ def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
     idx2uses = [None] * size
     idx2can_delete = [None] * size
 
-    print(value_host.index)
-
     for insts in blocks.values():
         for inst in insts:
             kind = inst[0]
-            defer = HAS_LHS[kind]
-            if defer:
-                idx = inst[1].n
-            if kind == 0 and idx == inst[2].n:
-                continue
             uses = set()
             uses_V_getters[kind](inst, uses.add)
             uses = tuple(uses)
             for use_idx in uses:
                 use_count[use_idx] += 1
-            if defer:
+            if HAS_LHS[kind]:
+                idx = inst[1].n
                 idx2uses[idx] = uses
                 if kind == 6: # <var> = <func>(<var|num>, ...)
                     idx2can_delete[idx] = inst[2] in FOLDING_SET
@@ -164,6 +174,7 @@ def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
         queue = new_queue
 
     new_blocks = blocks if rewrite_bb else {}
+    index = value_host.index
     for bb, insts in blocks.items():
         new_blocks[bb] = new_insts = []
         add = new_insts.append
@@ -171,15 +182,17 @@ def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
             kind = inst[0]
             if HAS_LHS[kind]:
                 idx = inst[1].n
-                if kind == 0 and idx == inst[2].n:
-                    continue
-                if use_count[idx] or not idx2can_delete[idx]:
-                    add(inst)
+                if idx2can_delete[idx] and use_count[idx] == 0:
+                    if rewrite_bb:
+                        index[idx] = None
+                else: add(inst)
             else: add(inst)
+    if rewrite_bb:
+        value_host.shift()
     return new_blocks
 
-def fake_DCE(blocks, index):
-    tmp_blocks = dead_code_elimination(blocks, index, rewrite_bb=False)
+def fake_DCE(blocks, value_host):
+    tmp_blocks = dead_code_elimination(blocks, value_host, rewrite_bb=False)
     return sum(map(len, tmp_blocks.values()))
 
 
@@ -254,31 +267,19 @@ def main_loop(F, builtins, debug=False):
     IDom, dom_tree, DF, value_host = SSA(F, predefined=tuple(builtins))
 
     blocks, preds, succs = F
-
-    copy_propagation(blocks, value_host) # CP
-
-    value_host.shift()
-    stringify_cfg(F)
-    dead_code_elimination(blocks, value_host) # DCE
+    if debug: print(f"original:      {sum(map(len, blocks.values())):3}")
 
     prev_hash = None
-    for i in range(0):
-        all_vars = all_vars_in_cfg(blocks)
-        name_vars = tuple(name for name in all_vars if name[0] != "%")
-        # num_vars = len(all_vars) - len(name_vars)
-        index_arr = tuple(all_vars) # (*(f"%{n}" for n in range(num_vars)), *name_vars)
-        index = {name: n for n, name in enumerate(index_arr)}
+    for i in range(2):
+        copy_propagation(blocks, value_host) # CP
+        self_assign_elemination(blocks) # SAE
+        if debug: print(f"add CP:        {sum(map(len, blocks.values())):3}")
 
-        builtin_consts = tuple((name, builtins[name]) for name in name_vars)
+        constant_propogation_and_folding(blocks, value_host, builtins) # ConstProp
+        if debug: print(f"add ConstProp: {fake_DCE(blocks, value_host):3}")
 
-        if debug: print("original:", sum(map(len, blocks.values())))
-
-        copy_propagation(blocks, index, index_arr) # CP
-        if debug: print("add CP:", fake_DCE(blocks, index))
-
-        constant_propogation_and_folding(blocks, index, builtin_consts) # ConstProp
-        dead_code_elimination(blocks, index) # DCE
-        if debug: print("add ConstProp:", sum(map(len, blocks.values())))
+        dead_code_elimination(blocks, value_host) # DCE
+        #stringify_cfg(F); exit()
 
         # common_subexpression_elimination(blocks, IDom)
 
@@ -288,7 +289,8 @@ def main_loop(F, builtins, debug=False):
 
     return value_host
 
-# original: 103 instructions
-# add CP: 80 instructions
-# add ConstProp: 65 instructions
-# add CSE+loop: 50 instructions
+# • instructions:
+# original:      109
+# add CP:         96
+# add ConstProp:  71
+# add CSE+loop: ?
