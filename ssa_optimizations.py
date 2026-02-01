@@ -48,12 +48,14 @@ def trivial_copy_elemination(blocks): # TCE
 
 class Undef: pass
 
-def constant_propogation_and_folding(blocks, value_host, builtins): # ConstProp
+def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
     size = len(value_host.index)
     idx2users = tuple([] for i in range(size))
     idx2count = [0] * size
     idx2uses = [None] * size
     idx2value = [Undef] * size
+
+    blocks = F[0]
 
     def scope_for_12(attr):
         return lambda obj: getattr(obj, attr)
@@ -124,14 +126,14 @@ def constant_propogation_and_folding(blocks, value_host, builtins): # ConstProp
                         # print(f"released: {user:2}     {idx2value[user]}")
         queue = new_queue
 
-    for insts in blocks.values():
+    for bb, insts in blocks.items():
         for i, inst in enumerate(insts):
             kind = inst[0]
             if HAS_LHS[kind]:
                 var = inst[1]
                 value = idx2value[var.n]
                 if value is not Undef:
-                    insts[i] = (7, var, value)
+                    insts[i] = (7, var, value) # <var> = <const>
             elif kind == 9: # check |<var>| == <num>
                 value = idx2value[inst[1].n]
                 if value is not Undef:
@@ -142,6 +144,26 @@ def constant_propogation_and_folding(blocks, value_host, builtins): # ConstProp
                     if expected_L < L: raise ValueError(f"too many values to unpack (expected {expected_L}, got {L})")
                     elif expected_L > L: raise ValueError(f"not enough values to unpack (expected {expected_L}, got {L})")
                     insts[i] = (16,) # nop
+            elif kind == 14: # goto <label> if <var> else <label>
+                value = idx2value[inst[2].n]
+                if value is not Undef:
+                    insts[i] = (3, inst[1 if value else 3]) # goto <label>
+                    erased_bb = inst[3 if value else 1]
+                    branch_folding(F, bb, erased_bb) # BF
+
+
+
+def branch_folding(F, bb, erased_bb): # BF
+    blocks, preds, succs = F
+    # print(bb, "-x->", erased_bb)
+    idx = preds[erased_bb].index(bb)
+    preds[erased_bb].pop(idx)
+    succs[bb].remove(erased_bb)
+    insts = blocks[erased_bb]
+    for i, inst in enumerate(insts):
+        if inst[0] != 5: break # not phi
+        phi_args = inst[2]
+        insts[i] = (5, inst[1], (*phi_args[:idx], *phi_args[idx+1:]))
 
 
 
@@ -276,7 +298,7 @@ def common_subexpression_elimination(blocks, IDom): # CSE
 def main_loop(F, builtins, debug=False):
     IDom, dom_tree, DF, value_host = SSA(F, predefined=tuple(builtins))
 
-    blocks, preds, succs = F
+    blocks = F[0]
     if debug: print(f"original:    {sum(map(len, blocks.values())):3}")
 
     prev_hash = None
@@ -285,7 +307,7 @@ def main_loop(F, builtins, debug=False):
         trivial_copy_elemination(blocks) # TCE
         if debug: print(f"+ CP:        {sum(map(len, blocks.values())):3}")
 
-        constant_propogation_and_folding(blocks, value_host, builtins) # ConstProp
+        constant_propogation_and_folding(F, value_host, builtins) # ConstProp
         dead_code_elimination(blocks, value_host) # DCE
         if debug: print(f"+ ConstProp: {sum(map(len, blocks.values())):3}")
 
