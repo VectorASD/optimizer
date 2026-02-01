@@ -167,6 +167,61 @@ def branch_folding(F, bb, erased_bb): # BF
 
 
 
+def branch_elimination(F): # BE
+    blocks, preds, succs = F
+    it = iter(preds)
+    entry = next(it)
+    queue = tuple(bb for bb in it if not preds[bb])
+
+    while queue:
+        new_queue = []
+        queue_append = new_queue.append
+        for bb in queue:
+            for erased_bb in succs[bb]:
+                branch_folding(F, bb, erased_bb) # BF
+                if not preds[erased_bb]: queue_append(erased_bb)
+            del blocks[bb], preds[bb], succs[bb] # minus node/vertex ;'-}
+        queue = new_queue
+
+def phi_elimination(blocks): # φE
+    for insts in blocks.values():
+        for i, inst in enumerate(insts):
+            if inst[0] != 5: break # not phi
+            phi_args = inst[2]
+            it = iter(phi_args)
+            idx = next(it).n
+            if all(idx == value.n for value in it):
+                insts[i] = (0, inst[1], phi_args[0]) # <var> = <var>
+
+def block_merging(F): # BM
+    blocks, preds, succs = F
+    queue = tuple(blocks)
+
+    while queue:
+        # print("•", queue)
+        new_queue = []
+        queue_append = new_queue.append
+        for bb in queue:
+            try: insts = blocks[bb]
+            except KeyError: continue
+            last_inst = insts[-1]
+            if last_inst[0] == 3: # goto <label>
+                next_bb = last_inst[1]
+                p = preds[next_bb]
+                if len(p) == 1:
+                    assert p[0] == bb
+                    # print(bb, "<->", next_bb)
+                    insts.pop()
+                    insts.extend(blocks[next_bb])
+                    succs[bb] = succs[next_bb]
+                    del blocks[next_bb], preds[next_bb], succs[next_bb] # minus node/vertex ;'-}
+                    for succ in succs[bb]:
+                        preds[succ] = [bb if label == next_bb else label for label in preds[succ]]
+                    queue_append(bb)
+        queue = new_queue
+
+
+
 def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
     size = len(value_host.index)
     use_count = [0] * size
@@ -299,21 +354,27 @@ def main_loop(F, builtins, debug=False):
     IDom, dom_tree, DF, value_host = SSA(F, predefined=tuple(builtins))
 
     blocks = F[0]
-    if debug: print(f"original:    {sum(map(len, blocks.values())):3}")
+    if debug: print(f"original:        {sum(map(len, blocks.values())):3}")
 
     prev_hash = None
     for i in range(7):
         copy_propagation(blocks, value_host) # CP
         trivial_copy_elemination(blocks) # TCE
-        if debug: print(f"+ CP:        {sum(map(len, blocks.values())):3}")
+        if debug: print(f"+ CP+TCE:        {sum(map(len, blocks.values())):3}")
 
         constant_propogation_and_folding(F, value_host, builtins) # ConstProp
         dead_code_elimination(blocks, value_host) # DCE
-        if debug: print(f"+ ConstProp: {sum(map(len, blocks.values())):3}")
+        if debug: print(f"+ ConstProp+DCE: {sum(map(len, blocks.values())):3}")
+
+        branch_elimination(F) # BE
+        if debug: print(f"+ BE:            {sum(map(len, blocks.values())):3}")
+
+        phi_elimination(blocks) # φE
+        block_merging(F) # BM
+        if debug: print(f"+ φE+BM:         {sum(map(len, blocks.values())):3}")
 
         common_subexpression_elimination(blocks, IDom)
-        if debug: print(f"+ CSE:       {sum(map(len, blocks.values())):3}")
-        #stringify_cfg(F); exit()
+        if debug: print(f"+ CSE:           {sum(map(len, blocks.values())):3}")
 
         next_hash = ssa_hash(F)
         if next_hash == prev_hash: break
@@ -321,8 +382,12 @@ def main_loop(F, builtins, debug=False):
 
     return value_host
 
-# • instructions:
-# original:    109
-# + CP:         96
-# + ConstProp:  71
-# + CSE+CP:    55
+"""
+original:        109
++ CP+TCE:         96
++ ConstProp+DCE:  68
++ BE:             64
++ φE+BM:          58
++ CSE:            58
++ CP+TCE:         42
+"""

@@ -53,7 +53,7 @@ definitions = (
     (1, 0, (2,),      0, "# 0: <var> = <var|num>"), # py: <var> = <var>
     (1, 0, (2, 4),    0, "# 1: <var> = <var|num> <+|-|*|/|%|...> <var|num>"), # py: <var> = <var> <+|-|*|/|%|...> <var>
     (0, 0, (1, 3),    1, "# 2: if (<var|num> <cmp> <var|num>) goto <label>"),
-    (0, 0, (),        1, "# 3: [else] goto <label>"),
+    (0, 0, (),        1, "# 3: goto <label>"),
     (0, 0, (1,),      1, "# 4: return <var|num>"), # py: return <var>
     (1, 2, (),        0, "# 5: <var> = phi(<var>, ...)"),
     (1, 3, (2,),      1, "# 6: <var> = <func>(<var|num>, ...)"), # py: <var> = <func>(<var>, ...)

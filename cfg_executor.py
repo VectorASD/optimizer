@@ -34,7 +34,7 @@ def executor(module, memory):
     def code_2(*_): # 2: if (<var|num> <cmp> <var|num>) goto <label>
         raise RuntimeError("py_visitors не может дать HIR-ветвление (if без else)!!!")
 
-    def code_3(label): # 3: [else] goto <label>
+    def code_3(label): # 3: goto <label>
         raise Goto(label)
 
     def code_4(var): # 4: return <var> 
