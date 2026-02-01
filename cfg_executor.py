@@ -55,8 +55,8 @@ def executor(module, memory):
 
     def code_9(var, size): # 9: check |<var>| == <num>
         real_size = len(memory[var])
-        if real_size < size: raise ValueError(f"too many values to unpack (expected {real_size}, got {size})")
-        elif real_size > size: raise ValueError(f"not enough values to unpack (expected {real_size}, got {size})")
+        if size < real_size: raise ValueError(f"too many values to unpack (expected {size}, got {real_size})")
+        elif size > real_size: raise ValueError(f"not enough values to unpack (expected {size}, got {real_size})")
 
     def code_10(var, arr, idx): #10: <var> = <var>[<var>]
         memory[var] = memory[arr][memory[idx]]
@@ -78,13 +78,15 @@ def executor(module, memory):
         except KeyError: raise RuntimeError(f"unar op {op!r} is not defined!") from None
         memory[var] = func(memory[right])
 
+    def code_16(): #16: nop
+        pass
+
     functions = ((name, value) for name, value in locals().items() if name.startswith("code_"))
     functions = sorted(functions, key=lambda x: int(x[0][len("code_"):]))
     dispatch = tuple(func for _, func in functions)
 
     def run_block(block):
         for inst in block:
-            # print(inst)
             try: it = iter(inst)
             except TypeError as e:
                 if inst is None: continue

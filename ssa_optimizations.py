@@ -132,6 +132,16 @@ def constant_propogation_and_folding(blocks, value_host, builtins): # ConstProp
                 value = idx2value[var.n]
                 if value is not Undef:
                     insts[i] = (7, var, value)
+            elif kind == 9: # check |<var>| == <num>
+                value = idx2value[inst[1].n]
+                if value is not Undef:
+                    try: L = len(value)
+                    except TypeError:
+                        raise TypeError(f"{type(value).__name__!r} object is not iterable") from None
+                    expected_L = inst[2]
+                    if expected_L < L: raise ValueError(f"too many values to unpack (expected {expected_L}, got {L})")
+                    elif expected_L > L: raise ValueError(f"not enough values to unpack (expected {expected_L}, got {L})")
+                    insts[i] = (16,) # nop
 
 
 
@@ -186,7 +196,7 @@ def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
                     if rewrite_bb:
                         index[idx] = None
                 else: add(inst)
-            else: add(inst)
+            elif kind != 16: add(inst) #16: nop
     if rewrite_bb:
         value_host.shift()
     return new_blocks
@@ -220,7 +230,7 @@ def common_subexpression_elimination(blocks, IDom): # CSE
     for bb, insts in blocks.items():
         for i, inst in enumerate(insts):
             kind = inst[0]
-            if WITHOUT_SIDE_EFFECT[kind] or kind == 6 and inst[2] in FOLDING_SET:
+            if HAS_LHS[kind] and (WITHOUT_SIDE_EFFECT[kind] or kind == 6 and inst[2] in FOLDING_SET):
                 subs[(kind, inst[2:])].add((bb, i, inst[1]))
 
     queue = (key for key, bb_set in subs.items() if len(bb_set) > 1)
