@@ -262,7 +262,7 @@ def static_insertion(BB_F, all_vars, DF, index_arr, debug=False): # Algorithm SI
 
                 # preds_y = preds.get(y, ())
                 # phi_args = (var, len(preds_y))
-                phi_instr = (5, var, [var])
+                phi_instr = (5, var, (var,))
                 blocks[y].appendleft(phi_instr)
 
                 if y not in defined_in_block[var]:
@@ -293,12 +293,11 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
     def rename_phi():
         for bb, insts in blocks.items():
             preds_bb = tuple(preds[bb])
-            for inst in insts:
+            for i, inst in enumerate(insts):
                 if inst[0] != 5: break
-                arr = inst[2]
-                var = arr.pop()
+                var = inst[2][0]
                 names = end_collector[var]
-                arr.extend(names[pred_bb] for pred_bb in preds_bb)
+                insts[i] = (5, inst[1], tuple(names[pred_bb] for pred_bb in preds_bb))
 
     dom_used = set()
     dom_update = dom_used.update

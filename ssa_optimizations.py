@@ -276,12 +276,12 @@ def main_loop(F, builtins, debug=False):
         if debug: print(f"add CP:        {sum(map(len, blocks.values())):3}")
 
         constant_propogation_and_folding(blocks, value_host, builtins) # ConstProp
-        if debug: print(f"add ConstProp: {fake_DCE(blocks, value_host):3}")
-
         dead_code_elimination(blocks, value_host) # DCE
-        #stringify_cfg(F); exit()
+        if debug: print(f"add ConstProp: {sum(map(len, blocks.values())):3}")
 
-        # common_subexpression_elimination(blocks, IDom)
+        common_subexpression_elimination(blocks, IDom)
+        if debug: print(f"add CSE:       {sum(map(len, blocks.values())):3}")
+        #stringify_cfg(F); exit()
 
         next_hash = ssa_hash(F)
         if next_hash == prev_hash: break
@@ -293,4 +293,4 @@ def main_loop(F, builtins, debug=False):
 # original:      109
 # add CP:         96
 # add ConstProp:  71
-# add CSE+loop: ?
+# add CSE+CP:    55

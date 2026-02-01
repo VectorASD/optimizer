@@ -313,6 +313,8 @@ class Value:
         return f"%{n}" if label is None else f"{label}→%{n}"
     def __eq__(self, right):
         return self.n == right.n
+    def __gt__(self, right):
+        return self.n > right.n
     def __hash__(self):
         return self.n
 
@@ -325,6 +327,8 @@ class ValueList(list):
         return f"%{self.n}_x{len(self)}"
     def __eq__(self, right):
         return self.n == right.n
+    def __gt__(self, right):
+        return self.n > right.n
     def __hash__(self):
         return self.n
 
