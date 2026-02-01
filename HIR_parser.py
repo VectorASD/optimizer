@@ -50,23 +50,23 @@ token_re = re.compile(
 
 definitions = (
   # HIR:
-    (1, 0, (2,),      0, "# 0: <var> = <var|num>"),
-    (1, 0, (2, 4),    0, "# 1: <var> = <var|num> <+|-|*|/|%|...> <var|num>"),
+    (1, 0, (2,),      0, "# 0: <var> = <var|num>"), # py: <var> = <var>
+    (1, 0, (2, 4),    0, "# 1: <var> = <var|num> <+|-|*|/|%|...> <var|num>"), # py: <var> = <var> <+|-|*|/|%|...> <var>
     (0, 0, (1, 3),    1, "# 2: if (<var|num> <cmp> <var|num>) goto <label>"),
     (0, 0, (),        1, "# 3: [else] goto <label>"),
-    (0, 0, (1,),      1, "# 4: return <var|num>"),
+    (0, 0, (1,),      1, "# 4: return <var|num>"), # py: return <var>
     (1, 2, (),        0, "# 5: <var> = phi(<var>, ...)"),
-    (1, 3, (2,),      1, "# 6: <var> = <func>(<var|num>, ...)"),
+    (1, 3, (2,),      1, "# 6: <var> = <func>(<var|num>, ...)"), # py: <var> = <func>(<var>, ...)
   # python:
     (1, 0, (),        0, "# 7: <var> = <const>"),
-    (1, 2, (),        0, "# 8: <var> = tuple(<var|num>, ...)"),
+    (1, 2, (),        0, "# 8: <var> = tuple(<var>, ...)"),
     (0, 0, (1,),      1, "# 9: check |<var>| == <num>"),
-    (1, 0, (2, 3),    0, "#10: <var> = <var>[<var>|<num>]"),
-    (0, 0, (1, 2, 3), 1, "#11: <var>[<var>|<num>] = <var|num>"),
+    (1, 0, (2, 3),    0, "#10: <var> = <var>[<var|num>]"),
+    (0, 0, (1, 2, 3), 1, "#11: <var>[<var>] = <var>"),
     (1, 0, (2,),      0, "#12: <var> = <var>.<attr>"),
-    (0, 0, (1, 3),    1, "#13: <var>.<attr> = <var|num>"),
+    (0, 0, (1, 3),    1, "#13: <var>.<attr> = <var>"),
     (0, 0, (2,),      1, "#14: goto <label> if <var> else <label>"),
-    (1, 0, (3,),      0, "#15: <var> = <+|-|~|not ><var|num>"),
+    (1, 0, (3,),      0, "#15: <var> = <+|-|~|not ><var>"),
 )
 
 
@@ -308,10 +308,25 @@ class Value:
     def __init__(self, n, label=None):
         self.n = n
         self.label = label
-        self.for_repr = n, label
     def __repr__(self):
-        n, label = self.for_repr
+        n, label = self.n, self.label
         return f"%{n}" if label is None else f"{label}→%{n}"
+    def __eq__(self, right):
+        return self.n == right.n
+    def __hash__(self):
+        return self.n
+
+class ValueList(list):
+    def __init__(self, value):
+        self.append(value)
+        self.n = value.n
+        self.label = None
+    def __repr__(self):
+        return f"%{self.n}_x{len(self)}"
+    def __eq__(self, right):
+        return self.n == right.n
+    def __hash__(self):
+        return self.n
 
 class ValueHost:
     def __init__(self, predefined):
@@ -349,6 +364,36 @@ class ValueHost:
         collector[var].append(new_var)
         index_append(new_var)
         return new_var
+
+    def rename(self, a, b):
+        index = self.index
+        to = index[b]
+        if isinstance(to, Value): to = index[b] = ValueList(to)
+        value = index[a]
+        if isinstance(value, ValueList):
+            for _value in value: _value.n = b
+            to.extend(value)
+        else:
+            value.n = b
+            to.append(value)
+        index[a] = None
+
+    def shift(self):
+        index, idx = self.index, 0
+        it = iter(index)
+        for value in it:
+            if value is None: break
+            idx += 1
+        for value in it:
+            if value is not None:
+                # print(value, idx)
+                index[idx] = value
+                if isinstance(value, ValueList):
+                    for _value in value: _value.n = idx
+                value.n = idx
+                idx += 1
+        pop = index.pop
+        for i in range(len(index) - idx): pop()
 
 renamers = []
 for kind, _def in enumerate(definitions):
@@ -410,6 +455,24 @@ for _def in definitions:
     locs = {}
     exec("\n".join(code), locs)
     ssa_renamers.append(locs["rename"])
+
+uses_V_getters = []
+for _def in definitions:
+    code = ["def get(inst, add):"]
+    for idx in _def[2]:
+        code.extend((
+            f"    var = inst[{idx}]",
+             "    if isinstance(var, Value): add(var.n)",
+        ))
+    if _def[1]:
+        code.extend((
+            f"    for var in inst[{_def[1]}]:",
+             "        if isinstance(var, Value): add(var.n)",
+        ))
+    if len(code) == 1: code[0] += " pass"
+    locs = {"Value": Value}
+    exec("\n".join(code), locs)
+    uses_V_getters.append(locs["get"])
 
 
 

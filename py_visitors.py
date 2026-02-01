@@ -179,11 +179,11 @@ compound_stmt:
             value = visit_expression(node.value)
             if callable(target):
                 reg = target.get()
-                add(1, reg, reg, op, value) # <var> = <var|num> <+|-|*|/|%|...> <var|num>
+                add(1, reg, reg, op, value) # <var> = <var> <+|-|*|/|%|...> <var>
                 target(reg)
                 free_reg(value)
             else:
-                add(1, target, target, op, value) # <var> = <var|num> <+|-|*|/|%|...> <var|num>
+                add(1, target, target, op, value) # <var> = <var> <+|-|*|/|%|...> <var>
                 free_regs(target, value)
         else: # name == "AnnAssign":
             explore_node(node)
@@ -248,23 +248,23 @@ compound_stmt:
 
     def pack_recurs(name, tmps):
         regs = tuple((pack_recurs(new_reg(), tmp) if type(tmp) is tuple else tmp) for tmp in tmps)
-        add(8, name, regs) # <var> = tuple(<var|num>, ...)
+        add(8, name, regs) # <var> = tuple(<var>, ...)
         free_regs(*regs)
         return name
     def unpack_recurs(left, right):
         for i, _left in enumerate(left):
             if type(_left) is tuple:
                 reg = new_reg()
-                add(10, reg, right, i) # <var> = <var>[<var>|<num>]
+                add(10, reg, right, i) # <var> = <var>[<var|num>]
                 add(9, reg, len(_left)) # check |<var>| == <num>
                 unpack_recurs(_left, reg)
                 free_reg(reg)
             elif callable(_left):
                 tmp = new_reg()
-                add(10, tmp, right, i) # <var> = <var>[<var>|<num>]
+                add(10, tmp, right, i) # <var> = <var>[<var|num>]
                 _left(tmp)
             else:
-                add(10, _left, right, i) # <var> = <var>[<var>|<num>]
+                add(10, _left, right, i) # <var> = <var>[<var|num>]
 
     def visit_targets(left, right, sized):
         # каждый элемент right ВСЕГДА приходит из visit_expression
@@ -336,11 +336,11 @@ compound_stmt:
             self.i = value, slice
         def __call__(self, reg):
             value, slice = self.i
-            add(11, value, slice, reg) # <var>[<var>|<num>] = <var|num>
+            add(11, value, slice, reg) # <var>[<var>] = <var>
             free_regs(value, slice, reg)
         def get(self):
             result = new_reg()
-            add(10, result, *self.i) # <var> = <var>[<var>|<num>]
+            add(10, result, *self.i) # <var> = <var>[<var|num>]
             return result
     def visit_Subscript(node):
         ctx = type(node.ctx)
@@ -350,7 +350,7 @@ compound_stmt:
         if ctx is ast_Load:
             free_regs(value, slice)
             result = new_reg()
-            add(10, result, value, slice) # <var> = <var>[<var>|<num>]
+            add(10, result, value, slice) # <var> = <var>[<var|num>]
             return result
         return SubscriptSetter(value, slice)
 
@@ -359,7 +359,7 @@ compound_stmt:
             self.i = value, attr
         def __call__(self, reg):
             value, attr = self.i
-            add(13, value, attr, reg) # <var>.<attr> = <var|num>
+            add(13, value, attr, reg) # <var>.<attr> = <var>
             free_regs(value, reg)
         def get(self):
             result = new_reg()
@@ -398,7 +398,7 @@ compound_stmt:
         right = visit_expression(node.right)
         free_regs(left, right)
         result = new_reg()
-        add(1, result, left, op, right) # <var> = <var|num> <+|-|*|/|%|...> <var|num>
+        add(1, result, left, op, right) # <var> = <var> <+|-|*|/|%|...> <var>
         return result
 
     Compare2str = {
@@ -426,7 +426,7 @@ compound_stmt:
             right = visit_expression(comparator)
             free_reg(right)
             result = new_reg()
-            add(1, result, left, op, right) # <var> = <var|num> <+|-|*|/|%|...> <var|num>
+            add(1, result, left, op, right) # <var> = <var> <+|-|*|/|%|...> <var>
             if acc:
                 add(1, acc, acc, "&", result) # <var> &= <var>
                 free_reg(result)
@@ -450,7 +450,7 @@ compound_stmt:
         operand = visit_expression(node.operand)
         free_reg(operand)
         result = new_reg()
-        add(15, result, op, operand) # <var> = <+|-|~|not ><var|num>
+        add(15, result, op, operand) # <var> = <+|-|~|not ><var>
         return result
 
     def visit_BoolOp(node):
@@ -475,7 +475,7 @@ compound_stmt:
         assert not node.keywords # TODO
         free_regs(func, *args)
         result = new_reg()
-        add(6, result, func, args) # <var> = <func>(<var|num>, ...)
+        add(6, result, func, args) # <var> = <func>(<var>, ...)
         return result
 
 
@@ -491,7 +491,7 @@ compound_stmt:
 
     visit_Module(ast)
     if blocks[current_block][-1][0] != 4:
-        add(4, "_None") # return <var|num>
+        add(4, "_None") # return <var>
 
     F = blocks, preds, succs
 

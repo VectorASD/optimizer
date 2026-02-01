@@ -1,5 +1,5 @@
 from ssa import SSA
-from HIR_parser import all_vars_in_cfg, ssa_cfg_renamer, HAS_LHS, uses_getters, WITHOUT_SIDE_EFFECT, ssa_hash
+from HIR_parser import stringify_cfg, all_vars_in_cfg, HAS_LHS, uses_V_getters, WITHOUT_SIDE_EFFECT, ssa_hash, Value
 from utils import bin_ops, unar_ops
 from folding import FOLDING_ATTRIBUTE_DICT, FOLDING_SET
 
@@ -7,34 +7,30 @@ from collections import defaultdict, deque
 
 
 
-def copy_propagation(blocks, index, index_arr): # CP
-    graph = [[]] * len(index)
-    roots = [True] * len(index)
+def copy_propagation(blocks, value_host): # CP
+    size = len(value_host.index)
+    graph = [[]] * size
+    roots = [True] * size
 
     for insts in blocks.values():
         for inst in insts:
             if inst[0] == 0: # <var> = <var>
-                dst, src = index[inst[1]], index[inst[2]]
+                dst, src = inst[1].n, inst[2].n
                 L = graph[src]
                 if L: L.append(dst)
                 else: graph[src] = [dst]
                 roots[dst] = False
                 # print(src, "->", dst)
 
-    name2name = {}
+    rename = value_host.rename
     for src, dst in enumerate(graph):
         if dst and roots[src]:
-            src_name = index_arr[src]
             queue = [*dst]
             queue_pop, queue_extend = queue.pop, queue.extend
             while queue:
                 dst = queue_pop()
                 queue_extend(graph[dst])
-                dst_name = index_arr[dst]
-                name2name[dst_name] = src_name
-    # print(name2name)
-
-    ssa_cfg_renamer(blocks, name2name)
+                rename(dst, src)
 
 
 
@@ -128,26 +124,32 @@ def constant_propogation_and_folding(blocks, index, builtin_consts): # ConstProp
 
 
 
-def dead_code_elimination(blocks, index, rewrite_bb=True): # DCE
-    use_count = [0] * len(index)
-    idx2uses = [None] * len(index)
-    idx2can_delete = [None] * len(index)
+def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
+    size = len(value_host.index)
+    use_count = [0] * size
+    idx2uses = [None] * size
+    idx2can_delete = [None] * size
+
+    print(value_host.index)
 
     for insts in blocks.values():
         for inst in insts:
             kind = inst[0]
+            defer = HAS_LHS[kind]
+            if defer:
+                idx = inst[1].n
+            if kind == 0 and idx == inst[2].n:
+                continue
             uses = set()
-            uses_getters[kind](inst, uses.add)
-            uses = tuple(index[v] for v in uses)
+            uses_V_getters[kind](inst, uses.add)
+            uses = tuple(uses)
             for use_idx in uses:
                 use_count[use_idx] += 1
-            if HAS_LHS[kind]:
-                idx = index[inst[1]]
+            if defer:
                 idx2uses[idx] = uses
                 if kind == 6: # <var> = <func>(<var|num>, ...)
                     idx2can_delete[idx] = inst[2] in FOLDING_SET
                 else: idx2can_delete[idx] = WITHOUT_SIDE_EFFECT[kind]
-    # print(*idx2inst, sep="\n")
 
     queue = []
     queue_append = queue.append
@@ -173,11 +175,12 @@ def dead_code_elimination(blocks, index, rewrite_bb=True): # DCE
         for inst in insts:
             kind = inst[0]
             if HAS_LHS[kind]:
-                idx = index[inst[1]]
+                idx = inst[1].n
+                if kind == 0 and idx == inst[2].n:
+                    continue
                 if use_count[idx] or not idx2can_delete[idx]:
                     add(inst)
             else: add(inst)
-
     return new_blocks
 
 def fake_DCE(blocks, index):
@@ -254,9 +257,14 @@ def common_subexpression_elimination(blocks, IDom): # CSE
 
 def main_loop(F, builtins, debug=False):
     IDom, dom_tree, DF, value_host = SSA(F, predefined=tuple(builtins))
-    print(value_host.index)
 
     blocks, preds, succs = F
+
+    copy_propagation(blocks, value_host) # CP
+
+    value_host.shift()
+    stringify_cfg(F)
+    dead_code_elimination(blocks, value_host) # DCE
 
     prev_hash = None
     for i in range(0):
