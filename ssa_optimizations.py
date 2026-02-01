@@ -35,7 +35,7 @@ def copy_propagation(blocks, value_host): # CP
 
 
 
-def self_assign_elemination(blocks): # SAE
+def trivial_copy_elemination(blocks): # TCE
     for bb, insts in blocks.items():
         blocks[bb] = new_insts = []
         add = new_insts.append
@@ -267,20 +267,20 @@ def main_loop(F, builtins, debug=False):
     IDom, dom_tree, DF, value_host = SSA(F, predefined=tuple(builtins))
 
     blocks, preds, succs = F
-    if debug: print(f"original:      {sum(map(len, blocks.values())):3}")
+    if debug: print(f"original:    {sum(map(len, blocks.values())):3}")
 
     prev_hash = None
-    for i in range(2):
+    for i in range(7):
         copy_propagation(blocks, value_host) # CP
-        self_assign_elemination(blocks) # SAE
-        if debug: print(f"add CP:        {sum(map(len, blocks.values())):3}")
+        trivial_copy_elemination(blocks) # TCE
+        if debug: print(f"+ CP:        {sum(map(len, blocks.values())):3}")
 
         constant_propogation_and_folding(blocks, value_host, builtins) # ConstProp
         dead_code_elimination(blocks, value_host) # DCE
-        if debug: print(f"add ConstProp: {sum(map(len, blocks.values())):3}")
+        if debug: print(f"+ ConstProp: {sum(map(len, blocks.values())):3}")
 
         common_subexpression_elimination(blocks, IDom)
-        if debug: print(f"add CSE:       {sum(map(len, blocks.values())):3}")
+        if debug: print(f"+ CSE:       {sum(map(len, blocks.values())):3}")
         #stringify_cfg(F); exit()
 
         next_hash = ssa_hash(F)
@@ -290,7 +290,7 @@ def main_loop(F, builtins, debug=False):
     return value_host
 
 # • instructions:
-# original:      109
-# add CP:         96
-# add ConstProp:  71
-# add CSE+CP:    55
+# original:    109
+# + CP:         96
+# + ConstProp:  71
+# + CSE+CP:    55
