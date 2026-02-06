@@ -269,6 +269,19 @@ def static_insertion(BB_F, all_vars, DF, index_arr, debug=False): # Algorithm SI
                     defined_in_block[var].add(y)
                     WL.append(y)
 
+def list_shift(array):
+    idx = 0
+    it = iter(array)
+    for value in it:
+        if value is None: break
+        idx += 1
+    for value in it:
+        if value is not None:
+            array[idx] = value
+            idx += 1
+    pop = array.pop
+    for i in range(len(array) - idx): pop()
+
 def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
     blocks, preds, succs = BB_F
 
@@ -293,11 +306,17 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
     def rename_phi():
         for bb, insts in blocks.items():
             preds_bb = tuple(preds[bb])
+            removes = False
             for i, inst in enumerate(insts):
                 if inst[0] != 5: break
                 var = inst[2][0]
                 names = end_collector[var]
-                insts[i] = (5, inst[1], tuple(names[pred_bb] for pred_bb in preds_bb))
+                try: insts[i] = (5, inst[1], tuple(names[pred_bb] for pred_bb in preds_bb))
+                except KeyError:
+                    insts[i] = None
+                    removes = True
+            if removes:
+                list_shift(insts)
 
     dom_used = set()
     dom_update = dom_used.update
@@ -421,12 +440,29 @@ BB6: return x
 BB7: return 10 // второй entry
 """
 
+program_2 = """
+BB0:
+    x = 5
+    if (x > 0) goto BB1
+    goto BB2
+BB1:
+    y = 8
+    goto BB3
+BB2:
+    y = 7
+    goto BB4
+BB3:
+    goto BB4
+BB4:
+    return y
+"""
+
 if __name__ == "__main__":
     # bb_F = parse_program(program_1, debug="preds")
     # naive_SSA(bb_F, debug=True)
     # print(dashed_separator * 2)
 
-    bb_F  = parse_program(program_1, debug="preds")
+    bb_F  = parse_program(program_2, debug="preds")
     try:
         SSA(bb_F, debug=True, predefined=("input", "bar", "baz"))
     except SSA_Error as e:

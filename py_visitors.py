@@ -214,6 +214,7 @@ compound_stmt:
             "UnaryOp": visit_UnaryOp,
             "BoolOp": visit_BoolOp,
             "Call": visit_Call,
+            "IfExp": visit_IfExp,
         }
         assign_expression_dict = {
             **expression_dict,
@@ -480,6 +481,22 @@ compound_stmt:
         result = new_reg()
         add(6, result, func, args) # <var> = <func>(<var>, ...)
         return result
+
+    def visit_IfExp(node):
+        L, R, next = (new_block() for i in range(3))
+        reg = visit_expression(node.test)
+        free_reg(reg)
+        control(L, reg, R) # goto <label> if <var> else <label>
+        on_block(L)
+        result_L = visit_expression(node.body)
+        control(next) # goto <label>
+        on_block(R)
+        result_R = visit_expression(node.orelse)
+        add(0, result_L, result_R) # <var> = <var>
+        free_reg(result_R)
+        control(next) # goto <label>
+        on_block(next)
+        return result_L
 
 
 

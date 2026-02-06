@@ -381,13 +381,3 @@ def main_loop(F, builtins, debug=False):
         prev_hash = next_hash
 
     return value_host
-
-"""
-original:        109
-+ CP+TCE:         96
-+ ConstProp+DCE:  68
-+ BE:             64
-+ φE+BM:          58
-+ CSE:            58
-+ CP+TCE:         42
-"""

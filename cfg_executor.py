@@ -106,7 +106,7 @@ def executor(module, memory):
         while True:
             try:
                 run_block(blocks[block])
-                raise RuntimeError("Function exited without Goto and Result!") from None
+                raise RuntimeError("Base-block exited without Goto and Result!") from None
             except Goto as e:
                 pred_block = block
                 block = e.args[0]
@@ -124,7 +124,7 @@ def executor(module, memory):
 
 
 
-source = """
+source1 = """
 print("Hello meower!")
 print("I can calculate it:", 1+2, 7)
 
@@ -156,8 +156,21 @@ print(range(5, 7))
 deadcode = 1, bytes.fromhex, range(5, int(input("stop: ")))
 """
 
+# original:        109
+# + CP+TCE:         96
+# + ConstProp+DCE:  68
+# + BE:             64
+# + φE+BM:          58
+# + CSE:            58
+# + CP+TCE:         42
+
+source2 = """
+a = 5
+print("yeah" if a else "nop")
+"""
+
 if __name__ == "__main__":
-    module = py_visitor(source)
+    module = py_visitor(source2)
     for F in module:
         stringify_cfg(F)
 
