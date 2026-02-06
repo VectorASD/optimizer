@@ -1,5 +1,5 @@
 from utils import dashed_separator, bits_by_index
-from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg, insts_renamer, SSA_Error, ValueHost
+from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg, insts_renamer, SSA_Error, ValueHost, Value, DEFAULT_EXC_TABLE
 from dataflow_analysis import reaching_definitions
 
 from pprint import pprint
@@ -135,7 +135,9 @@ def naive_SSA(BB_F, debug=False):
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 def compute_dominators(BB_F): # Algorithm D
-    blocks, preds, succs = BB_F
+    blocks = BB_F[0]
+    preds = BB_F[1]
+    succs = BB_F[2]
 
     entrances = set()
     for bb in blocks:
@@ -216,7 +218,8 @@ def compute_idom(Dom, index, index_arr): # Algorithm DT
     return IDom, dom_tree
 
 def compute_df(BB_F, IDom, index): # Algorithm DF (Dominance Frontier, Фронт Доминирования)
-    blocks, preds, _succs = BB_F
+    blocks = BB_F[0]
+    preds = BB_F[1]
     DF = {bb: 0 for bb in blocks}
     for bb, parents in preds.items():
         # print("BLOCK:", bb, parents)
@@ -233,7 +236,7 @@ def compute_df(BB_F, IDom, index): # Algorithm DF (Dominance Frontier, Фрон�
 
 
 def static_insertion(BB_F, all_vars, DF, index_arr, debug=False): # Algorithm SI
-    blocks, preds, succs = BB_F
+    blocks = BB_F[0]
 
     defined_in_block = defaultdict(set)
     for bb, instrs in blocks.items():
@@ -283,7 +286,8 @@ def list_shift(array):
     for i in range(len(array) - idx): pop()
 
 def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
-    blocks, preds, succs = BB_F
+    blocks, preds, succs, *misc = BB_F
+    exc_table = misc[0] if misc else DEFAULT_EXC_TABLE
 
     value_host = ValueHost(predefined)
     collector = value_host.collector
@@ -292,7 +296,14 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
 
     def rename(bb):
         stack_pop = stack_push()
-        blocks[bb] = insts_renamer(blocks[bb], value_host)
+        blocks[bb] = renamed = insts_renamer(blocks[bb], value_host)
+
+        for i, exc in exc_table[bb].items():
+            phi_count = 0
+            while renamed[phi_count][0] == 5: phi_count += 1
+            value = renamed[phi_count + i][1]
+            assert isinstance(value, Value)
+            value.exc = exc
 
         for var, stack in collector.items():
             if stack:
@@ -330,7 +341,8 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
         rename(bb)
     rename_phi()
 
-    return value_host
+    new_BB_F = blocks, preds, succs
+    return value_host, new_BB_F
 
 
 
@@ -382,12 +394,12 @@ def SSA(BB_F, debug=False, predefined=()): # Static Single Assignment
         print(dashed_separator)
         stringify_cfg(BB_F)
 
-    value_host = static_renaming(BB_F, all_vars, dom_tree, predefined)
+    value_host, BB_F = static_renaming(BB_F, all_vars, dom_tree, predefined)
     if debug:
         print(dashed_separator)
         stringify_cfg(BB_F)
 
-    return IDom, dom_tree, DF, value_host
+    return IDom, dom_tree, DF, value_host, BB_F
 
 
 

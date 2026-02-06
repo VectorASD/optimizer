@@ -1,6 +1,6 @@
 from py_visitors import py_visitor
 from ssa_optimizations import main_loop
-from HIR_parser import stringify_cfg
+from HIR_parser import stringify_cfg, find_exception
 from utils import dashed_separator, bin_ops, unar_ops
 
 
@@ -14,6 +14,8 @@ def fake_input(*a):
     print(*a, end="") #; print(7)
     return 7
 builtins["_input"] = fake_input
+
+for name in tuple(builtins): builtins[f".{name[1:]}"] = builtins[name]
 
 
 
@@ -86,12 +88,17 @@ def executor(module, memory):
     dispatch = tuple(func for _, func in functions)
 
     def run_block(block):
-        for inst in block:
-            try: it = iter(inst)
-            except TypeError as e:
-                if inst is None: continue
-                raise e from None
-            dispatch[next(it)](*it)
+        for i, inst in enumerate(block):
+            # try: it = iter(inst)
+            # except TypeError as e:
+            #     if inst is None: continue
+            #     raise e from None
+            it = iter(inst)
+            try: dispatch[next(it)](*it)
+            except Exception as e:
+                try: raise Goto(cur_exc_items[i][type(e).__name__])
+                except KeyError: pass
+                raise e
 
     def make_preds2idx(preds):
         return {
@@ -99,12 +106,14 @@ def executor(module, memory):
             for block, predz in preds.items()}
 
     def run_func(id):
-        nonlocal cur_idx
+        nonlocal cur_idx, cur_exc_items
         blocks, preds, succs = module[id]
         func_preds2idx = preds2idx[id]
+        exc_items = exc_index[id]
         block = "b0"
         while True:
             try:
+                cur_exc_items = exc_items[block]
                 run_block(blocks[block])
                 raise RuntimeError("Base-block exited without Goto and Result!") from None
             except Goto as e:
@@ -118,9 +127,29 @@ def executor(module, memory):
 
     preds2idx = tuple(make_preds2idx(func[1]) for func in module)
     cur_idx = None
+    cur_exc_items = None
+
+    max_size = max(len(insts) for F in module for insts in F[0].values())
+    plug = ({},) * max_size
+    module, exc_index = zip(*(exc_loader(F, plug) for F in module))
 
     result = run_func(0)
     if result is not None: print("RESULT:", result)
+
+def exc_loader(F, plug):
+    exc_items = {}
+    if len(F) == 3:
+        blocks, preds, succs = F
+        for bb, insts in blocks.items():
+            exc_items[bb] = tuple(dict(filter(lambda x: x, find_exception(inst, i, None))) for i, inst in enumerate(insts))
+    else:
+        blocks, preds, succs, exc_table = F
+        for bb, insts in blocks.items():
+            exc_table_row = exc_table[bb]
+            if exc_table_row:
+                exc_items[bb] = tuple(dict(filter(lambda x: x, find_exception(inst, i, exc_table_row))) for i, inst in enumerate(insts))
+            else: exc_items[bb] = plug
+    return (blocks, preds, succs), exc_items
 
 
 
@@ -174,9 +203,11 @@ if input():
 if input() > 10: print("> 10")
 else: print("<= 10")
 
-if input() > 7: print("> 7")
-elif input() == 7: print("= 7")
-else: print("< 7")
+num = input()
+for i in range(5, 10):
+    if i > num: print(str(i) + " > " + str(num))
+    elif i == num: print(str(i) + " == " + str(num))
+    else: print(str(i) + " < " + str(num))
 """
 
 if __name__ == "__main__":
@@ -190,13 +221,14 @@ if __name__ == "__main__":
     print(dashed_separator)
 
     memory = {}
-    for F in module:
-        value_host = main_loop(F, builtins, debug=True)
+    for i, F in enumerate(module):
+        value_host, F = main_loop(F, builtins, debug=True)
         print(dashed_separator)
         stringify_cfg(F)
         for value in value_host.index:
             if value.label is not None:
                 memory[value] = builtins[value.label]
+        module[i] = F
 
     print(dashed_separator)
     executor(module, memory)

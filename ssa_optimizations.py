@@ -240,7 +240,7 @@ def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
                 idx = inst[1].n
                 idx2uses[idx] = uses
                 if kind == 6: # <var> = <func>(<var|num>, ...)
-                    idx2can_delete[idx] = inst[2] in FOLDING_SET
+                    idx2can_delete[idx] = inst[2].label in FOLDING_SET
                 else: idx2can_delete[idx] = WITHOUT_SIDE_EFFECT[kind]
 
     queue = []
@@ -307,7 +307,7 @@ def common_subexpression_elimination(blocks, IDom): # CSE
     for bb, insts in blocks.items():
         for i, inst in enumerate(insts):
             kind = inst[0]
-            if HAS_LHS[kind] and (WITHOUT_SIDE_EFFECT[kind] or kind == 6 and inst[2] in FOLDING_SET):
+            if HAS_LHS[kind] and (WITHOUT_SIDE_EFFECT[kind] or kind == 6 and inst[2].label in FOLDING_SET):
                 subs[(kind, inst[2:])].add((bb, i, inst[1]))
 
     queue = (key for key, bb_set in subs.items() if len(bb_set) > 1)
@@ -351,7 +351,7 @@ def common_subexpression_elimination(blocks, IDom): # CSE
 
 
 def main_loop(F, builtins, debug=False):
-    IDom, dom_tree, DF, value_host = SSA(F, predefined=tuple(builtins))
+    IDom, dom_tree, DF, value_host, F = SSA(F, predefined=tuple(builtins))
 
     blocks = F[0]
     if debug: print(f"original:        {sum(map(len, blocks.values())):3}")
@@ -380,4 +380,4 @@ def main_loop(F, builtins, debug=False):
         if next_hash == prev_hash: break
         prev_hash = next_hash
 
-    return value_host
+    return value_host, F

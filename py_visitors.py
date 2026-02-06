@@ -1,10 +1,10 @@
 from peg_driver import parse_it
-from HIR_parser import stringify_cfg
+from HIR_parser import stringify_cfg, stringify_instr
 
 import sys
 import traceback
 from pprint import pprint
-from collections import deque
+from collections import deque, defaultdict
 
 
 
@@ -38,6 +38,7 @@ def visitors(ast):
         except AttributeError: pass
         print()
         print(node)
+        trace()
 
     regs = []
     def new_reg():
@@ -60,6 +61,7 @@ def visitors(ast):
     blocks, preds, succs = {}, {}, {}
     add_inst = None
     current_block = None
+    is_trace = False
     def new_block():
         name = f"b{len(blocks)}"
         blocks[name] = deque()
@@ -71,8 +73,8 @@ def visitors(ast):
         name = name or new_block()
         add_inst = blocks[name].append
         current_block = name
+        if is_trace: trace()
     def add(*inst):
-        # print(inst)
         add_inst(inst)
     def control(*a):
         if len(a) == 1:
@@ -89,6 +91,30 @@ def visitors(ast):
         preds[nop].append(current_block)
         succs[current_block].extend((yeah, nop))
     on_block()
+
+    def trace():
+        def add_inst_wrap(inst):
+            write("| ")
+            insts = blocks[current_block]
+            write(" " * (len(current_block) + 2) if insts else f"{current_block}: ")
+            orig_add_inst(inst)
+            stringify_instr(insts, -1, write, exc_table)
+            write("\n")
+        write = sys.stdout.write
+        nonlocal add_inst, is_trace
+        orig_add_inst = add_inst
+        add_inst = add_inst_wrap
+        is_trace = True
+
+    exc_table = defaultdict(dict)
+    def exceptor(name, to_bb):
+        insts = blocks[current_block]
+        items = exc_table[current_block]
+        i = len(insts)
+        try: items[i].append((name, to_bb))
+        except KeyError: items[i] = [(name, to_bb)]
+        preds[to_bb].append(current_block)
+        succs[current_block].append(to_bb)
 
 
 
@@ -146,6 +172,7 @@ compound_stmt:
             "TypeAlias": visit_TypeAlias,
             "Expr": visit_Expr,
             "If": visit_If,
+            "For": visit_For,
         } # TODO
         return statement_dict
 
@@ -200,7 +227,6 @@ compound_stmt:
         free_reg(reg)
 
     def visit_If(node):
-        explore_node(node)
         L, R = new_block(), new_block()
         next = new_block() if node.orelse else R
         reg = visit_expression(node.test)
@@ -214,6 +240,29 @@ compound_stmt:
             visit_statements(node.orelse)
             control(next) # goto <label>
         on_block(next)
+
+    def visit_For(node):
+        loop, end = new_block(), new_block()
+        reg = visit_expression(node.iter)
+        add(6, reg, ".iter", (reg,)) # <var> = <func>(<var>, ...)
+        control(loop) # goto <label>
+        on_block(loop)
+
+        assert not node.orelse, node.orelse # TODO
+
+        reg2 = new_reg()
+        exceptor("StopIteration", end)
+        add(6, reg2, ".next", (reg,)) # <var> = <func>(<var>, ...)
+        targets = visit_assign_expression(node.target)
+        visit_targets(targets, reg2, [None])
+        free_reg(reg2)
+        visit_statements(node.body)
+        control(loop) # goto <label>
+
+        free_reg(reg)
+        on_block(end)
+
+        assert node.type_comment is None, node.type_comment # TODO
 
 
 
@@ -530,14 +579,14 @@ compound_stmt:
     if not blocks[current_block] or blocks[current_block][-1][0] != 4:
         add(4, "_None") # return <var>
 
-    F = blocks, preds, succs
+    F = blocks, preds, succs, exc_table
 
     if not all(regs):
         stringify_cfg(F)
         print("REGS:", regs)
         raise AssertionError("Не все регистры освобождены!")
 
-    module = (F,)
+    module = [F]
     return module
 
 
