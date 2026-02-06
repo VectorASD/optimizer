@@ -11,7 +11,7 @@ import struct
 builtins["_struct"] = struct
 
 def fake_input(*a):
-    print(*a, end=""); print(7)
+    print(*a, end="") #; print(7)
     return 7
 builtins["_input"] = fake_input
 
@@ -167,6 +167,16 @@ deadcode = 1, bytes.fromhex, range(5, int(input("stop: ")))
 source2 = """
 a = 5
 print("yeah" if a else "nop")
+
+if input():
+    print("meow")
+
+if input() > 10: print("> 10")
+else: print("<= 10")
+
+if input() > 7: print("> 7")
+elif input() == 7: print("= 7")
+else: print("< 7")
 """
 
 if __name__ == "__main__":

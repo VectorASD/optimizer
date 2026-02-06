@@ -145,6 +145,7 @@ compound_stmt:
             "AnnAssign": lambda node: visit_Assign(node, "AnnAssign"),
             "TypeAlias": visit_TypeAlias,
             "Expr": visit_Expr,
+            "If": visit_If,
         } # TODO
         return statement_dict
 
@@ -197,6 +198,22 @@ compound_stmt:
     def visit_Expr(node):
         reg = visit_expression(node.value)
         free_reg(reg)
+
+    def visit_If(node):
+        explore_node(node)
+        L, R = new_block(), new_block()
+        next = new_block() if node.orelse else R
+        reg = visit_expression(node.test)
+        free_reg(reg)
+        control(L, reg, R) # goto <label> if <var> else <label>
+        on_block(L)
+        visit_statements(node.body)
+        control(next) # goto <label>
+        if node.orelse:
+            on_block(R)
+            visit_statements(node.orelse)
+            control(next) # goto <label>
+        on_block(next)
 
 
 
@@ -510,7 +527,7 @@ compound_stmt:
     expression_dict, assign_expression_dict = get_expression_dict()
 
     visit_Module(ast)
-    if blocks[current_block][-1][0] != 4:
+    if not blocks[current_block] or blocks[current_block][-1][0] != 4:
         add(4, "_None") # return <var>
 
     F = blocks, preds, succs
