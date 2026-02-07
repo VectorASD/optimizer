@@ -189,7 +189,7 @@ def parse_program(text, debug=False):
 
 DEFAULT_EXC_TABLE = defaultdict(dict)
 
-def find_exception(op, i, exc_table_row):
+def find_exception(op, i, exc_table_row=None):
     if exc_table_row is None:
         if len(op) > 1 and isinstance(op[1], (Value, ValueList)):
             return op[1].exc
@@ -198,7 +198,7 @@ def find_exception(op, i, exc_table_row):
         except KeyError: pass
     return ()
 
-def stringify_instr(ops, i, write, exc_table_row={}):
+def stringify_instr(ops, i, write, exc_table_row=None):
     orig_i = i
     op = ops[i]; i += 1 # ops[i++]
     if op is None:
@@ -238,37 +238,43 @@ def stringify_instr(ops, i, write, exc_table_row={}):
     if exc: write(f"   // exc: {exc}")
     return i
 
-def stringify_instr_wrap(ops, i, exc_table_row={}):
+def stringify_instr_wrap(ops, i, exc_table_row=None):
     buff = StringIO()
     stringify_instr(ops, i, buff.write, exc_table_row)
     return buff.getvalue()
 
 def stringify_cfg(F, file=None):
+    def print_preds():
+        bb_preds = preds[bb]
+        if bb_preds: write(f"   // preds: {', '.join(map(str, bb_preds))}")
     if len(F) == 4: blocks, preds, _, exc_table = F
-    else: blocks, preds, _ = F; exc_table = DEFAULT_EXC_TABLE
+    else: blocks, preds, _ = F; exc_table = None
     write = (file or sys.stdout).write
     for bb, ops in blocks.items():
         i, L = 0, len(ops)
         start = f"{bb}: "
         pad   = " " * len(start)
-        exc_table_row = exc_table[bb]
+        exc_table_row = exc_table[bb] if exc_table else None
         while i < L:
             first = not i
             write(start if first else pad)
             i = stringify_instr(ops, i, write, exc_table_row)
-            if first:
-                bb_preds = preds[bb]
-                if bb_preds: write(f"   // preds: {', '.join(map(str, bb_preds))}")
+            if first: print_preds()
+            write("\n")
+        if not L:
+            write(start)
+            write("<empty!>")
+            print_preds()
             write("\n")
 
 def ssa_hash(F):
     hasher = sha256()
     write = lambda str: hasher.update(str.encode("utf-8"))
-    exc_table = F[3] if len(F) == 4 else DEFAULT_EXC_TABLE
+    exc_table = F[3] if len(F) == 4 else None
     for bb, ops in F[0].items():
         i, L = 0, len(ops)
         write(f"{bb}:")
-        exc_table_row = exc_table[bb]
+        exc_table_row = exc_table[bb] if exc_table else None
         while i < L:
             i = stringify_instr(ops, i, write, exc_table_row)
             write(";")

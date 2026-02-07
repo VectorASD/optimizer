@@ -115,7 +115,7 @@ def executor(module, memory):
             try:
                 cur_exc_items = exc_items[block]
                 run_block(blocks[block])
-                raise RuntimeError("Base-block exited without Goto and Result!") from None
+                raise RuntimeError(f"Base-block {block!r} exited without Goto and Result!") from None
             except Goto as e:
                 pred_block = block
                 block = e.args[0]
@@ -208,6 +208,15 @@ for i in range(5, 10):
     if i > num: print(str(i) + " > " + str(num))
     elif i == num: print(str(i) + " == " + str(num))
     else: print(str(i) + " < " + str(num))
+
+for end in (5, 10):
+    for i in range(1, end):
+        if i == 4: continue
+        print("i:", i)
+        if i == 7:
+            print("with break")
+            break
+    else: print("without break")
 """
 
 if __name__ == "__main__":

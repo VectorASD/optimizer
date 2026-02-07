@@ -62,6 +62,7 @@ def visitors(ast):
     add_inst = None
     current_block = None
     is_trace = False
+    terminator_pos = None
     def new_block():
         name = f"b{len(blocks)}"
         blocks[name] = deque()
@@ -69,7 +70,12 @@ def visitors(ast):
         succs[name] = []
         return name
     def on_block(name = None):
-        nonlocal add_inst, current_block
+        nonlocal add_inst, current_block, terminator_pos
+        if terminator_pos is not None:
+            insts = blocks[current_block]
+            dead_code_size = len(insts) - terminator_pos - 1
+            for i in range(dead_code_size): insts.pop()
+            terminator_pos = None
         name = name or new_block()
         add_inst = blocks[name].append
         current_block = name
@@ -77,6 +83,9 @@ def visitors(ast):
     def add(*inst):
         add_inst(inst)
     def control(*a):
+        nonlocal terminator_pos
+        if terminator_pos is None:
+            terminator_pos = len(blocks[current_block])
         if len(a) == 1:
             label = a[0]
             add(3, label) # goto <label>
@@ -116,13 +125,21 @@ def visitors(ast):
         preds[to_bb].append(current_block)
         succs[current_block].append(to_bb)
 
+    loop_stack = []
 
+
+
+    # root
 
     def visit_Module(node):
         # file[ast.Module]: a=[statements] ENDMARKER { ast.Module(body=a or [], type_ignores=[]) }
         check_type(node, ast_Module)
         assert not node.type_ignores
         visit_statements(node.body)
+
+
+
+    # statements
 
     def visit_statements(node):
         # statements[list]: a=statement+ { list(itertools.chain.from_iterable(a)) }
@@ -173,6 +190,8 @@ compound_stmt:
             "Expr": visit_Expr,
             "If": visit_If,
             "For": visit_For,
+            "Continue": visit_Continue,
+            "Break": visit_Break,
         } # TODO
         return statement_dict
 
@@ -243,26 +262,43 @@ compound_stmt:
 
     def visit_For(node):
         loop, end = new_block(), new_block()
+        orelse = new_block() if node.orelse else end
         reg = visit_expression(node.iter)
         add(6, reg, ".iter", (reg,)) # <var> = <func>(<var>, ...)
         control(loop) # goto <label>
         on_block(loop)
 
-        assert not node.orelse, node.orelse # TODO
-
         reg2 = new_reg()
-        exceptor("StopIteration", end)
+        exceptor("StopIteration", orelse)
         add(6, reg2, ".next", (reg,)) # <var> = <func>(<var>, ...)
         targets = visit_assign_expression(node.target)
         visit_targets(targets, reg2, [None])
         free_reg(reg2)
+
+        loop_stack.append((end, loop))
         visit_statements(node.body)
+        loop_stack.pop()
+
         control(loop) # goto <label>
 
         free_reg(reg)
+        if node.orelse:
+            on_block(orelse)
+            visit_statements(node.orelse)
+            control(end) # goto <label>
         on_block(end)
 
         assert node.type_comment is None, node.type_comment # TODO
+
+    def visit_Break(node):
+        if not loop_stack:
+            raise SyntaxError("'break' outside loop")
+        control(loop_stack[-1][0]) # goto <label>
+
+    def visit_Continue(node):
+        if not loop_stack:
+            raise SyntaxError("'continue' not properly in loop")
+        control(loop_stack[-1][1]) # goto <label>
 
 
 
@@ -571,6 +607,8 @@ compound_stmt:
         exit() # TODO
 
 
+
+    # main
 
     statement_dict = get_statement_dict()
     expression_dict, assign_expression_dict = get_expression_dict()
