@@ -43,7 +43,6 @@ token_re = re.compile(
     (?P<call_func>{IDENT})\s*\(\s*(?P<call_args>{VALUE}(?:\s*,\s*{VALUE})*)?\s*\)$
         #5: <var> = phi(<var>, ...)
         #6: <var> = <func>(<var|num>, ...)
-
     """,
     re.VERBOSE
 )
@@ -188,24 +187,13 @@ def parse_program(text, debug=False):
 
 
 
-DEFAULT_EXC_TABLE = defaultdict(dict)
-
-def find_exception(op, i, exc_table_row=None):
-    if exc_table_row is None:
-        if len(op) > 1 and isinstance(op[1], (Value, ValueList)):
-            return op[1].exc
-    else:
-        try: return exc_table_row[i]
-        except KeyError: pass
-    return ()
-
-def stringify_instr(ops, i, write, exc_table_row=None):
+def stringify_instr(ops, i, write):
     orig_i = i
     op = ops[i]; i += 1 # ops[i++]
     if op is None:
         write("...")
-        exc = find_exception(op, orig_i, exc_table_row)
-        if exc: write(f"   // exc: {exc}")
+        misc = op[-1]
+        if isinstance(misc, dict) and "exc" in misc: write(f"   // exc: {misc['exc']}")
         return i
     match op[0]:
         case 0: write(f"{op[1]} = {op[2]}")
@@ -236,31 +224,29 @@ def stringify_instr(ops, i, write, exc_table_row=None):
 
         case _: write(f"{op} ???")
 
-    exc = find_exception(op, orig_i, exc_table_row)
-    if exc: write(f"   // exc: {exc}")
+    misc = op[-1]
+    if isinstance(misc, dict) and "exc" in misc: write(f"   // exc: {misc['exc']}")
     return i
 
-def stringify_instr_wrap(ops, i, exc_table_row=None):
+def stringify_instr_wrap(ops, i):
     buff = StringIO()
-    stringify_instr(ops, i, buff.write, exc_table_row)
+    stringify_instr(ops, i, buff.write)
     return buff.getvalue()
 
 def stringify_cfg(F, file=None):
     def print_preds():
         bb_preds = preds[bb]
         if bb_preds: write(f"   // preds: {', '.join(map(str, bb_preds))}")
-    if len(F) == 4: blocks, preds, _, exc_table = F
-    else: blocks, preds, _ = F; exc_table = None
+    blocks, preds, _ = F
     write = (file or sys.stdout).write
     for bb, ops in blocks.items():
         i, L = 0, len(ops)
         start = f"{bb}: "
         pad   = " " * len(start)
-        exc_table_row = exc_table[bb] if exc_table else None
         while i < L:
             first = not i
             write(start if first else pad)
-            i = stringify_instr(ops, i, write, exc_table_row)
+            i = stringify_instr(ops, i, write)
             if first: print_preds()
             write("\n")
         if not L:
@@ -272,13 +258,11 @@ def stringify_cfg(F, file=None):
 def ssa_hash(F):
     hasher = sha256()
     write = lambda str: hasher.update(str.encode("utf-8"))
-    exc_table = F[3] if len(F) == 4 else None
     for bb, ops in F[0].items():
         i, L = 0, len(ops)
         write(f"{bb}:")
-        exc_table_row = exc_table[bb] if exc_table else None
         while i < L:
-            i = stringify_instr(ops, i, write, exc_table_row)
+            i = stringify_instr(ops, i, write)
             write(";")
     return hasher.digest()
 
@@ -336,7 +320,6 @@ def all_vars_in_cfg(blocks, vars=None):
 class SSA_Error(Exception): pass
 
 class Value:
-    exc = ()
     def __init__(self, n, label=None):
         self.n = n
         self.label = label
@@ -351,7 +334,6 @@ class Value:
         return self.n
 
 class ValueList(list):
-    exc = ()
     def __init__(self, value):
         self.append(value)
         self.n = value.n
@@ -431,6 +413,7 @@ class ValueHost:
                 idx += 1
         pop = index.pop
         for i in range(len(index) - idx): pop()
+        self.counter = idx
 
 renamers = []
 for kind, _def in enumerate(definitions):

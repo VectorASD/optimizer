@@ -82,8 +82,8 @@ def visitors(ast):
         if is_trace:
             is_trace = False
             trace()
-    def add(*inst):
-        add_inst(inst)
+    def add(*inst, meta=None):
+        add_inst((*inst, meta))
     def control(*a):
         nonlocal terminator_pos
         if terminator_pos is None:
@@ -109,7 +109,7 @@ def visitors(ast):
             insts = blocks[current_block]
             write(" " * (len(current_block) + 2) if insts else f"{current_block}: ")
             orig_add_inst(inst)
-            stringify_instr(insts, -1, write, exc_table)
+            stringify_instr(insts, -1, write)
             write("\n")
         nonlocal add_inst, is_trace
         if is_trace: return
@@ -118,13 +118,13 @@ def visitors(ast):
         add_inst = add_inst_wrap
         is_trace = True
 
-    exc_table = defaultdict(dict)
     def exceptor(name, to_bb):
         insts = blocks[current_block]
-        items = exc_table[current_block]
-        i = len(insts)
-        try: items[i].append((name, to_bb))
-        except KeyError: items[i] = [(name, to_bb)]
+        inst = insts[-1]
+        if inst[-1] is None: insts[-1] = inst = (*inst[:-1], {})
+        meta = inst[-1]
+        try: meta["exc"].append((name, to_bb))
+        except KeyError: meta["exc"] = [(name, to_bb)]
         preds[to_bb].append(current_block)
         succs[current_block].append(to_bb)
 
@@ -277,8 +277,8 @@ compound_stmt:
 
         on_block(loop)
         reg2 = new_reg()
-        exceptor("StopIteration", orelse)
         add(6, reg2, ".next", (reg,)) # <var> = <func>(<var>, ...)
+        exceptor(".StopIteration", orelse)
         targets = visit_assign_expression(node.target)
         visit_targets(targets, reg2, [None])
         free_reg(reg2)
@@ -689,7 +689,7 @@ compound_stmt:
     if not blocks[current_block] or blocks[current_block][-1][0] != 4:
         add(4, "_None") # return <var>
 
-    F = blocks, preds, succs, exc_table
+    F = blocks, preds, succs
 
     if not all(regs):
         stringify_cfg(F)

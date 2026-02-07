@@ -1,5 +1,5 @@
 from utils import dashed_separator, bits_by_index
-from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg, insts_renamer, SSA_Error, ValueHost, Value, DEFAULT_EXC_TABLE
+from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg, insts_renamer, SSA_Error, ValueHost
 from dataflow_analysis import reaching_definitions
 
 from pprint import pprint
@@ -286,8 +286,7 @@ def list_shift(array):
     for i in range(len(array) - idx): pop()
 
 def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
-    blocks, preds, succs, *misc = BB_F
-    exc_table = misc[0] if misc else DEFAULT_EXC_TABLE
+    blocks, preds, succs = BB_F
 
     value_host = ValueHost(predefined)
     collector = value_host.collector
@@ -296,14 +295,7 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
 
     def rename(bb):
         stack_pop = stack_push()
-        blocks[bb] = renamed = insts_renamer(blocks[bb], value_host)
-
-        for i, exc in exc_table[bb].items():
-            phi_count = 0
-            while renamed[phi_count][0] == 5: phi_count += 1
-            value = renamed[phi_count + i][1]
-            assert isinstance(value, Value)
-            value.exc = exc
+        blocks[bb] = insts_renamer(blocks[bb], value_host)
 
         for var, stack in collector.items():
             if stack:
@@ -322,7 +314,7 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
                 if inst[0] != 5: break
                 var = inst[2][0]
                 names = end_collector[var]
-                try: insts[i] = (5, inst[1], tuple(names[pred_bb] for pred_bb in preds_bb))
+                try: insts[i] = (5, inst[1], tuple(names[pred_bb] for pred_bb in preds_bb), None)
                 except KeyError:
                     insts[i] = None
                     removes = True

@@ -1,21 +1,21 @@
 from py_visitors import py_visitor
 from ssa_optimizations import main_loop
-from HIR_parser import stringify_cfg, find_exception
+from HIR_parser import stringify_cfg
 from utils import dashed_separator, bin_ops, unar_ops
 
 
 
 import builtins
-builtins = {f"_{name}": builtin for name, builtin in vars(builtins).items()}
+builtins = {f".{name}": builtin for name, builtin in vars(builtins).items()}
 import struct
-builtins["_struct"] = struct
+builtins[".struct"] = struct
 
 def fake_input(*a):
     print(*a, end="") #; print(7)
     return 7
-builtins["_input"] = fake_input
+builtins[".input"] = fake_input
 
-for name in tuple(builtins): builtins[f".{name[1:]}"] = builtins[name]
+for name in tuple(builtins): builtins[f"_{name[1:]}"] = builtins[name]
 
 
 
@@ -25,7 +25,7 @@ class Exceptor(Exception): pass
 
 
 
-def executor(module, memory):
+def executor(module, memory, value_hosts=None):
     def code_0(var, setter): # 0: <var> = <var>
         memory[var] = memory[setter]
 
@@ -92,16 +92,14 @@ def executor(module, memory):
     dispatch = tuple(func for _, func in functions)
 
     def run_block(block):
+        skips = (Goto, Result, Exceptor)
         for i, inst in enumerate(block):
-            # try: it = iter(inst)
-            # except TypeError as e:
-            #     if inst is None: continue
-            #     raise e from None
             it = iter(inst)
             try: dispatch[next(it)](*it)
+            except skips: raise
             except Exception as e:
-                try: raise Goto(cur_exc_items[i][type(e).__name__])
-                except KeyError: pass
+                for name, to_bb in cur_exc_items[i]:
+                    if isinstance(e, memory[name]): raise Goto(to_bb)
                 raise e
 
     def make_preds2idx(preds):
@@ -119,7 +117,7 @@ def executor(module, memory):
             try:
                 cur_exc_items = exc_items[block]
                 run_block(blocks[block])
-                raise RuntimeError(f"Base-block {block!r} exited without Goto and Result!") from None
+                raise RuntimeError(f"Base-block {block!r} exited without Goto and Result!")
             except Goto as e:
                 pred_block = block
                 block = e.args[0]
@@ -136,27 +134,41 @@ def executor(module, memory):
     cur_idx = None
     cur_exc_items = None
 
+    def misc_loader(F, value_host=None):
+        blocks, preds, succs = F
+        exc_items = {}
+        new_blocks = {}
+        for bb, insts in blocks.items():
+            items = []; add = items.append
+            for i, inst in enumerate(insts):
+                meta = inst[-1]
+                if meta:
+                    assert isinstance(meta, dict), inst
+                    try:
+                        exc = meta["exc"]
+                    except KeyError: pass
+                    else:
+                        if value_host:
+                            exc = tuple((value_host.get(e), to_bb) for e, to_bb in exc)
+                            for value, _ in exc:
+                                memory[value] = builtins[value.label]
+                            add(exc)
+                            continue
+                        add(tuple(exc))
+                        continue
+                add(())
+            new_blocks[bb] = tuple(inst[:-1] for inst in insts)
+            exc_items[bb] = items if any(items) else plug
+        return (new_blocks, preds, succs), exc_items
+
     max_size = max(len(insts) for F in module for insts in F[0].values())
-    plug = ({},) * max_size
-    module, exc_index = zip(*(exc_loader(F, plug) for F in module))
+    plug = ((),) * max_size
+    if value_hosts:
+        module, exc_index = zip(*(misc_loader(F, value_host) for F, value_host in zip(module, value_hosts)))
+    else: module, exc_index = zip(*(misc_loader(F) for F in module))
 
     result = run_func(0)
     if result is not None: print("RESULT:", result)
-
-def exc_loader(F, plug):
-    exc_items = {}
-    if len(F) == 3:
-        blocks, preds, succs = F
-        for bb, insts in blocks.items():
-            exc_items[bb] = tuple(dict(filter(lambda x: x, find_exception(inst, i, None))) for i, inst in enumerate(insts))
-    else:
-        blocks, preds, succs, exc_table = F
-        for bb, insts in blocks.items():
-            exc_table_row = exc_table[bb]
-            if exc_table_row:
-                exc_items[bb] = tuple(dict(filter(lambda x: x, find_exception(inst, i, exc_table_row))) for i, inst in enumerate(insts))
-            else: exc_items[bb] = plug
-    return (blocks, preds, succs), exc_items
 
 
 
@@ -194,11 +206,11 @@ deadcode = 1, bytes.fromhex, range(5, int(input("stop: ")))
 
 # original:        109
 # + CP+TCE:         96
-# + ConstProp+DCE:  68
-# + BE:             64
-# + φE+BM:          58
-# + CSE:            58
-# + CP+TCE:         42
+# + ConstProp+DCE:  65
+# + BE:             61
+# + φE+BM:          55
+# + CSE:            55
+# + CP+TCE:         40
 
 source2 = """
 a = 5
@@ -248,7 +260,7 @@ raise KeyError("a") from ValueError("b")
 """
 
 if __name__ == "__main__":
-    module = py_visitor(source3)
+    module = py_visitor(source2)
     for F in module:
         stringify_cfg(F)
 
@@ -257,7 +269,8 @@ if __name__ == "__main__":
     executor(module, memory)
     print(dashed_separator)
 
-    memory = {}
+    memory = {} # TODO: memory у каждой функции должен быть свой
+    value_hosts = []
     for i, F in enumerate(module):
         value_host, F = main_loop(F, builtins, debug=True)
         print(dashed_separator)
@@ -266,6 +279,7 @@ if __name__ == "__main__":
             if value.label is not None:
                 memory[value] = builtins[value.label]
         module[i] = F
+        value_hosts.append(value_host)
 
     print(dashed_separator)
-    executor(module, memory)
+    executor(module, memory, value_hosts)

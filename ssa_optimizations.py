@@ -133,7 +133,7 @@ def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
                 var = inst[1]
                 value = idx2value[var.n]
                 if value is not Undef:
-                    insts[i] = (7, var, value) # <var> = <const>
+                    insts[i] = (7, var, value, inst[-1]) # <var> = <const>
             elif kind == 9: # check |<var>| == <num>
                 value = idx2value[inst[1].n]
                 if value is not Undef:
@@ -147,7 +147,7 @@ def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
             elif kind == 14: # goto <label> if <var> else <label>
                 value = idx2value[inst[2].n]
                 if value is not Undef:
-                    insts[i] = (3, inst[1 if value else 3]) # goto <label>
+                    insts[i] = (3, inst[1 if value else 3], inst[-1]) # goto <label>
                     erased_bb = inst[3 if value else 1]
                     branch_folding(F, bb, erased_bb) # BF
 
@@ -163,7 +163,7 @@ def branch_folding(F, bb, erased_bb): # BF
     for i, inst in enumerate(insts):
         if inst[0] != 5: break # not phi
         phi_args = inst[2]
-        insts[i] = (5, inst[1], (*phi_args[:idx], *phi_args[idx+1:]))
+        insts[i] = (5, inst[1], (*phi_args[:idx], *phi_args[idx+1:]), None)
 
 
 
@@ -191,7 +191,7 @@ def phi_elimination(blocks): # φE
             it = iter(phi_args)
             idx = next(it).n
             if all(idx == value.n for value in it):
-                insts[i] = (0, inst[1], phi_args[0]) # <var> = <var>
+                insts[i] = (0, inst[1], phi_args[0], inst[3]) # <var> = <var>
 
 def block_merging(F): # BM
     blocks, preds, succs = F
