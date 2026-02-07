@@ -70,7 +70,7 @@ def visitors(ast):
         succs[name] = []
         return name
     def on_block(name = None):
-        nonlocal add_inst, current_block, terminator_pos
+        nonlocal add_inst, current_block, terminator_pos, is_trace
         if terminator_pos is not None:
             insts = blocks[current_block]
             dead_code_size = len(insts) - terminator_pos - 1
@@ -79,7 +79,9 @@ def visitors(ast):
         name = name or new_block()
         add_inst = blocks[name].append
         current_block = name
-        if is_trace: trace()
+        if is_trace:
+            is_trace = False
+            trace()
     def add(*inst):
         add_inst(inst)
     def control(*a):
@@ -109,8 +111,9 @@ def visitors(ast):
             orig_add_inst(inst)
             stringify_instr(insts, -1, write, exc_table)
             write("\n")
-        write = sys.stdout.write
         nonlocal add_inst, is_trace
+        if is_trace: return
+        write = sys.stdout.write
         orig_add_inst = add_inst
         add_inst = add_inst_wrap
         is_trace = True
@@ -126,6 +129,7 @@ def visitors(ast):
         succs[current_block].append(to_bb)
 
     loop_stack = []
+    cause_stack = []
 
 
 
@@ -160,11 +164,11 @@ simple_stmt (memo):
     | e=star_expressions { ast.Expr(value=e, LOCATIONS) } ✅❌❌ (common, with *, with **)
     | &'return' return_stmt ❌
     | &('import' | 'from') import_stmt ❌❌
-    | &'raise' raise_stmt ❌
-    | 'pass' { ast.Pass(LOCATIONS) } ❌
+    | &'raise' raise_stmt ✅
+    | 'pass' { ast.Pass(LOCATIONS) } ✅
     | &'del' del_stmt ❌
     | &'yield' yield_stmt ❌
-    | &'assert' assert_stmt ❌
+    | &'assert' assert_stmt ✅
     | 'break' { ast.Break(LOCATIONS) } ✅
     | 'continue' { ast.Continue(LOCATIONS) } ✅
     | &'global' global_stmt ❌
@@ -193,6 +197,9 @@ compound_stmt:
             "Continue": visit_Continue,
             "Break": visit_Break,
             "While": visit_While,
+            "Pass": visit_Pass,
+            "Assert": visit_Assert,
+            "Raise": visit_Raise,
         } # TODO
         return statement_dict
 
@@ -323,6 +330,47 @@ compound_stmt:
             control(end) # goto <label>
 
         on_block(end)
+
+    def visit_Pass(node):
+        pass
+
+    def visit_Assert(node):
+        yeah, nop = new_block(), new_block()
+        reg = visit_expression(node.test)
+        free_reg(reg)
+        control(yeah, reg, nop) # goto <label> if <var> else <label>
+
+        on_block(nop)
+        if node.msg is not None:
+            tmps = visit_assign_expression(node.msg)
+            if isinstance(tmps, str): args = (tmps,)
+            else: args = tuple((pack_recurs(new_reg(), tmp) if isinstance(tmp, tuple) else tmp) for tmp in tmps)
+        else: args = ()
+        free_regs(*args)
+        reg = new_reg()
+        add(6, reg, ".AssertionError", args) # <var> = <func>(<var>, ...)
+        add(17, reg) # raise <var>
+        free_reg(reg)
+
+        on_block(yeah)
+
+    def visit_Raise(node):
+        if node.exc: exc = visit_expression(node.exc)
+        elif cause_stack: exc = cause_stack[-1]
+        else: raise RuntimeError("No active exception to reraise")
+
+        if node.cause:
+            cause = visit_expression(node.cause)
+            free_reg(cause)
+        else: cause = cause_stack and cause_stack[-1]
+        if node.exc: free_reg(exc)
+
+        if cause: add(13, exc, "__cause__", cause) # <var>.<attr> = <var>
+        add(17, exc) # raise <var>
+
+    def visit_(node):
+        explore_node(node)
+        exit() # TODO
 
 
 

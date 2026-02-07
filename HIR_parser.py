@@ -68,6 +68,7 @@ definitions = (
     (0, 0, (2,),      1, "#14: goto <label> if <var> else <label>"),
     (1, 0, (3,),      0, "#15: <var> = <+|-|~|not ><var>"),
     (0, 0, (),        0, "#16: nop"),
+    (0, 0, (1,),      1, "#17: raise <var>"),
 )
 
 
@@ -231,6 +232,7 @@ def stringify_instr(ops, i, write, exc_table_row=None):
         case 14: write(f"goto {op[1]} if {op[2]} else {op[3]}")
         case 15: write(f"{op[1]} = {op[2]}{' ' * (len(op[2]) > 1)}{op[3]}")
         case 16: write("nop")
+        case 17: write(f"raise {op[1]}")
 
         case _: write(f"{op} ???")
 

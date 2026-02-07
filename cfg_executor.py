@@ -21,6 +21,7 @@ for name in tuple(builtins): builtins[f".{name[1:]}"] = builtins[name]
 
 class Result(Exception): pass
 class Goto(Exception): pass
+class Exceptor(Exception): pass
 
 
 
@@ -83,6 +84,9 @@ def executor(module, memory):
     def code_16(): #16: nop
         pass
 
+    def code_17(var): #17: raise <var>
+        raise Exceptor(memory[var])
+
     functions = ((name, value) for name, value in locals().items() if name.startswith("code_"))
     functions = sorted(functions, key=lambda x: int(x[0][len("code_"):]))
     dispatch = tuple(func for _, func in functions)
@@ -122,6 +126,9 @@ def executor(module, memory):
                 cur_idx = func_preds2idx[block][pred_block]
             except Result as res:
                 return res.args[0]
+            except Exceptor as wrap:
+                exc = wrap.args[0]
+                raise exc from exc.__cause__
             except KeyError as e:
                 raise NameError(e.args[0]) from None
 
@@ -223,10 +230,25 @@ while i <= 5:
     print(i)
     i += 1
 else: print("else in while")
+
+pass
+"""
+
+source3 = """
+assert input() == 7, "input() is corrupted"
+# assert False # AssertionError
+# assert False, 10 # AssertionError: 10
+# assert False, (10, 12) # AssertionError: (10, 12)
+# assert False, (10, (7, 9)) # AssertionError: (10, (7, 9))
+
+# raise AssertionError(10, (7, 9)) # AssertionError: (10, (7, 9))
+# raise AssertionError((10, (7, 9))) # AssertionError: (10, (7, 9))
+raise KeyError("a") from ValueError("b")
+# raise # RuntimeError: No active exception to reraise
 """
 
 if __name__ == "__main__":
-    module = py_visitor(source2)
+    module = py_visitor(source3)
     for F in module:
         stringify_cfg(F)
 
