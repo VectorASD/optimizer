@@ -155,30 +155,30 @@ simple_stmts[list]:
 # NOTE: assignment MUST precede expression, else parsing a simple assignment
 # will throw a SyntaxError.
 simple_stmt (memo):
-    | assignment
-    | &"type" type_alias
-    | e=star_expressions { ast.Expr(value=e, LOCATIONS) }
-    | &'return' return_stmt
-    | &('import' | 'from') import_stmt
-    | &'raise' raise_stmt
-    | 'pass' { ast.Pass(LOCATIONS) }
-    | &'del' del_stmt
-    | &'yield' yield_stmt
-    | &'assert' assert_stmt
-    | 'break' { ast.Break(LOCATIONS) }
-    | 'continue' { ast.Continue(LOCATIONS) }
-    | &'global' global_stmt
-    | &'nonlocal' nonlocal_stmt
+    | assignment ✅✅❌ (Assign, AugAssign, AnnAssign)
+    | &"type" type_alias ❌
+    | e=star_expressions { ast.Expr(value=e, LOCATIONS) } ✅❌❌ (common, with *, with **)
+    | &'return' return_stmt ❌
+    | &('import' | 'from') import_stmt ❌❌
+    | &'raise' raise_stmt ❌
+    | 'pass' { ast.Pass(LOCATIONS) } ❌
+    | &'del' del_stmt ❌
+    | &'yield' yield_stmt ❌
+    | &'assert' assert_stmt ❌
+    | 'break' { ast.Break(LOCATIONS) } ✅
+    | 'continue' { ast.Continue(LOCATIONS) } ✅
+    | &'global' global_stmt ❌
+    | &'nonlocal' nonlocal_stmt ❌
 
 compound_stmt:
-    | &('def' | '@' | 'async') function_def
-    | &'if' if_stmt
-    | &('class' | '@') class_def
-    | &('with' | 'async') with_stmt
-    | &('for' | 'async') for_stmt
-    | &'try' try_stmt
-    | &'while' while_stmt
-    | match_stmt
+    | &('def' | '@' | 'async') function_def ❌❌❌
+    | &'if' if_stmt ✅
+    | &('class' | '@') class_def ❌❌
+    | &('with' | 'async') with_stmt ❌❌
+    | &('for' | 'async') for_stmt ✅❌
+    | &'try' try_stmt ❌
+    | &'while' while_stmt ✅
+    | match_stmt ❌
 """
 
     def get_statement_dict():
@@ -192,6 +192,7 @@ compound_stmt:
             "For": visit_For,
             "Continue": visit_Continue,
             "Break": visit_Break,
+            "While": visit_While,
         } # TODO
         return statement_dict
 
@@ -266,8 +267,8 @@ compound_stmt:
         reg = visit_expression(node.iter)
         add(6, reg, ".iter", (reg,)) # <var> = <func>(<var>, ...)
         control(loop) # goto <label>
-        on_block(loop)
 
+        on_block(loop)
         reg2 = new_reg()
         exceptor("StopIteration", orelse)
         add(6, reg2, ".next", (reg,)) # <var> = <func>(<var>, ...)
@@ -299,6 +300,29 @@ compound_stmt:
         if not loop_stack:
             raise SyntaxError("'continue' not properly in loop")
         control(loop_stack[-1][1]) # goto <label>
+
+    def visit_While(node):
+        test, loop, end = new_block(), new_block(), new_block()
+        orelse = new_block() if node.orelse else end
+        control(test) # goto <label>
+
+        on_block(test)
+        reg = visit_expression(node.test)
+        control(loop, reg, orelse) # goto <label> if <var> else <label>
+
+        on_block(loop)
+        loop_stack.append((end, loop))
+        visit_statements(node.body)
+        loop_stack.pop()
+        control(test) # goto <label>
+
+        free_reg(reg)
+        if node.orelse:
+            on_block(orelse)
+            visit_statements(node.orelse)
+            control(end) # goto <label>
+
+        on_block(end)
 
 
 
