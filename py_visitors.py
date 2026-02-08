@@ -22,7 +22,7 @@ import_ast()
 
 
 
-def visitors(ast, module):
+def visitors(ast, module, def_tree):
     def typename(T):
         if T.__module__ == "builtins": return T.__name__
         return f"{T.__module__}.{T.__name__}"
@@ -65,7 +65,7 @@ def visitors(ast, module):
     terminator_pos = None
     def new_block():
         name = f"b{len(blocks)}"
-        blocks[name] = deque()
+        blocks[name] = []
         preds[name] = []
         succs[name] = []
         return name
@@ -378,8 +378,9 @@ compound_stmt:
         assert not node.decorator_list, node.decorator_list # TODO
         assert not node.returns, node.returns # TODO
 
-        def_id = visitors(node.body, module)
-        add(18, f"_{node.name}", def_id) # <var> = <def>
+        def_id2 = visitors(node.body, module, def_tree)
+        def_tree[def_id2] = def_id
+        add(18, f"_{node.name}", def_id2) # <var> = <def>
 
     def visit_Return(node):
         if node.value:
@@ -712,7 +713,9 @@ compound_stmt:
     expression_dict, assign_expression_dict = get_expression_dict()
 
     if def_id: visit_statements(ast)
-    else: visit_Module(ast)
+    else:
+        def_tree[def_id] = None
+        visit_Module(ast)
 
     if not blocks[current_block] or blocks[current_block][-1][0] != 4:
         add(4, ".None") # return <var>
@@ -726,10 +729,153 @@ compound_stmt:
 
 
 
-def py_visitor(code):
+def scope_handler(def_id, module, def_tree, builtins):
+    from HIR_parser import HAS_LHS, uses_getters
+
+    READ = 0
+    WRITE = 1
+    ARG = 2
+    GLOBAL = 3
+    NONLOCAL = 4
+
+    # flag reader
+
+    def add_flag(var, flag):
+        var_flags[var][flag] = 1
+
+    flag_index = []
+    for blocks, preds, succs in module:
+        var_flags = defaultdict(lambda: [0] * 5)
+        for bb, insts in blocks.items():
+            for inst in insts:
+                kind = inst[0]
+                # read
+                vars = set()
+                uses_getters[kind](inst, vars.add)
+                for var in vars:
+                    if var[0] == '_': add_flag(var, READ)
+                # write
+                if HAS_LHS[kind]:
+                    var = inst[1]
+                    if var[0] == '_': add_flag(var, WRITE)
+        flag_index.append(var_flags)
+
+    # tree checker
+
+    used_builtins = set()
+    dotted_builtins = set()
+    nonlocal_edges = {}
+    nonlocal_defs = set()
+    for id, (blocks, preds, succs) in enumerate(module):
+        is_global = id == def_id
+        var_flags = flag_index[id]
+        print("•", id)
+        for var, flags in var_flags.items():
+            if is_global or flags[GLOBAL]:
+                print("BUILTIN:" if var[1:] in builtins else "GLOBAL:", var)
+                add_flag(var, GLOBAL)
+                if var[1:] in builtins: used_builtins.add(var[1:])
+            elif (flags[WRITE] or flags[ARG]) and not flags[NONLOCAL]:
+                print("LOCAL:", var)
+            else:
+                # print("NOT LOCAL:", var, flags) # nonlocal or global or builtin
+                cur_id = def_tree[id]
+                while cur_id is not None:
+                    pflags = flag_index[cur_id][var]
+                    if cur_id == def_id or pflags[GLOBAL]:
+                        if flags[NONLOCAL]: raise SyntaxError("no binding for nonlocal 'glob_var' found")
+                        print("BUILTIN:" if var[1:] in builtins else "GLOBAL:", var)
+                        add_flag(var, GLOBAL)
+                        if var[1:] in builtins: used_builtins.add(var[1:])
+                        break
+                    elif (pflags[WRITE] or pflags[ARG]) and not pflags[NONLOCAL]:
+                        print("NONLOCAL:", var, f"({id} -> {cur_id})")
+                        var_flags = flag_index[cur_id]
+                        add_flag(var, NONLOCAL)
+                        var_flags = flag_index[id]
+                        add_flag(var, NONLOCAL)
+                        flag_index[cur_id][var]
+                        nonlocal_edges[(id, var)] = cur_id
+                        nonlocal_edges[(cur_id, var)] = cur_id
+                        nonlocal_defs.add(cur_id)
+                        break
+                    cur_id = def_tree[cur_id]
+                else:
+                    if flags[NONLOCAL]: raise SyntaxError("no binding for nonlocal 'glob_var' found")
+                    if var[1:] not in builtins: raise NameError(f"name {var!r} is not defined")
+                    print("BUILTIN:", var)
+                    add_flag(var, GLOBAL)
+                    used_builtins.add(var[1:])
+
+    # applier
+
+    for id, (blocks, preds, succs) in enumerate(module):
+        var_flags = flag_index[id]
+        is_not_global = id != def_id
+        for bb, insts in blocks.items():
+            blocks[bb] = new_insts = deque()
+            add = new_insts.append
+            for inst in insts:
+                kind = inst[0]
+                # read
+                vars = set()
+                uses_getters[kind](inst, vars.add)
+                for var in vars:
+                    if var[0] == ".":
+                        dotted_builtins.add(var)
+                        add((20, var, var, None)) # <var> = glob:<var>
+                        continue
+                    if var[0] != '_': continue
+                    flags = var_flags[var]
+                    if flags[GLOBAL]:
+                        if is_not_global: add((20, var, var, None)) # <var> = glob:<var>
+                    elif flags[NONLOCAL]:
+                        from_id = nonlocal_edges[(id, var)]
+                        add((22, var, from_id, var, None)) # <var> = scope:<def>:<var>
+                add(inst)
+                # write
+                if HAS_LHS[kind]:
+                    var = inst[1]
+                    if var[0] != '_': continue
+                    flags = var_flags[var]
+                    if flags[GLOBAL]:
+                        if is_not_global: add((21, var, var, None)) # glob:<var> = <var>
+                    elif flags[NONLOCAL]:
+                        to_id = nonlocal_edges[(id, var)]
+                        add((23, to_id, var, var, None)) # scope:<def>:<var> = <var>
+
+    blocks = module[def_id][0]
+    first_block = blocks["b0"]
+    add = first_block.appendleft
+    for name in used_builtins:
+        add((19, f"_{name}", name, None)) # <var> = builtin:<var>
+    for name in dotted_builtins:
+        add((19, name, name[1:], None)) # <var> = builtin:<var>
+
+"""
+glob_var = 10
+def outer():
+    global glob_var
+    glob_var = 11
+    def inner():
+        nonlocal glob_var # SyntaxError: no binding for nonlocal 'glob_var' found
+        glob_var = 12
+        print("var:", glob_var)
+    inner()
+    print("var:", glob_var)
+outer()
+print("var:", glob_var)
+exit()
+"""
+
+
+
+def py_visitor(code, builtins):
     ast = parse_it(code)
     module = []
-    def_id = visitors(ast, module)
+    def_tree = {}
+    def_id = visitors(ast, module, def_tree)
+    scope_handler(def_id, module, def_tree, builtins)
     return module, def_id
 
 

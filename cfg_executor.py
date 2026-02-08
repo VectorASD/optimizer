@@ -6,16 +6,14 @@ from utils import dashed_separator, bin_ops, unar_ops
 
 
 import builtins
-builtins = {f".{name}": builtin for name, builtin in vars(builtins).items()}
+builtins = {f"{name}": builtin for name, builtin in vars(builtins).items()}
 import struct
-builtins[".struct"] = struct
+builtins["struct"] = struct
 
 def fake_input(*a):
     print(*a, end="") #; print(7)
     return 7
-builtins[".input"] = fake_input
-
-for name in tuple(builtins): builtins[f"_{name[1:]}"] = builtins[name]
+builtins["input"] = fake_input
 
 
 
@@ -59,70 +57,85 @@ def misc_loader(F, plug, memory=None, value_host=None):
 
 
 
-def executor(runners, F, memory, value_host=None):
-    def code_0(var, setter): # 0: <var> = <var>
+def executor(runners, F, memory, globals, cells, value_host=None):
+    def code_0(var, setter): # <var> = <var>
         memory[var] = memory[setter]
 
-    def code_1(var, left, op, right): # 1: <var> = <var> <+|-|*|/|%|...> <var>
+    def code_1(var, left, op, right): # <var> = <var> <+|-|*|/|%|...> <var>
         try: func = bin_ops[op]
         except KeyError: raise RuntimeError(f"bin op {op!r} is not defined!") from None
         memory[var] = func(memory[left], memory[right])
 
-    def code_2(*_): # 2: if (<var|num> <cmp> <var|num>) goto <label>
+    def code_2(*_): # if (<var|num> <cmp> <var|num>) goto <label>
         raise RuntimeError("py_visitors не может дать HIR-ветвление (if без else)!!!")
 
-    def code_3(label): # 3: goto <label>
+    def code_3(label): # goto <label>
         raise Goto(label)
 
-    def code_4(var): # 4: return <var> 
+    def code_4(var): # return <var> 
         raise Result(memory[var])
 
-    def code_5(var, branches): # 5: <var> = phi(<var>, ...)
+    def code_5(var, branches): # <var> = phi(<var>, ...)
         memory[var] = memory[branches[cur_idx]]
 
-    def code_6(var, func, args): # 6: <var> = <func>(<var>, ...)
+    def code_6(var, func, args): # <var> = <func>(<var>, ...)
         func = memory[func]
         memory[var] = func(*(memory[arg] for arg in args))
 
-    def code_7(var, const): # 7: <var> = <const>
+    def code_7(var, const): # <var> = <const>
         memory[var] = const
 
-    def code_8(var, items): # 8: <var> = tuple(<var>, ...)
+    def code_8(var, items): # <var> = tuple(<var>, ...)
         memory[var] = tuple(memory[item] for item in items)
 
-    def code_9(var, size): # 9: check |<var>| == <num>
+    def code_9(var, size): # check |<var>| == <num>
         real_size = len(memory[var])
         if size < real_size: raise ValueError(f"too many values to unpack (expected {size}, got {real_size})")
         elif size > real_size: raise ValueError(f"not enough values to unpack (expected {size}, got {real_size})")
 
-    def code_10(var, arr, idx): #10: <var> = <var>[<var>]
+    def code_10(var, arr, idx): # <var> = <var>[<var>]
         memory[var] = memory[arr][memory[idx]]
 
-    def code_11(arr, idx, value): #11: <var>[<var>] = <var>
+    def code_11(arr, idx, value): # <var>[<var>] = <var>
         memory[arr][memory[idx]] = memory[value]
 
-    def code_12(var, var2, attr): #12: <var> = <var>.<attr>
+    def code_12(var, var2, attr): # <var> = <var>.<attr>
         memory[var] = getattr(memory[var2], attr)
 
-    def code_13(var, attr, value): #13: <var>.<var> = <var> 
+    def code_13(var, attr, value): # <var>.<var> = <var> 
         setattr(memory[var], attr, memory[value])
 
-    def code_14(yeah, var, nop): #14: goto <label> if <var> else <label>
+    def code_14(yeah, var, nop): # goto <label> if <var> else <label>
         raise Goto(yeah if memory[var] else nop)
 
-    def code_15(var, op, right): #15: <var> = <+|-|~|not ><var>
+    def code_15(var, op, right): # <var> = <+|-|~|not ><var>
         try: func = unar_ops[op]
         except KeyError: raise RuntimeError(f"unar op {op!r} is not defined!") from None
         memory[var] = func(memory[right])
 
-    def code_16(): #16: nop
+    def code_16(): # nop
         pass
 
-    def code_17(var): #17: raise <var>
+    def code_17(var): # raise <var>
         raise Exceptor(memory[var])
 
-    def code_18(var, def_id): #18: <var> = <def>
+    def code_18(var, def_id): # <var> = <def>
         memory[var] = runners[def_id]
+
+    def code_19(var, name): # <var> = builtin:<var>
+        memory[var] = builtins[name]
+
+    def code_20(var, name): # <var> = glob:<var>
+        memory[var] = globals[name]
+
+    def code_21(name, var): # glob:<var> = <var>
+        globals[var] = memory[name]
+
+    def code_22(var, from_id, name): # <var> = scope:<def>:<var>
+        memory[var] = cells[from_id][name]
+
+    def code_23(to_id, name, var): # scope:<def>:<var> = <var>
+        cells[to_id][name] = memory[var]
 
     functions = ((name, value) for name, value in locals().items() if name.startswith("code_"))
     functions = sorted(functions, key=lambda x: int(x[0][len("code_"):]))
@@ -260,38 +273,60 @@ raise KeyError("a") from ValueError("b")
 """
 
 source4 = """
+def returner():
+    return 5
 def func():
-    def returner():
-        return 5
     print("meow!", returner())
 func()
+
+var = "cat"
+def is_local():
+    var = "dog"
+    print("local:", var)
+is_local()
+print("global:", var)
+
+var = "secret"
+def check_anti_DCE():
+    print(var)
+check_anti_DCE()
+
+def check_nonlocal():
+    non = "boom"
+    def func():
+        print("nonlocal:", non)
+    func()
+    print("nonlocal:", non)
+check_nonlocal()
 """
 
 if __name__ == "__main__":
-    module, def_id = py_visitor(source4)
+    module, def_id = py_visitor(source4, builtins)
 
     runners = []
-    for F in module:
+    globals = {}
+    cells = tuple({} for i in range(len(module)))
+    for id, F in enumerate(module):
+        print(f"\n••• def#{id}")
         stringify_cfg(F)
-        memory = dict(builtins)
-        runners.append(executor(runners, F, memory))
+        memory = globals if id == def_id else {}
+        runners.append(executor(runners, F, memory, globals, cells))
 
     print(dashed_separator)
     runners[def_id]()
 
     runners = []
-    for F in module:
+    globals = {}
+    cells = tuple({} for i in range(len(module)))
+    for id, F in enumerate(module):
         print(dashed_separator)
         stringify_cfg(F)
         print()
         value_host, F = main_loop(F, builtins, debug=True)
         print()
         stringify_cfg(F)
-        memory = {}
-        for value in value_host.index:
-            if value.label is not None:
-                memory[value] = builtins[value.label]
-        runners.append(executor(runners, F, memory, value_host))
+        memory = globals if id == def_id else {}
+        runners.append(executor(runners, F, memory, globals, cells, value_host))
 
     print(dashed_separator)
     runners[def_id]()

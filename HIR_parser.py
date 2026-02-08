@@ -69,6 +69,12 @@ definitions = (
     (0, 0, (),        0, "#16: nop"),
     (0, 0, (1,),      1, "#17: raise <var>"),
     (1, 0, (),        1, "#18: <var> = <def>"),
+
+    (1, 0, (),        0, "#19: <var> = builtin:<var>"),
+    (1, 0, (),        0, "#20: <var> = glob:<var>"),
+    (0, 0, (2,),      1, "#21: glob:<var> = <var>"),
+    (1, 0, (),        0, "#22: <var> = scope:<def>:<var>"),
+    (0, 0, (3,),      1, "#23: scope:<def>:<var> = <var>"),
 )
 
 
@@ -223,6 +229,11 @@ def stringify_instr(ops, i, write):
         case 16: write("nop")
         case 17: write(f"raise {op[1]}")
         case 18: write(f"{op[1]} = def#{op[2]}")
+        case 19: write(f"{op[1]} = builtin:{op[2]}")
+        case 20: write(f"{op[1]} = glob:{op[2]}")
+        case 21: write(f"glob:{op[1]} = {op[2]}")
+        case 22: write(f"{op[1]} = scope:{op[2]}:{op[3]}")
+        case 23: write(f"scope:{op[1]}:{op[2]} = {op[3]}")
 
         case _: write(f"{op} ???")
 
