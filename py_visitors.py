@@ -22,7 +22,7 @@ import_ast()
 
 
 
-def visitors(ast):
+def visitors(ast, module):
     def typename(T):
         if T.__module__ == "builtins": return T.__name__
         return f"{T.__module__}.{T.__name__}"
@@ -162,7 +162,7 @@ simple_stmt (memo):
     | assignment ✅✅❌ (Assign, AugAssign, AnnAssign)
     | &"type" type_alias ❌
     | e=star_expressions { ast.Expr(value=e, LOCATIONS) } ✅❌❌ (common, with *, with **)
-    | &'return' return_stmt ❌
+    | &'return' return_stmt ✅
     | &('import' | 'from') import_stmt ❌❌
     | &'raise' raise_stmt ✅
     | 'pass' { ast.Pass(LOCATIONS) } ✅
@@ -175,7 +175,7 @@ simple_stmt (memo):
     | &'nonlocal' nonlocal_stmt ❌
 
 compound_stmt:
-    | &('def' | '@' | 'async') function_def ❌❌❌
+    | &('def' | '@' | 'async') function_def ✅❌❌
     | &'if' if_stmt ✅
     | &('class' | '@') class_def ❌❌
     | &('with' | 'async') with_stmt ❌❌
@@ -200,6 +200,8 @@ compound_stmt:
             "Pass": visit_Pass,
             "Assert": visit_Assert,
             "Raise": visit_Raise,
+            "FunctionDef": visit_FunctionDef,
+            "Return": visit_Return,
         } # TODO
         return statement_dict
 
@@ -367,6 +369,26 @@ compound_stmt:
 
         if cause: add(13, exc, "__cause__", cause) # <var>.<attr> = <var>
         add(17, exc) # raise <var>
+
+    def visit_FunctionDef(node):
+        explore_node(node)
+        explore_node(node.args)
+        assert not node.type_comment, node.type_comment # TODO
+        assert not node.type_params, node.type_params # TODO
+        assert not node.decorator_list, node.decorator_list # TODO
+        assert not node.returns, node.returns # TODO
+
+        def_id = visitors(node.body, module)
+        add(18, f"_{node.name}", def_id) # <var> = <def>
+
+    def visit_Return(node):
+        if node.value:
+            result = visit_expression(node.value)
+            add(4, result) # return <var>
+            free_reg(result)
+        else: add(4, ".None") # return <var>
+
+
 
     def visit_(node):
         explore_node(node)
@@ -682,28 +704,33 @@ compound_stmt:
 
     # main
 
+    F = blocks, preds, succs
+    def_id = len(module)
+    module.append(F)
+
     statement_dict = get_statement_dict()
     expression_dict, assign_expression_dict = get_expression_dict()
 
-    visit_Module(ast)
-    if not blocks[current_block] or blocks[current_block][-1][0] != 4:
-        add(4, "_None") # return <var>
+    if def_id: visit_statements(ast)
+    else: visit_Module(ast)
 
-    F = blocks, preds, succs
+    if not blocks[current_block] or blocks[current_block][-1][0] != 4:
+        add(4, ".None") # return <var>
 
     if not all(regs):
         stringify_cfg(F)
         print("REGS:", regs)
         raise AssertionError("Не все регистры освобождены!")
 
-    module = [F]
-    return module
+    return def_id
 
 
 
 def py_visitor(code):
     ast = parse_it(code)
-    return visitors(ast)
+    module = []
+    def_id = visitors(ast, module)
+    return module, def_id
 
 
 
@@ -787,5 +814,6 @@ print(a, b, c)
 # print(ast_boolop.__doc__) # and all 2!
 
 if __name__ == "__main__":
-    for F in py_visitor(source_2):
+    module, def_id = py_visitor(source_2)
+    for F in module:
         stringify_cfg(F)

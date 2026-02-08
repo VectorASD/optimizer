@@ -68,6 +68,7 @@ definitions = (
     (1, 0, (3,),      0, "#15: <var> = <+|-|~|not ><var>"),
     (0, 0, (),        0, "#16: nop"),
     (0, 0, (1,),      1, "#17: raise <var>"),
+    (1, 0, (),        1, "#18: <var> = <def>"),
 )
 
 
@@ -221,6 +222,7 @@ def stringify_instr(ops, i, write):
         case 15: write(f"{op[1]} = {op[2]}{' ' * (len(op[2]) > 1)}{op[3]}")
         case 16: write("nop")
         case 17: write(f"raise {op[1]}")
+        case 18: write(f"{op[1]} = def#{op[2]}")
 
         case _: write(f"{op} ???")
 

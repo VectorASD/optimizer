@@ -350,34 +350,59 @@ def common_subexpression_elimination(blocks, IDom): # CSE
 
 
 
+def check_size(passes, blocks, pred_ref):
+    size = sum(map(len, blocks.values()))
+    is_final = passes == "final"
+    if not is_final:
+        pred_ref[1].extend(passes)
+    if size != pred_ref[0]:
+        chain_name = "+".join(pred_ref[1])
+        if pred_ref[2]: chain_name = "+ " + chain_name
+        pred_ref[0] = size
+        pred_ref[1].clear()
+        pred_ref[2].append((chain_name, size))
+    if is_final:
+        pred_ref[2].append((passes, size))
+
+def print_log(pred_ref):
+    logs = pred_ref[2]
+    length = max(len(name) + len(str(size)) for name, size in logs) + 1
+    for name, size in logs:
+        name += ":"
+        print(f"{name:{length - len(str(size))}} {size}")
+
 def main_loop(F, builtins, debug=False):
     IDom, dom_tree, DF, value_host, F = SSA(F, predefined=tuple(builtins))
 
     blocks = F[0]
-    if debug: print(f"original:        {sum(map(len, blocks.values())):3}")
+    pred_ref = [None, [], []]
+    if debug: check_size(("original",), blocks, pred_ref)
 
     prev_hash = None
     for i in range(7):
         copy_propagation(blocks, value_host) # CP
         trivial_copy_elemination(blocks) # TCE
-        if debug: print(f"+ CP+TCE:        {sum(map(len, blocks.values())):3}")
+        if debug: check_size(("CP", "TCE"), blocks, pred_ref)
 
         constant_propogation_and_folding(F, value_host, builtins) # ConstProp
         dead_code_elimination(blocks, value_host) # DCE
-        if debug: print(f"+ ConstProp+DCE: {sum(map(len, blocks.values())):3}")
+        if debug: check_size(("ConstProp", "DCE"), blocks, pred_ref)
 
         branch_elimination(F) # BE
-        if debug: print(f"+ BE:            {sum(map(len, blocks.values())):3}")
+        if debug: check_size(("BE",), blocks, pred_ref)
 
         phi_elimination(blocks) # φE
         block_merging(F) # BM
-        if debug: print(f"+ φE+BM:         {sum(map(len, blocks.values())):3}")
+        if debug: check_size(("φE", "BM"), blocks, pred_ref)
 
         common_subexpression_elimination(blocks, IDom)
-        if debug: print(f"+ CSE:           {sum(map(len, blocks.values())):3}")
+        if debug: check_size(("CSE",), blocks, pred_ref)
 
         next_hash = ssa_hash(F)
         if next_hash == prev_hash: break
         prev_hash = next_hash
 
+    if debug:
+        check_size("final", blocks, pred_ref)
+        print_log(pred_ref)
     return value_host, F
