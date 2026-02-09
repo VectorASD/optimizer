@@ -352,7 +352,9 @@ class ValueList(list):
         self.n = value.n
         self.label = None
     def __repr__(self):
-        return f"%{self.n}_x{len(self)}"
+        # return f"%{self.n}_x{len(self)}"
+        n, label = self.n, self.label
+        return f"%{n}" if label is None else f"{label}→%{n}"
     def __eq__(self, right):
         return self.n == right.n
     def __gt__(self, right):

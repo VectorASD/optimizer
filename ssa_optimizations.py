@@ -4,6 +4,7 @@ from utils import bin_ops, unar_ops
 from folding import FOLDING_ATTRIBUTE_DICT, FOLDING_SET
 
 from collections import defaultdict, deque
+from pprint import pprint
 
 
 
@@ -101,13 +102,11 @@ def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
                 idx2value[idx] = value
                 queue_append(idx)
 
-    for value in value_host.index:
-        name = value.label
-        if name is not None:
-            if name == "_struct": continue # TODO
-            idx = value.n
-            idx2value[idx] = builtins[name]
-            queue_append(idx)
+            elif kind == 19: # <var> = builtin:<var>
+                idx = inst[1].n
+                value = builtins[inst[2]]
+                idx2value[idx] = value
+                queue_append(idx)
 
     while queue:
         # print("•", queue)
@@ -118,7 +117,7 @@ def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
                 idx2count[user] -= 1
                 if not idx2count[user]:
                     uses, op = idx2uses[user]
-                    args = (idx2value[use] for use in uses)
+                    args = tuple(idx2value[use] for use in uses)
                     value = op(*args) # constant folding
                     if value is not Undef:
                         idx2value[user] = value
@@ -308,7 +307,7 @@ def common_subexpression_elimination(blocks, IDom): # CSE
         for i, inst in enumerate(insts):
             kind = inst[0]
             if HAS_LHS[kind] and (WITHOUT_SIDE_EFFECT[kind] or kind == 6 and inst[2].label in FOLDING_SET):
-                subs[(kind, inst[2:])].add((bb, i, inst[1]))
+                subs[(kind, inst[2:-1])].add((bb, i, inst[1]))
 
     queue = (key for key, bb_set in subs.items() if len(bb_set) > 1)
 
@@ -331,22 +330,67 @@ def common_subexpression_elimination(blocks, IDom): # CSE
                 save_i, new_name = min(commons)
                 for i, name in commons:
                     if i != save_i:
-                        root[i] = (0, name, new_name) # local CSE
+                        root[i] = (0, name, new_name, None) # local CSE
             else: new_name = commons[0][1]
         else:
             new_name = min(sub, key=lambda x: x[2])[2]
             term = root.pop()
-            root.append((key[0], new_name, *key[1]))
+            root.append((key[0], new_name, *key[1], None))
             root.append(term)
 
         for next_bb, i, name in sub:
             if next_bb != bb:
                 if name != new_name:
-                    blocks[next_bb][i] = (0, name, new_name) # global CSE
+                    blocks[next_bb][i] = (0, name, new_name, None) # global CSE
                 else: blocks[next_bb][i] = None
 
     for bb, block in blocks.items():
         blocks[bb] = list(filter(bool, block))
+
+
+
+def global_elimination(F, value_host): # GlobE
+    blocks = F[0]
+    global_to_value = {}
+    rename = value_host.rename
+    for bb, insts in blocks.items():
+        blocks[bb] = new_insts = []
+        add = new_insts.append
+        for inst in insts:
+            kind = inst[0]
+            if kind == 20: # <var> = glob:<var>
+                value, name = inst[1], inst[2]
+                value.label = name
+                try: old_value = global_to_value[name]
+                except KeyError: global_to_value[name] = value
+                else: rename(value.n, old_value.n)
+            elif kind == 21: # glob:<var> = <var>
+                name, value = inst[1], inst[2]
+                value.label = name
+                try: old_value = global_to_value[name]
+                except KeyError: global_to_value[name] = value
+                else: rename(value.n, old_value.n)
+            else: add(inst)
+
+    def applier(F):
+        blocks = F[0]
+        for bb, insts in blocks.items():
+            for i, inst in enumerate(insts):
+                kind = inst[0]
+                if kind == 20: # <var> = glob:<var>
+                    insts[i] = (kind, inst[1], global_to_value[inst[2]], inst[3])
+                elif kind == 21: # glob:<var> = <var>
+                    insts[i] = (kind, global_to_value[inst[1]], inst[2], inst[3])
+
+    index = value_host.index
+    for name, value in global_to_value.items():
+        index[value.n].label = name
+
+    def get_global_to_value():
+        return applier
+
+    value_host.shift()
+    value_host.get_global_to_value = get_global_to_value
 
 
 
@@ -371,7 +415,7 @@ def print_log(pred_ref):
         name += ":"
         print(f"{name:{length - len(str(size))}} {size}")
 
-def main_loop(F, builtins, debug=False):
+def main_loop(F, builtins, debug=False, is_global=False):
     IDom, dom_tree, DF, value_host, F = SSA(F, predefined=tuple(builtins))
 
     blocks = F[0]
@@ -398,9 +442,17 @@ def main_loop(F, builtins, debug=False):
         common_subexpression_elimination(blocks, IDom)
         if debug: check_size(("CSE",), blocks, pred_ref)
 
+        #if is_global and not i:
+        #    global_elimination(F, value_host) # GlobE
+        #    if debug: check_size(("GlobE",), blocks, pred_ref)
+
         next_hash = ssa_hash(F)
         if next_hash == prev_hash: break
         prev_hash = next_hash
+
+    if is_global:
+        global_elimination(F, value_host) # GlobE
+        if debug: check_size(("GlobE",), blocks, pred_ref)
 
     if debug:
         check_size("final", blocks, pred_ref)

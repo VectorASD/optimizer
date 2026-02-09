@@ -42,7 +42,8 @@ def misc_loader(F, plug, memory=None, value_host=None):
                     exc = meta["exc"]
                 except KeyError: pass
                 else:
-                    if value_host:
+                    if value_host and False:
+                        print(exc, value_host)
                         exc = tuple((value_host.get(e), to_bb) for e, to_bb in exc)
                         for value, _ in exc:
                             memory[value] = builtins[value.label]
@@ -57,7 +58,7 @@ def misc_loader(F, plug, memory=None, value_host=None):
 
 
 
-def executor(runners, F, memory, globals, cells, value_host=None):
+def executor(id, runners, F, memory, globals, cells, value_host=None):
     def code_0(var, setter): # <var> = <var>
         memory[var] = memory[setter]
 
@@ -129,7 +130,7 @@ def executor(runners, F, memory, globals, cells, value_host=None):
         memory[var] = globals[name]
 
     def code_21(name, var): # glob:<var> = <var>
-        globals[var] = memory[name]
+        globals[name] = memory[var]
 
     def code_22(var, from_id, name): # <var> = scope:<def>:<var>
         memory[var] = cells[from_id][name]
@@ -141,25 +142,35 @@ def executor(runners, F, memory, globals, cells, value_host=None):
     functions = sorted(functions, key=lambda x: int(x[0][len("code_"):]))
     dispatch = tuple(func for _, func in functions)
 
-    def run_block(block):
-        skips = (Goto, Result, Exceptor)
+    def run_block(bb, block):
+        skips = (Goto, Result)
         for i, inst in enumerate(block):
             it = iter(inst)
             try: dispatch[next(it)](*it)
             except skips: raise
+            except Exceptor as e:
+                exc = e.args[0]
+                for name, to_bb in exc_items[i]:
+                    if isinstance(exc, memory[name]): raise Goto(to_bb)
+                print("• exc:", id, bb, i, "•", inst)
+                raise e
             except Exception as e:
                 for name, to_bb in exc_items[i]:
-                    if isinstance(e, memory[name]): raise Goto(to_bb)
+                    if isinstance(e, builtins[name[1:]] if name[0] == "." else memory[name]):
+                        raise Goto(to_bb)
+                print("• exc:", id, bb, i, "•", inst)
                 raise e
 
     def runner():
+        if preinit is not None: preinit()
+
         nonlocal cur_idx, exc_items
         blocks, preds, succs = F
         bb = "b0"
         while True:
             try:
                 exc_items = exc_index[bb]
-                run_block(blocks[bb])
+                run_block(bb, blocks[bb])
                 raise RuntimeError(f"Base-block {bb!r} exited without Goto and Result!")
             except Goto as e:
                 pred_bb = bb
@@ -176,10 +187,15 @@ def executor(runners, F, memory, globals, cells, value_host=None):
     preds2idx = make_preds2idx(F[1])
     cur_idx = None
     exc_items = None
+    exc_index = None
 
     max_size = max(len(insts) for F in module for insts in F[0].values())
     plug = ((),) * max_size
-    F, exc_index = misc_loader(F, plug, memory, value_host)
+
+    def preinit():
+        nonlocal F, exc_index, preinit
+        F, exc_index = misc_loader(F, plug, memory, value_host)
+        preinit = None
 
     return runner
 
@@ -295,9 +311,17 @@ def check_nonlocal():
     non = "boom"
     def func():
         print("nonlocal:", non)
+        nonlocal non
+        non = "knock"
     func()
     print("nonlocal:", non)
 check_nonlocal()
+
+def check_global():
+    global var
+    var = "var in global"
+check_global()
+print(var)
 """
 
 if __name__ == "__main__":
@@ -310,7 +334,7 @@ if __name__ == "__main__":
         print(f"\n••• def#{id}")
         stringify_cfg(F)
         memory = globals if id == def_id else {}
-        runners.append(executor(runners, F, memory, globals, cells))
+        runners.append(executor(id, runners, F, memory, globals, cells))
 
     print(dashed_separator)
     runners[def_id]()
@@ -318,15 +342,22 @@ if __name__ == "__main__":
     runners = []
     globals = {}
     cells = tuple({} for i in range(len(module)))
-    for id, F in enumerate(module):
+    for id in (def_id, *(i for i in range(len(module)) if i != def_id)):
+        F = module[id]
         print(dashed_separator)
         stringify_cfg(F)
         print()
-        value_host, F = main_loop(F, builtins, debug=True)
+
+        is_global = id == def_id
+        value_host, F = main_loop(F, builtins, debug=True, is_global=is_global)
+        if is_global: applier = value_host.get_global_to_value()
+        applier(F)
+
         print()
         stringify_cfg(F)
         memory = globals if id == def_id else {}
-        runners.append(executor(runners, F, memory, globals, cells, value_host))
+        runners.append(executor(id, runners, F, memory, globals, cells, value_host))
 
     print(dashed_separator)
+    exit()
     runners[def_id]()

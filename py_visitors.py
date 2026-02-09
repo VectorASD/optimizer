@@ -128,6 +128,13 @@ def visitors(ast, module, def_tree):
         preds[to_bb].append(current_block)
         succs[current_block].append(to_bb)
 
+    def set_meta(key, value):
+        insts = blocks[current_block]
+        inst = insts[-1]
+        if inst[-1] is None: insts[-1] = inst = (*inst[:-1], {})
+        meta = inst[-1]
+        meta[key] = value
+
     loop_stack = []
     cause_stack = []
 
@@ -171,8 +178,8 @@ simple_stmt (memo):
     | &'assert' assert_stmt ✅
     | 'break' { ast.Break(LOCATIONS) } ✅
     | 'continue' { ast.Continue(LOCATIONS) } ✅
-    | &'global' global_stmt ❌
-    | &'nonlocal' nonlocal_stmt ❌
+    | &'global' global_stmt ✅
+    | &'nonlocal' nonlocal_stmt ✅
 
 compound_stmt:
     | &('def' | '@' | 'async') function_def ✅❌❌
@@ -202,6 +209,8 @@ compound_stmt:
             "Raise": visit_Raise,
             "FunctionDef": visit_FunctionDef,
             "Return": visit_Return,
+            "Global": visit_Global,
+            "Nonlocal": visit_Nonlocal,
         } # TODO
         return statement_dict
 
@@ -388,6 +397,14 @@ compound_stmt:
             add(4, result) # return <var>
             free_reg(result)
         else: add(4, ".None") # return <var>
+
+    def visit_Global(node):
+        add(16) # nop
+        set_meta("globals", node.names)
+
+    def visit_Nonlocal(node):
+        add(16) # nop
+        set_meta("nonlocals", node.names)
 
 
 
@@ -758,6 +775,15 @@ def scope_handler(def_id, module, def_tree, builtins):
                 if HAS_LHS[kind]:
                     var = inst[1]
                     if var[0] == '_': add_flag(var, WRITE)
+                if inst[-1] is not None:
+                    meta = inst[-1]
+                    if "globals" in meta:
+                        for var in meta["globals"]: add_flag(f"_{var}", GLOBAL)
+                    if "nonlocals" in meta:
+                        for var in meta["nonlocals"]: add_flag(f"_{var}", NONLOCAL)
+                    if "exc" in meta:
+                        for name, _ in meta["exc"]:
+                            if name[0] == "_": add_flag(name, READ)
         flag_index.append(var_flags)
 
     # tree checker
@@ -774,7 +800,7 @@ def scope_handler(def_id, module, def_tree, builtins):
             if is_global or flags[GLOBAL]:
                 print("BUILTIN:" if var[1:] in builtins else "GLOBAL:", var)
                 add_flag(var, GLOBAL)
-                if var[1:] in builtins: used_builtins.add(var[1:])
+                if var[1:] in builtins: used_builtins.add(var)
             elif (flags[WRITE] or flags[ARG]) and not flags[NONLOCAL]:
                 print("LOCAL:", var)
             else:
@@ -786,7 +812,7 @@ def scope_handler(def_id, module, def_tree, builtins):
                         if flags[NONLOCAL]: raise SyntaxError("no binding for nonlocal 'glob_var' found")
                         print("BUILTIN:" if var[1:] in builtins else "GLOBAL:", var)
                         add_flag(var, GLOBAL)
-                        if var[1:] in builtins: used_builtins.add(var[1:])
+                        if var[1:] in builtins: used_builtins.add(var)
                         break
                     elif (pflags[WRITE] or pflags[ARG]) and not pflags[NONLOCAL]:
                         print("NONLOCAL:", var, f"({id} -> {cur_id})")
@@ -805,13 +831,17 @@ def scope_handler(def_id, module, def_tree, builtins):
                     if var[1:] not in builtins: raise NameError(f"name {var!r} is not defined")
                     print("BUILTIN:", var)
                     add_flag(var, GLOBAL)
-                    used_builtins.add(var[1:])
+                    used_builtins.add(var)
 
     # applier
 
-    for id, (blocks, preds, succs) in enumerate(module):
+    ids = tuple(i for i in range(len(module)) if i != def_id)
+    read_globals = set(); read_glob_add = read_globals.add
+    write_globals = set(); write_glob_add = write_globals.add
+
+    for id in ids:
+        blocks, preds, succs = module[id]
         var_flags = flag_index[id]
-        is_not_global = id != def_id
         for bb, insts in blocks.items():
             blocks[bb] = new_insts = deque()
             add = new_insts.append
@@ -820,15 +850,21 @@ def scope_handler(def_id, module, def_tree, builtins):
                 # read
                 vars = set()
                 uses_getters[kind](inst, vars.add)
+                meta = inst[-1]
+                if meta is not None and "exc" in meta:
+                    print(meta)
+                    exit() # TODO
                 for var in vars:
                     if var[0] == ".":
                         dotted_builtins.add(var)
                         add((20, var, var, None)) # <var> = glob:<var>
+                        read_glob_add(var)
                         continue
                     if var[0] != '_': continue
                     flags = var_flags[var]
                     if flags[GLOBAL]:
-                        if is_not_global: add((20, var, var, None)) # <var> = glob:<var>
+                        add((20, var, var, None)) # <var> = glob:<var>
+                        read_glob_add(var)
                     elif flags[NONLOCAL]:
                         from_id = nonlocal_edges[(id, var)]
                         add((22, var, from_id, var, None)) # <var> = scope:<def>:<var>
@@ -839,18 +875,52 @@ def scope_handler(def_id, module, def_tree, builtins):
                     if var[0] != '_': continue
                     flags = var_flags[var]
                     if flags[GLOBAL]:
-                        if is_not_global: add((21, var, var, None)) # glob:<var> = <var>
+                        add((21, var, var, None)) # glob:<var> = <var>
+                        write_glob_add(var)
                     elif flags[NONLOCAL]:
                         to_id = nonlocal_edges[(id, var)]
                         add((23, to_id, var, var, None)) # scope:<def>:<var> = <var>
 
-    blocks = module[def_id][0]
-    first_block = blocks["b0"]
-    add = first_block.appendleft
-    for name in used_builtins:
-        add((19, f"_{name}", name, None)) # <var> = builtin:<var>
-    for name in dotted_builtins:
-        add((19, name, name[1:], None)) # <var> = builtin:<var>
+    blocks, preds, succs = module[def_id]
+    for bb, insts in blocks.items():
+        for inst in insts:
+            kind = inst[0]
+            # read
+            vars = set()
+            uses_getters[kind](inst, vars.add)
+            for var in vars:
+                if var[0] == ".":
+                    dotted_builtins.add(var)
+                    continue
+
+    blocks["b0"] = (
+        *((19, name, name[1:], None) for name in used_builtins), # <var> = builtin:<var>
+        *((19, name, name[1:], None) for name in dotted_builtins), # <var> = builtin:<var>
+        *blocks["b0"],
+    )
+
+    for bb, insts in blocks.items():
+        blocks[bb] = new_insts = deque()
+        add = new_insts.append
+        for inst in insts:
+            kind = inst[0]
+            # read
+            vars = set()
+            uses_getters[kind](inst, vars.add)
+            meta = inst[-1]
+            if meta is not None and "exc" in meta:
+                for name, _ in meta["exc"]:
+                    if name[0] == "_":
+                        add((20, name, name, None)) # <var> = glob:<var>
+            for var in vars:
+                if var[0] == '_' and var in write_globals:
+                    add((20, var, var, None)) # <var> = glob:<var>
+            add(inst)
+            # write
+            if HAS_LHS[kind]:
+                var = inst[1]
+                if var[0] in "_.":
+                    add((21, var, var, None)) # glob:<var> = <var>
 
 """
 glob_var = 10
@@ -860,12 +930,8 @@ def outer():
     def inner():
         nonlocal glob_var # SyntaxError: no binding for nonlocal 'glob_var' found
         glob_var = 12
-        print("var:", glob_var)
     inner()
-    print("var:", glob_var)
 outer()
-print("var:", glob_var)
-exit()
 """
 
 
