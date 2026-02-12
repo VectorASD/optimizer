@@ -17,6 +17,7 @@ def copy_propagation(blocks, value_host): # CP
         for inst in insts:
             if inst[0] == 0: # <var> = <var>
                 dst, src = inst[1].n, inst[2].n
+                assert dst != src
                 L = graph[src]
                 if L: L.append(dst)
                 else: graph[src] = [dst]
@@ -352,7 +353,7 @@ def common_subexpression_elimination(blocks, IDom): # CSE
 def global_elimination(F, value_host): # GlobE
     blocks = F[0]
     global_to_value = {}
-    rename = value_host.rename
+    # rename = value_host.rename Так нельзя!
     for bb, insts in blocks.items():
         blocks[bb] = new_insts = []
         add = new_insts.append
@@ -363,13 +364,13 @@ def global_elimination(F, value_host): # GlobE
                 value.label = name
                 try: old_value = global_to_value[name]
                 except KeyError: global_to_value[name] = value
-                else: rename(value.n, old_value.n)
+                # else: rename(value.n, old_value.n)
             elif kind == 21: # glob:<var> = <var>
                 name, value = inst[1], inst[2]
                 value.label = name
                 try: old_value = global_to_value[name]
                 except KeyError: global_to_value[name] = value
-                else: rename(value.n, old_value.n)
+                # else: rename(value.n, old_value.n)
             else: add(inst)
 
     def applier(F):
@@ -386,11 +387,9 @@ def global_elimination(F, value_host): # GlobE
     for name, value in global_to_value.items():
         index[value.n].label = name
 
-    def get_global_to_value():
-        return applier
-
-    value_host.shift()
-    value_host.get_global_to_value = get_global_to_value
+    # value_host.shift()
+    applier(F)
+    value_host.global_to_value = applier
 
 
 
@@ -422,6 +421,10 @@ def main_loop(F, builtins, debug=False, is_global=False):
     pred_ref = [None, [], []]
     if debug: check_size(("original",), blocks, pred_ref)
 
+    if is_global:
+        global_elimination(F, value_host) # GlobE
+        if debug: check_size(("GlobE",), blocks, pred_ref)
+
     prev_hash = None
     for i in range(7):
         copy_propagation(blocks, value_host) # CP
@@ -441,10 +444,6 @@ def main_loop(F, builtins, debug=False, is_global=False):
 
         common_subexpression_elimination(blocks, IDom)
         if debug: check_size(("CSE",), blocks, pred_ref)
-
-        #if is_global and not i:
-        #    global_elimination(F, value_host) # GlobE
-        #    if debug: check_size(("GlobE",), blocks, pred_ref)
 
         next_hash = ssa_hash(F)
         if next_hash == prev_hash: break

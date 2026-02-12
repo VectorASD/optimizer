@@ -201,6 +201,14 @@ def executor(id, runners, F, memory, globals, cells, value_host=None):
 
 
 
+# original:       109 (source1)
+# + CP+TCE:        96
+# + ConstProp+DCE: 65
+# + BE:            61
+# + φE+BM:         55
+# + CSE+CP+TCE:    40
+# final:           40
+
 source1 = """
 print("Hello meower!")
 print("I can calculate it:", 1+2, 7)
@@ -233,13 +241,14 @@ print(range(5, 7))
 deadcode = 1, bytes.fromhex, range(5, int(input("stop: ")))
 """
 
-# original:       109
-# + CP+TCE:        96
-# + ConstProp+DCE: 65
-# + BE:            61
-# + φE+BM:         55
-# + CSE+CP+TCE:    40
-# final:           40
+# original:        144 (source2)
+# + GlobE:         130
+# + CP+TCE:        123
+# + ConstProp+DCE: 101
+# + BE:             99
+# + φE+BM:          96
+# + CSE+CP+TCE:     89
+# final:            89
 
 source2 = """
 a = 5
@@ -325,7 +334,7 @@ print(var)
 """
 
 if __name__ == "__main__":
-    module, def_id = py_visitor(source4, builtins)
+    module, def_id = py_visitor(source1, builtins)
 
     runners = []
     globals = {}
@@ -342,16 +351,20 @@ if __name__ == "__main__":
     runners = []
     globals = {}
     cells = tuple({} for i in range(len(module)))
+    is_global = True
     for id in (def_id, *(i for i in range(len(module)) if i != def_id)):
         F = module[id]
         print(dashed_separator)
         stringify_cfg(F)
         print()
 
-        is_global = id == def_id
-        value_host, F = main_loop(F, builtins, debug=True, is_global=is_global)
-        if is_global: applier = value_host.get_global_to_value()
-        applier(F)
+        if is_global:
+            value_host, F = main_loop(F, builtins, debug=True, is_global=True)
+            applier = value_host.global_to_value
+            is_global = False
+        else:
+            applier(F)
+            value_host, F = main_loop(F, builtins, debug=True)
 
         print()
         stringify_cfg(F)
@@ -359,5 +372,4 @@ if __name__ == "__main__":
         runners.append(executor(id, runners, F, memory, globals, cells, value_host))
 
     print(dashed_separator)
-    exit()
     runners[def_id]()
