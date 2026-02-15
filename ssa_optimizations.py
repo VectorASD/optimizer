@@ -170,6 +170,109 @@ def branch_folding(F, bb, erased_bb): # BF
 
 
 
+def unconditional_jump_forwarding(F): # UJF
+    blocks, preds, succs = F
+    queue = tuple(blocks)
+
+    stringify_cfg(F) # TODO: убрать после фикса source2 на исключения
+    while queue:
+        new_queue = []
+        queue_append = new_queue.append
+
+        for bb in queue:
+            try: insts = blocks[bb]
+            except KeyError: continue
+            if len(insts) != 1: continue
+            last_inst = insts[0]
+            kind = last_inst[0]
+            if kind != 3: continue #3: goto <label>
+
+            target = last_inst[1]
+            # Проталкиваем переход через bb к target
+            for pred in preds[bb]:
+                p_insts = blocks[pred]
+
+                p_last = p_insts[-1]
+                p_kind = p_last[0]
+                changed = False
+
+                if p_kind == 3: # goto <bb> → goto <target>
+                    assert p_last[1] == bb # TODO: пока не поддерживаются ветвления исключений
+                    p_insts[-1] = (3, target, p_last[2])
+                    p_succs = succs[pred]
+                    for i, succ_bb in enumerate(p_succs):
+                        if succ_bb == bb: p_succs[i] = target
+                    changed = True
+                elif p_kind == 14: # goto <yeah> if <var> else <nop>
+                    yeah, cond, nop = p_last[1], p_last[2], p_last[3]
+                    assert bb == yeah or bb == nop # TODO: пока не поддерживаются ветвления исключений
+                    p_succs = succs[pred]
+                    for i, succ_bb in enumerate(p_succs):
+                        if succ_bb == bb: p_succs[i] = target
+                    yeah2 = target if bb == yeah else yeah
+                    nop2 = target if bb == nop else nop
+                    if yeah2 == nop2:
+                        p_insts[-1] = (3, yeah2, p_last[4]) # goto <label>
+                        branch_folding(F, bb, nop2) # BF
+                    else:
+                        p_insts[-1] = (14, yeah2, cond, nop2, p_last[4])
+                    changed = True
+
+                if changed:
+                    s_preds = preds[target]
+                    for i, pred_bb in enumerate(s_preds):
+                        if pred_bb == bb: s_preds[i] = pred
+                    queue_append(pred)
+            del blocks[bb], preds[bb], succs[bb] # minus node/vertex ;'-}
+        queue = new_queue
+    # TODO: убрать после фикса source2 на исключения
+    print("\n")
+    stringify_cfg(F)
+    print("~" * 77)
+
+def conditional_jump_forwarding(F): # CJF (under construction)
+    blocks, preds, succs = F
+    queue = tuple(blocks)
+
+    while queue:
+        new_queue = []
+        queue_append = new_queue.append
+
+        for bb in queue:
+            try: insts = blocks[bb]
+            except KeyError: continue
+            if len(insts) != 1: continue
+            last_inst = insts[0]
+            kind = last_inst[0]
+            if op != 14: continue #14: goto <yeah> if <var> else <nop>
+
+            yeah, cond, nop = last_inst[1], last_inst[2], last_inst[3]
+
+            # Проталкиваем условный переход в предков, у которых терминатор — goto bb
+            for pred in tuple(preds[bb]):
+                try: p_insts = blocks[pred]
+                except KeyError: continue
+
+                p_last = p_insts[-1]
+                p_op = p_last[0]
+
+                # Только безусловные goto bb
+                if p_op != 3 or p_last[1] != bb: continue
+
+                # Заменяем всю инструкцию терминатора
+                p_insts[-1] = (14, yeah, cond, nop, last_inst[4])
+                succs[pred] = [yeah, nop]
+
+                # обновляем preds для L1 и L2
+                preds[yeah].append(pred)
+                preds[nop].append(pred)
+                preds[bb].remove(pred)
+
+                queue_append(pred)
+        queue = new_queue
+
+
+
 def branch_elimination(F): # BE
     blocks, preds, succs = F
     it = iter(preds)
@@ -419,6 +522,9 @@ def main_loop(F, builtins, debug=False, is_global=False):
         idx2value = constant_propogation_and_folding(F, value_host, builtins) # ConstProp
         dead_code_elimination(blocks, value_host) # DCE
         if debug: check_size(("ConstProp", "DCE"), blocks, pred_ref)
+
+        unconditional_jump_forwarding(F) # UJF
+        if debug: check_size(("UJF",), blocks, pred_ref)
 
         branch_elimination(F) # BE
         if debug: check_size(("BE",), blocks, pred_ref)
