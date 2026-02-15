@@ -339,8 +339,18 @@ check_global()
 print(var)
 """
 
+source5 = """
+# здесь input() сам всегда вводит 7 (при том, сразу числом, а не строкой)
+str = "dead" if input() else "beef" # намеренно ломает константность
+if input():
+    result = bytes.fromhex(str)
+else:
+    result = bytes.fromhex(str)
+print("check CSE:", result)
+"""
+
 if __name__ == "__main__":
-    module, def_id = py_visitor(source2, builtins)
+    module, def_id = py_visitor(source5, builtins)
 
     runners = []
     globals = {}

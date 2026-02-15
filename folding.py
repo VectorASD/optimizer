@@ -226,7 +226,6 @@ FOLDING = (
     "sum",
     "tuple",
 )
-FOLDING_SET = set(builtins[name] for name in FOLDING if callable(builtins[name]))
 
 
 
@@ -824,3 +823,5 @@ for obj in FOLDING:
     value = builtins[obj]
     if callable(value):
         FOLDING_ATTRIBUTE_DICT[value] = f"builtins.{value}", "builtins", obj
+
+FOLDING_SET = set(FOLDING_ATTRIBUTE_DICT)
