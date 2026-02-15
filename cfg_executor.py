@@ -201,13 +201,14 @@ def executor(id, runners, F, memory, globals, cells, value_host=None):
 
 
 
-# original:       109 (source1)
-# + CP+TCE:        96
-# + ConstProp+DCE: 65
-# + BE:            61
-# + φE+BM:         55
-# + CSE+CP+TCE:    40
-# final:           40
+# original:       135 (source1)
+# + GlobE:        117
+# + CP+TCE:       104
+# + ConstProp+DCE: 70
+# + BE:            66
+# + φE+BM:         60
+# + CSE+CP+TCE:    46
+# final:           46
 
 source1 = """
 print("Hello meower!")
@@ -241,14 +242,15 @@ print(range(5, 7))
 deadcode = 1, bytes.fromhex, range(5, int(input("stop: ")))
 """
 
-# original:        144 (source2)
-# + GlobE:         130
-# + CP+TCE:        123
-# + ConstProp+DCE: 101
-# + BE:             99
-# + φE+BM:          96
-# + CSE+CP+TCE:     89
-# final:            89
+# original:                           162 (source2)
+# + GlobE:                            146
+# + CP+TCE:                           137
+# + ConstProp+DCE:                    109
+# + BE:                               107
+# + φE+BM:                            104
+# + CSE+CP+TCE:                       100
+# + ConstProp+DCE+BE+φE+BM+CSE+CP+TCE: 99
+# final:                               99
 
 source2 = """
 a = 5
@@ -282,6 +284,10 @@ while i <= 5:
 else: print("else in while")
 
 pass
+
+if input(): var = range(5, 8)
+else: var = range(5, 8)
+print(var) # check function CSE
 """
 
 source3 = """
@@ -334,7 +340,7 @@ print(var)
 """
 
 if __name__ == "__main__":
-    module, def_id = py_visitor(source1, builtins)
+    module, def_id = py_visitor(source2, builtins)
 
     runners = []
     globals = {}

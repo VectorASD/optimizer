@@ -131,13 +131,11 @@ def naive_SSA(BB_F, debug=False):
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ SSA ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Cytron ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 def compute_dominators(BB_F): # Algorithm D
-    blocks = BB_F[0]
-    preds = BB_F[1]
-    succs = BB_F[2]
+    blocks, preds, succs = BB_F
 
     entrances = set()
     for bb in blocks:
@@ -213,9 +211,102 @@ def compute_idom(Dom, index, index_arr): # Algorithm DT
 
     # Здесь-то мы и чувствуем всю эту боль в виде O(N³)...
     # Решение! Перейти на более совершенный алгоритм (любой из них), что находит IDom без Dom:
-    # - Algorithm DPO:        O(N × E)
-    # - Lengauer–Tarjan (LT): O((N + E) α(N)); α(N) — обратная функция Аккермана
+    # - Dominators by Data-Flow (DPO) (1970-1975): 𝑂(N × E)
+    # - Lengauer–Tarjan         (LT)       (1979): 𝑂((N + E) α(N)); α(N) — обратная функция Аккермана
+    # - Cooper–Harvey–Kennedy   (CHK)      (2001): примерно 𝑂(𝑁 × avg_preds), на практике близко к LT
     return IDom, dom_tree
+
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ CHK ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+def compute_idom_fast(BB_F): # Cooper–Harvey–Kennedy (2001)
+    blocks, preds, succs = BB_F
+
+    entrances = set()
+    for bb in blocks:
+        if not preds[bb]:
+            entrances.add(bb)
+
+    custom_entry = len(entrances) > 1
+    if custom_entry:
+        entry = "<entry>"
+        for bb in entrances: preds[bb].append(entry)
+        succs[entry] = list(entrances)
+    else:
+        entry = next(iter(entrances))
+
+    # 1. DFS order
+    order = []
+    visited = set()
+
+    def dfs(bb):
+        for succ in succs[bb]:
+            if succ not in visited:
+                visited.add(succ)
+                order.append(succ)
+                dfs(succ)
+
+    dfs(entry)
+
+    # map block → DFS index
+    index_arr = tuple(order) if custom_entry else (entry, *order)
+    index = {bb: 1 << i for i, bb in enumerate(index_arr)}
+    if custom_entry: index[entry] = 1 << len(index_arr)
+
+    # 2. init IDom
+    def intersect(b1, b2):
+    # climb up the dominator tree using DFS order
+        while b1 != b2:
+            while index[b1] > index[b2]:
+                b1 = IDom[b1]
+            while index[b2] > index[b1]:
+                b2 = IDom[b2]
+        return b1
+
+    IDom = {bb: None for bb in order}
+    IDom[entry] = entry
+
+    changed = True
+    while changed:
+        changed = False
+        for bb in order:
+            preds_bb = preds[bb]
+            # pick first predecessor with known IDom
+            new_idom = None
+            for p in preds_bb:
+                if IDom[p] is not None:
+                    new_idom = p
+                    break
+            if new_idom is None:
+                continue
+
+            # intersect with other predecessors
+            for p in preds_bb:
+                if p == new_idom or IDom[p] is None:
+                    continue
+                new_idom = intersect(p, new_idom)
+
+            if IDom[bb] != new_idom:
+                IDom[bb] = new_idom
+                # dom_tree[new_idom].append(bb) Так нельзя! IDom[bb] != new_idom пересчитывается несколько раз! :)
+                changed = True
+
+    if custom_entry:
+        for bb in entrances: preds[bb].pop() # append(entry)
+        del succs[entry]
+        del IDom[entry]
+        del index[entry]
+
+    return index, index_arr, IDom, intersect
+
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ SSA ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 def compute_df(BB_F, IDom, index): # Algorithm DF (Dominance Frontier, Фронт Доминирования)
     blocks = BB_F[0]
@@ -232,8 +323,6 @@ def compute_df(BB_F, IDom, index): # Algorithm DF (Dominance Frontier, Фрон�
                 DF[r] |= shift
                 r = IDom[r]
     return DF
-
-
 
 def static_insertion(BB_F, all_vars, DF, index_arr, debug=False): # Algorithm SI
     blocks = BB_F[0]
@@ -338,7 +427,7 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
 
 
 
-def SSA(BB_F, debug=False, predefined=()): # Static Single Assignment
+def SSA(BB_F, debug=False, predefined=(), best=True): # Static Single Assignment
     """ Как из книги...
     BB_F[1].clear()
     BB_F[1].update({
@@ -353,14 +442,23 @@ def SSA(BB_F, debug=False, predefined=()): # Static Single Assignment
     })
     """
 
-    Dom, index, index_arr = compute_dominators(BB_F)
-    # Dom[bb] — это ВСЕ блоки, которые невозможно обойти, чтобы попасть в bb
-    if debug:
-        for bb, bit_mask in Dom.items():
-            print(f"Dom({bb}): {bits_by_index(index_arr, bit_mask)}")
+    if not best:
+        Dom, index, index_arr = compute_dominators(BB_F)
+        # Dom[bb] — это ВСЕ блоки, которые невозможно обойти, чтобы попасть в bb
+        if debug:
+            for bb, bit_mask in Dom.items():
+                print(f"Dom({bb}): {bits_by_index(index_arr, bit_mask)}")
+    
+        IDom, dom_tree = compute_idom(Dom, index, index_arr)
+        # IDom[bb] - это САМЫЙ ПОСЛЕДНИЙ блок, который невозможно обойти, чтобы попасть в bb
+    else:
+        index, index_arr, IDom, _ = compute_idom_fast(BB_F)
 
-    IDom, dom_tree = compute_idom(Dom, index, index_arr)
-    # IDom[bb] - это САМЫЙ ПОСЛЕДНИЙ блок, который невозможно обойти, чтобы попасть в bb
+        dom_tree = defaultdict(list)
+        for bb, parent in IDom.items():
+            if bb != parent: # пропускаем entry
+                dom_tree[parent].append(bb)
+
     if debug:
         print()
         for bb, parent in IDom.items():

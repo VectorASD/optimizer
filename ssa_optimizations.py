@@ -1,4 +1,4 @@
-from ssa import SSA
+from ssa import SSA, compute_idom_fast
 from HIR_parser import stringify_cfg, HAS_LHS, uses_V_getters, WITHOUT_SIDE_EFFECT, ssa_hash, Value
 from utils import bin_ops, unar_ops
 from folding import FOLDING_ATTRIBUTE_DICT, FOLDING_SET
@@ -284,31 +284,14 @@ def fake_DCE(blocks, value_host):
 
 
 
-def make_chain(r, IDom):
-    chain = []; append = chain.append
-    while r:
-        append(r)
-        r = IDom.get(r)
-    chain.reverse()
-    return chain
-
-def common_block(chain, chain2):
-    pop = chain.pop
-    for _ in range(max(0, len(chain) - len(chain2))):
-        pop()
-    i = len(chain) - 1
-    while chain[i] != chain2[i]:
-        i -= 1
-        pop()
-    return chain[i]
-
-def common_subexpression_elimination(blocks, IDom): # CSE
+def common_subexpression_elimination(blocks, IDom, intersect): # CSE
     subs = defaultdict(set)
     for bb, insts in blocks.items():
         for i, inst in enumerate(insts):
             kind = inst[0]
-            if HAS_LHS[kind] and (WITHOUT_SIDE_EFFECT[kind] or kind == 6 and inst[2].label in FOLDING_SET):
-                subs[(kind, inst[2:-1])].add((bb, i, inst[1]))
+            if HAS_LHS[kind] and (WITHOUT_SIDE_EFFECT[kind]): # or kind == 6 and inst[2].label in FOLDING_SET):
+                part = inst[2:-1]
+                subs[(kind, part, type(part[0]) if part else None)].add((bb, i, inst[1]))
 
     queue = (key for key, bb_set in subs.items() if len(bb_set) > 1)
 
@@ -316,10 +299,9 @@ def common_subexpression_elimination(blocks, IDom): # CSE
         sub = subs[key]
         defs = iter(sub)
         bb = next(defs)[0]
-        chain = make_chain(bb, IDom)
         for next_def in defs:
             next_bb = next_def[0]
-            if next_bb != bb: bb = common_block(chain, make_chain(next_bb, IDom))
+            bb = intersect(bb, next_bb)
 
         commons = []; add = commons.append
         for next_bb, i, name in sub:
@@ -442,7 +424,9 @@ def main_loop(F, builtins, debug=False, is_global=False):
         block_merging(F) # BM
         if debug: check_size(("φE", "BM"), blocks, pred_ref)
 
-        common_subexpression_elimination(blocks, IDom)
+        index, index_arr, IDom, intersect = compute_idom_fast(F)
+
+        common_subexpression_elimination(blocks, IDom, intersect)
         if debug: check_size(("CSE",), blocks, pred_ref)
 
         next_hash = ssa_hash(F)
