@@ -226,7 +226,7 @@ FOLDING = (
     "sum",
     "tuple",
 )
-FOLDING_SET = set(f"_{name}" for name in FOLDING if callable(builtins[name]))
+FOLDING_SET = set(builtins[name] for name in FOLDING if callable(builtins[name]))
 
 
 

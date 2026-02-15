@@ -295,9 +295,11 @@ def compute_idom_fast(BB_F): # Cooper–Harvey–Kennedy (2001)
                 changed = True
 
     if custom_entry:
-        for bb in entrances: preds[bb].pop() # append(entry)
-        del succs[entry]
+        for bb in entrances:
+            preds[bb].pop() # append(entry)
+            del IDom[bb]
         del IDom[entry]
+        del succs[entry]
         del index[entry]
 
     return index, index_arr, IDom, intersect

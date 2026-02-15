@@ -248,9 +248,9 @@ deadcode = 1, bytes.fromhex, range(5, int(input("stop: ")))
 # + ConstProp+DCE:                    109
 # + BE:                               107
 # + φE+BM:                            104
-# + CSE+CP+TCE:                       100
-# + ConstProp+DCE+BE+φE+BM+CSE+CP+TCE: 99
-# final:                               99
+# + CSE+CP+TCE:                        96
+# + ConstProp+DCE+BE+φE+BM+CSE+CP+TCE: 95
+# final:                               95
 
 source2 = """
 a = 5

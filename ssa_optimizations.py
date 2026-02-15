@@ -151,6 +151,9 @@ def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
                     erased_bb = inst[3 if value else 1]
                     branch_folding(F, bb, erased_bb) # BF
 
+    for value, const in zip(value_host.index, idx2value):
+        value.set_const(const)
+
 
 
 def branch_folding(F, bb, erased_bb): # BF
@@ -240,7 +243,7 @@ def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
                 idx = inst[1].n
                 idx2uses[idx] = uses
                 if kind == 6: # <var> = <func>(<var|num>, ...)
-                    idx2can_delete[idx] = inst[2].label in FOLDING_SET
+                    idx2can_delete[idx] = inst[2].const in FOLDING_SET
                 else: idx2can_delete[idx] = WITHOUT_SIDE_EFFECT[kind]
 
     queue = []
@@ -289,7 +292,7 @@ def common_subexpression_elimination(blocks, IDom, intersect): # CSE
     for bb, insts in blocks.items():
         for i, inst in enumerate(insts):
             kind = inst[0]
-            if HAS_LHS[kind] and (WITHOUT_SIDE_EFFECT[kind]): # or kind == 6 and inst[2].label in FOLDING_SET):
+            if HAS_LHS[kind] and (WITHOUT_SIDE_EFFECT[kind] or kind == 6 and inst[2].const in FOLDING_SET):
                 part = inst[2:-1]
                 subs[(kind, part, type(part[0]) if part else None)].add((bb, i, inst[1]))
 
@@ -413,7 +416,7 @@ def main_loop(F, builtins, debug=False, is_global=False):
         trivial_copy_elemination(blocks) # TCE
         if debug: check_size(("CP", "TCE"), blocks, pred_ref)
 
-        constant_propogation_and_folding(F, value_host, builtins) # ConstProp
+        idx2value = constant_propogation_and_folding(F, value_host, builtins) # ConstProp
         dead_code_elimination(blocks, value_host) # DCE
         if debug: check_size(("ConstProp", "DCE"), blocks, pred_ref)
 

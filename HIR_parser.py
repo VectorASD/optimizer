@@ -345,6 +345,8 @@ class Value:
         return self.n > right.n
     def __hash__(self):
         return self.n
+    def set_const(self, const):
+        self.const = const
 
 class ValueList(list):
     def __init__(self, value):
@@ -361,6 +363,9 @@ class ValueList(list):
         return self.n > right.n
     def __hash__(self):
         return self.n
+    def set_const(self, const):
+        self.const = const
+        for value in self: value.const = const
 
 class ValueHost:
     def __init__(self, predefined):
