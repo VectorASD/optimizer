@@ -10,10 +10,10 @@ builtins = {f"{name}": builtin for name, builtin in vars(builtins).items()}
 import struct
 builtins["struct"] = struct
 
-def fake_input(*a):
+def not_input(*a):
     print(*a, end="") #; print(7)
     return 7
-builtins["input"] = fake_input
+builtins["input"] = not_input
 
 
 
@@ -58,7 +58,11 @@ def misc_loader(F, plug, memory=None, value_host=None):
 
 
 
-def executor(id, runners, F, memory, globals, cells, value_host=None):
+def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None):
+    F = module[id]
+    if memory is None:
+        memory = globals  # locals <-> globals
+
     def code_0(var, setter): # <var> = <var>
         memory[var] = memory[setter]
 
@@ -120,8 +124,9 @@ def executor(id, runners, F, memory, globals, cells, value_host=None):
     def code_17(var): # raise <var>
         raise Exceptor(memory[var])
 
-    def code_18(var, def_id): # <var> = <def>
-        memory[var] = runners[def_id]
+    def code_18(var, def_id, defaults): # <var> = <def>, defaults:(<var>, ...)
+        defaults = [memory[d] for d in defaults]
+        memory[var] = executor(def_id, globals, {}, defaults)
 
     def code_19(var, name): # <var> = builtin:<var>
         memory[var] = builtins[name]
@@ -138,9 +143,31 @@ def executor(id, runners, F, memory, globals, cells, value_host=None):
     def code_23(to_id, name, var): # scope:<def>:<var> = <var>
         cells[to_id][name] = memory[var]
 
-    functions = ((name, value) for name, value in locals().items() if name.startswith("code_"))
-    functions = sorted(functions, key=lambda x: int(x[0][len("code_"):]))
-    dispatch = tuple(func for _, func in functions)
+    def code_24(args, var, n, _):  # <var> = ARGS[<n>]   (type: <ann>)
+        try: memory[var] = args[n]
+        except IndexError:
+            raise TypeError(f"def#{id}() missing N required positional arguments")
+
+    def code_25(args, var, n, default_n, _):  # <var> = ARGS[<n>] or <default_n>   (type: <ann>)
+        try: memory[var] = args[n]
+        except IndexError: memory[var] = defaults[default_n]
+
+    def code_26(args, var, n, _):  # <var> = ARGS[<n>:]   (type: <ann>)
+        memory[var] = args[n:]
+
+    def code_27(args, n):  # if ARGS[<n>:]: raise TypeError(...)
+        vararg_size = len(args) - n
+        if vararg_size > 0:
+            raise TypeError(f"def#{id}() takes {n} positional arguments but {len(args)} were given")
+
+    dispatch = [
+        code_0, code_1, code_2, code_3, code_4,
+        code_5, code_6, code_7, code_8, code_9,
+        code_10, code_11, code_12, code_13, code_14,
+        code_15, code_16, code_17, code_18, code_19,
+        code_20, code_21, code_22, code_23, code_24,
+        code_25, code_26, code_27
+    ]
 
     def run_block(bb, block):
         skips = (Goto, Result)
@@ -161,8 +188,14 @@ def executor(id, runners, F, memory, globals, cells, value_host=None):
                 print("• exc:", id, bb, i, "•", inst)
                 raise e
 
-    def runner():
-        if preinit is not None: preinit()
+    def runner(*args):
+        if preinit is not None:
+            preinit()
+
+        dispatch[24] = lambda *a: code_24(args, *a)
+        dispatch[25] = lambda *a: code_25(args, *a)
+        dispatch[26] = lambda *a: code_26(args, *a)
+        dispatch[27] = lambda n: code_27(args, n)
 
         nonlocal cur_idx, exc_items
         blocks, preds, succs = F
@@ -349,23 +382,37 @@ else:
 print("check CSE:", result)
 """
 
-if __name__ == "__main__":
-    module, def_id = py_visitor(source5, builtins)
+source6 = """
+def checker(a, b: int, c: i = 42, *d: int):
+    print(a, b, c, d)
 
-    runners = []
-    globals = {}
-    cells = tuple({} for i in range(len(module)))
+def checker2(a: i = 9, b: i = 10):
+    print(a, b)
+
+checker(1, 2)
+checker(1, 2, 3)
+checker(1, 2, 3, 4)
+checker(1, 2, 3, 4, 5)
+
+print()
+
+checker2()
+checker2(1)
+checker2(1, 2)
+"""
+
+
+if __name__ == "__main__":
+    module, def_id = py_visitor(source6, builtins)
+
     for id, F in enumerate(module):
         print(f"\n••• def#{id}")
         stringify_cfg(F)
-        memory = globals if id == def_id else {}
-        runners.append(executor(id, runners, F, memory, globals, cells))
 
     print(dashed_separator)
-    runners[def_id]()
+    executor(def_id, {})()
 
     runners = []
-    globals = {}
     cells = tuple({} for i in range(len(module)))
     is_global = True
     for id in (def_id, *(i for i in range(len(module)) if i != def_id)):
@@ -384,8 +431,6 @@ if __name__ == "__main__":
 
         print()
         stringify_cfg(F)
-        memory = globals if id == def_id else {}
-        runners.append(executor(id, runners, F, memory, globals, cells, value_host))
 
     print(dashed_separator)
-    runners[def_id]()
+    executor(def_id, {}, value_host=value_host)()

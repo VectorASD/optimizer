@@ -22,7 +22,7 @@ import_ast()
 
 
 
-def visitors(ast, module, def_tree):
+def visitors(ast, module, def_tree, init_insts=()):
     def typename(T):
         if T.__module__ == "builtins": return T.__name__
         return f"{T.__module__}.{T.__name__}"
@@ -33,7 +33,7 @@ def visitors(ast, module, def_tree):
             exit(f"TypeError in {def_name!r}: {typename(type(node))!r} is not {typename(T)!r}")
 
     def explore_node(node):
-        print("Type:", typename(type(node)))
+        print("\n\n• Type:", typename(type(node)))
         try: pprint(type(node)._field_types)
         except AttributeError: pass
         print()
@@ -101,7 +101,10 @@ def visitors(ast, module, def_tree):
         preds[yeah].append(current_block)
         preds[nop].append(current_block)
         succs[current_block].extend((yeah, nop))
+
     on_block()
+    for inst in init_insts:
+        add_inst((*inst, {}))
 
     def trace():
         def add_inst_wrap(inst):
@@ -380,16 +383,55 @@ compound_stmt:
         add(17, exc) # raise <var>
 
     def visit_FunctionDef(node):
-        explore_node(node)
-        explore_node(node.args)
-        assert not node.type_comment, node.type_comment # TODO
-        assert not node.type_params, node.type_params # TODO
-        assert not node.decorator_list, node.decorator_list # TODO
-        assert not node.returns, node.returns # TODO
+        def visit_arg(node):
+            assert not node.type_comment, node.type_comment # TODO
+            ann = node.annotation
+            if ann is not None:
+                assert isinstance(ann, ast_Name), ann
+                assert isinstance(ann.ctx, ast_Load), ann.ctx
+                annotation = ann.id
+            else:
+                annotation = None
+            return f"_{node.arg}", annotation
 
-        def_id2 = visitors(node.body, module, def_tree)
+        def visit_arguments(node, _add):
+            default_edge = -len(node.defaults)
+            args_n = len(node.args)
+            for arg_i, arg in enumerate(node.args):
+                name, annotation = visit_arg(arg)
+                idx = arg_i - args_n
+                if idx < default_edge:
+                    _add((24, name, arg_i, annotation))  # <var> = ARGS[<n>]   (type: <ann>)
+                else:
+                    _add((25, name, arg_i, idx, annotation))  # <var> = ARGS[<n>] or <default_n>   (type: <ann>)
+
+            if node.vararg is not None:
+                name, annotation = visit_arg(node.vararg)
+                _add((26, name, args_n, annotation))  # <var> = ARGS[<n>:]   (type: <ann>)
+            else:
+                _add((27, args_n))  # if ARGS[<n>:]: raise TypeError(...)
+
+          # explore_node(node)
+            assert node.kwarg is None, node.kwarg  # TODO
+            assert not node.posonlyargs, node.posonlyargs  # TODO
+            assert not node.kwonlyargs, node.kwonlyargs  # TODO
+            assert not node.kw_defaults, node.kw_defaults  # TODO
+
+            return tuple(map(visit_expression, node.defaults))
+
+      # explore_node(node)
+        assert not node.type_comment, node.type_comment  # TODO
+        assert not node.type_params, node.type_params  # TODO
+        assert not node.decorator_list, node.decorator_list  # TODO
+        assert not node.returns, node.returns  # TODO
+
+        init_insts = []
+        defaults = visit_arguments(node.args, init_insts.append)
+        free_regs(*defaults)
+
+        def_id2 = visitors(node.body, module, def_tree, init_insts)
         def_tree[def_id2] = def_id
-        add(18, f"_{node.name}", def_id2) # <var> = <def>
+        add(18, f"_{node.name}", def_id2, defaults)  # <var> = <def>, defaults:(<var>, ...)
 
     def visit_Return(node):
         if node.value:

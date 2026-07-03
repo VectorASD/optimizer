@@ -174,7 +174,7 @@ def unconditional_jump_forwarding(F): # UJF
     blocks, preds, succs = F
     queue = tuple(blocks)
 
-    stringify_cfg(F) # TODO: убрать после фикса source2 на исключения
+    # stringify_cfg(F) # TODO: убрать после фикса source2 на исключения
     while queue:
         new_queue = []
         queue_append = new_queue.append
@@ -226,9 +226,9 @@ def unconditional_jump_forwarding(F): # UJF
             del blocks[bb], preds[bb], succs[bb] # minus node/vertex ;'-}
         queue = new_queue
     # TODO: убрать после фикса source2 на исключения
-    print("\n")
-    stringify_cfg(F)
-    print("~" * 77)
+    # print("\n")
+    # stringify_cfg(F)
+    # print("~" * 77)
 
 def conditional_jump_forwarding(F): # CJF (under construction)
     blocks, preds, succs = F
@@ -541,10 +541,6 @@ def main_loop(F, builtins, debug=False, is_global=False):
         next_hash = ssa_hash(F)
         if next_hash == prev_hash: break
         prev_hash = next_hash
-
-    if is_global:
-        global_elimination(F, value_host) # GlobE
-        if debug: check_size(("GlobE",), blocks, pred_ref)
 
     if debug:
         check_size("final", blocks, pred_ref)
