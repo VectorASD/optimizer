@@ -881,7 +881,6 @@ def scope_handler(module: Module, builtins):
 
     used_builtins = set()
     dotted_builtins = set()
-    nonlocal_data = [defaultdict(set) for i in range(len(module))]
     def2cell_left  = [{} for i in range(len(module))]
     def2cell_right = [{} for i in range(len(module))]
     for id, (blocks, preds, succs) in enumerate(module):
@@ -922,9 +921,7 @@ def scope_handler(module: Module, builtins):
                             def2cell_R = def2cell_right[cur_id]
                             if var not in def2cell_R:
                                 def2cell_R[var] = len(def2cell_R)
-                            next_id = def_tree[cur_id]
-                            nonlocal_data[next_id][cur_id].add(var)
-                            cur_id = next_id
+                            cur_id = def_tree[cur_id]
                         def2cell_L = def2cell_left[end_id]
                         if var not in def2cell_L:
                             def2cell_L[var] = len(def2cell_L)

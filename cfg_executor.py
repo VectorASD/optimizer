@@ -129,12 +129,18 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
 
     def code_18(var, def_id, defaults, new_cells, old_cells): # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)"
         defaults = [memory[d] for d in defaults]
-        def run_wrapper(*args):
-            new_closure = [Cell() for i in range(new_cells)]
-            for cell_n in old_cells:
-                new_closure.append(closure[cell_n])
-            return executor(def_id, globals, {}, defaults, new_closure)(*args)
-        memory[var] = run_wrapper
+        if new_cells:
+            # Это очень показательный пример всех функций, добавляющих новые ячейки!
+            # TODO: придумать, как вынести появление new_closure в саму функцию
+            def run_wrapper(*args):
+                new_closure = [Cell() for i in range(new_cells)]
+                for cell_n in old_cells:
+                    new_closure.append(closure[cell_n])
+                return executor(def_id, globals, {}, defaults, new_closure)(*args)
+            memory[var] = run_wrapper
+        else:
+            new_closure = [closure[cell_n] for cell_n in old_cells]
+            memory[var] = executor(def_id, globals, {}, defaults, new_closure)
 
     def code_19(var, name): # <var> = builtin:<var>
         memory[var] = builtins[name]
