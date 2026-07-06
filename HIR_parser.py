@@ -49,44 +49,48 @@ token_re = re.compile(
 
 definitions = (
   # HIR:
-    (1, 0, (2,),      0, "# 0: <var> = <var|num>"), # py: <var> = <var>
-    (1, 0, (2, 4),    0, "# 1: <var> = <var|num> <+|-|*|/|%|...> <var|num>"), # py: <var> = <var> <+|-|*|/|%|...> <var>
-    (0, 0, (1, 3),    1, "# 2: if (<var|num> <cmp> <var|num>) goto <label>"),
-    (0, 0, (),        1, "# 3: goto <label>"),
-    (0, 0, (1,),      1, "# 4: return <var|num>"), # py: return <var>
-    (1, 2, (),        0, "# 5: <var> = phi(<var>, ...)"),
-    (1, 3, (2,),      1, "# 6: <var> = <func>(<var|num>, ...)"), # py: <var> = <func>(<var>, ...)
+    (1, 0, (2,),      1, 1, "# 0: <var> = <var|num>"), # py: <var> = <var>
+    (1, 0, (2, 4),    1, 1, "# 1: <var> = <var|num> <+|-|*|/|%|...> <var|num>"), # py: <var> = <var> <+|-|*|/|%|...> <var>
+    (0, 0, (1, 3),    0, 0, "# 2: if (<var|num> <cmp> <var|num>) goto <label>"),
+    (0, 0, (),        0, 0, "# 3: goto <label>"),
+    (0, 0, (1,),      0, 0, "# 4: return <var|num>"), # py: return <var>
+    (1, 2, (),        1, 1, "# 5: <var> = phi(<var>, ...)"),
+    (1, 3, (2,),      0, 0, "# 6: <var> = <func>(<var|num>, ...)"), # py: <var> = <func>(<var>, ...)
   # python:
-    (1, 0, (),        0, "# 7: <var> = <const>"),
-    (1, 2, (),        0, "# 8: <var> = tuple(<var>, ...)"),
-    (0, 0, (1,),      1, "# 9: check |<var>| == <num>"),
-    (1, 0, (2, 3),    0, "#10: <var> = <var>[<var>]"),
-    (0, 0, (1, 2, 3), 1, "#11: <var>[<var>] = <var>"),
-    (1, 0, (2,),      0, "#12: <var> = <var>.<attr>"),
-    (0, 0, (1, 3),    1, "#13: <var>.<attr> = <var>"),
-    (0, 0, (2,),      1, "#14: goto <label> if <var> else <label>"),
-    (1, 0, (3,),      0, "#15: <var> = <+|-|~|not ><var>"),
-    (0, 0, (),        0, "#16: nop"),
-    (0, 0, (1,),      1, "#17: raise <var>"),
-    (1, 3, (),        1, "#18: <var> = <def>, defaults:(<var>, ...)"),
+    (1, 0, (),        1, 1, "# 7: <var> = <const>"),
+    (1, 2, (),        1, 1, "# 8: <var> = tuple(<var>, ...)"),
+    (0, 0, (1,),      0, 0, "# 9: check |<var>| == <num>"),
+    (1, 0, (2, 3),    1, 0, "#10: <var> = <var>[<var>]"),
+    (0, 0, (1, 2, 3), 0, 0, "#11: <var>[<var>] = <var>"),
+    (1, 0, (2,),      1, 0, "#12: <var> = <var>.<attr>"),
+    (0, 0, (1, 3),    0, 0, "#13: <var>.<attr> = <var>"),
+    (0, 0, (2,),      0, 0, "#14: goto <label> if <var> else <label>"),
+    (1, 0, (3,),      1, 1, "#15: <var> = <+|-|~|not ><var>"),
+    (0, 0, (),        1, 1, "#16: nop"),
+    (0, 0, (1,),      0, 0, "#17: raise <var>"),
+    (1, 3, (),        0, 0, "#18: <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)"),
 
-    (1, 0, (),        0, "#19: <var> = builtin:<var>"),
-    (1, 0, (),        0, "#20: <var> = glob:<var>"),
-    (0, 0, (2,),      1, "#21: glob:<var> = <var>"),
-    (1, 0, (),        0, "#22: <var> = scope:<def>:<var>"),
-    (0, 0, (3,),      1, "#23: scope:<def>:<var> = <var>"),
+    (1, 0, (),        1, 1, "#19: <var> = builtin:<var>"),
+    (1, 0, (),        1, 0, "#20: <var> = glob:<var>"),
+    (0, 0, (2,),      0, 0, "#21: glob:<var> = <var>"),
+    (1, 0, (),        1, 0, "#22: <var> = cell:#<n>"),
+    (0, 0, (2,),      0, 0, "#23: cell:#<n> = <var>"),
 
-    (1, 0, (),        0, "#24: <var> = ARGS[<n>]   (type: <ann>)"),
-    (1, 0, (),        0, "#25: <var> = ARGS[<n>] or <default_n>   (type: <ann>)"),
-    (1, 0, (),        0, "#26: <var> = ARGS[<n>:]   (type: <ann>)"),
-    (0, 0, (),        0, "#27: if ARGS[<n>:]: raise TypeError(...)"),
+    (1, 0, (),        1, 1, "#24: <var> = ARGS[<n>]   (type: <ann>)"),
+    (1, 0, (),        1, 1, "#25: <var> = ARGS[<n>] or <default_n>   (type: <ann>)"),
+    (1, 0, (),        1, 1, "#26: <var> = ARGS[<n>:]   (type: <ann>)"),
+    (0, 0, (),        0, 0, "#27: if ARGS[<n>:]: raise TypeError(...)"),
 )
+def to_tuple(obj):
+    if not obj:
+        return ()
+    return obj if isinstance(obj, tuple) else (obj,)
 
 
 
 HAS_LHS = tuple(_def[0] for _def in definitions)
-WITH_SIDE_EFFECT = tuple(_def[3] for _def in definitions)
-WITHOUT_SIDE_EFFECT = tuple(not flag for flag in WITH_SIDE_EFFECT)
+CAN_DCE = tuple(_def[3] for _def in definitions)
+CAN_CSE = tuple(_def[4] for _def in definitions)
 
 uses_getters = []
 for _def in definitions:
@@ -96,9 +100,9 @@ for _def in definitions:
             f"    var = inst[{idx}]",
              "    if isinstance(var, str): add(var)",
         ))
-    if _def[1]:
+    for value in to_tuple(_def[1]):
         code.extend((
-            f"    for var in inst[{_def[1]}]:",
+            f"    for var in inst[{value}]:",
              "        if isinstance(var, str): add(var)",
         ))
     if len(code) == 1: code[0] += " pass"
@@ -233,13 +237,15 @@ def stringify_instr(ops, i, write):
         case 15: write(f"{op[1]} = {op[2]}{' ' * (len(op[2]) > 1)}{op[3]}")
         case 16: write("nop")
         case 17: write(f"raise {op[1]}")
-        case 18: write(f"{op[1]} = def#{op[2]}, defaults:({', '.join(map(str, op[3]))})")
+        case 18:
+            cells = (*(("?",) * op[4]), *(f"cell:#{n}" for n in op[5]))
+            write(f"{op[1]} = def#{op[2]}, defaults:({', '.join(map(str, op[3]))}), cells:({', '.join(cells)})")
 
         case 19: write(f"{op[1]} = builtin:{op[2]}")
         case 20: write(f"{op[1]} = glob:{op[2]}")
         case 21: write(f"glob:{op[1]} = {op[2]}")
-        case 22: write(f"{op[1]} = scope:{op[2]}:{op[3]}")
-        case 23: write(f"scope:{op[1]}:{op[2]} = {op[3]}")
+        case 22: write(f"{op[1]} = cell:#{op[2]}")
+        case 23: write(f"cell:#{op[1]} = {op[2]}")
 
         case 24:
             write(f"{op[1]} = ARGS[{op[2]}]")
@@ -353,9 +359,12 @@ def all_vars_in_cfg(blocks, vars=None):
 class SSA_Error(Exception): pass
 
 class Value:
+    __slots__ = ("n", "label", "side_effect", "const")
+
     def __init__(self, n, label=None):
         self.n = n
         self.label = label
+        self.side_effect = False
     def __repr__(self):
         n, label = self.n, self.label
         return f"%{n}" if label is None else f"{label}→%{n}"
@@ -369,10 +378,13 @@ class Value:
         self.const = const
 
 class ValueList(list):
+    __slots__ = ("n", "label", "side_effect", "const")
+
     def __init__(self, value):
         self.append(value)
         self.n = value.n
         self.label = None
+        self.side_effect = value.side_effect
     def __repr__(self):
         # return f"%{self.n}_x{len(self)}"
         n, label = self.n, self.label
@@ -468,12 +480,12 @@ for kind, _def in enumerate(definitions):
                 f"        var = inst[{idx}]",
                 f"        if isinstance(var, str): inst[{idx}] = value_host.get(var)",
             ))
-        if _def[1]:
+        for value in to_tuple(_def[1]):
             code.extend((
                  "        arr = []; append = arr.append; get = value_host.get",
-                f"        for var in inst[{_def[1]}]:",
+                f"        for var in inst[{value}]:",
                  "            if isinstance(var, str): append(get(var))",
-                f"        inst[{_def[1]}] = tuple(arr)",
+                f"        inst[{value}] = tuple(arr)",
             ))
         code.extend((
             "    except IndexError:",
@@ -503,9 +515,9 @@ for _def in definitions:
             f"    var = inst[{idx}]",
              "    if isinstance(var, Value): add(var.n)",
         ))
-    if _def[1]:
+    for value in to_tuple(_def[1]):
         code.extend((
-            f"    for var in inst[{_def[1]}]:",
+            f"    for var in inst[{value}]:",
              "        if isinstance(var, Value): add(var.n)",
         ))
     if len(code) == 1: code[0] += " pass"

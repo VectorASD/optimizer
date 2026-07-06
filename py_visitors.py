@@ -22,7 +22,30 @@ import_ast()
 
 
 
-def visitors(ast, module, def_tree, init_insts=()):
+class Module:
+    def __init__(self):
+        self.defs = []
+        self.def_tree = {}
+        self.def_names = []
+        self.root_def = None
+
+    def add(self, F, name):
+        def_id = len(self.defs)
+        self.defs.append(F)
+        self.def_names.append(name)
+        return def_id
+
+    def __len__(self):
+        return len(self.defs)
+
+    def __iter__(self):
+        return iter(self.defs)
+
+    def __getitem__(self, def_id):
+        return self.defs[def_id]
+
+
+def visitors(ast, module: Module, def_name: str = "<root>", init_insts=()):
     def typename(T):
         if T.__module__ == "builtins": return T.__name__
         return f"{T.__module__}.{T.__name__}"
@@ -429,9 +452,10 @@ compound_stmt:
         defaults = visit_arguments(node.args, init_insts.append)
         free_regs(*defaults)
 
-        def_id2 = visitors(node.body, module, def_tree, init_insts)
-        def_tree[def_id2] = def_id
-        add(18, f"_{node.name}", def_id2, defaults)  # <var> = <def>, defaults:(<var>, ...)
+        def_name = node.name
+        def_id2 = visitors(node.body, module, def_name, init_insts)
+        module.def_tree[def_id2] = def_id
+        add(18, f"_{def_name}", def_id2, defaults, 0, ())  # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)"
 
     def visit_Return(node):
         if node.value:
@@ -765,15 +789,14 @@ compound_stmt:
     # main
 
     F = blocks, preds, succs
-    def_id = len(module)
-    module.append(F)
+    def_id = module.add(F, def_name)
 
     statement_dict = get_statement_dict()
     expression_dict, assign_expression_dict = get_expression_dict()
 
     if def_id: visit_statements(ast)
     else:
-        def_tree[def_id] = None
+        module.def_tree[def_id] = None
         visit_Module(ast)
 
     if not blocks[current_block] or blocks[current_block][-1][0] != 4:
@@ -788,7 +811,30 @@ compound_stmt:
 
 
 
-def scope_handler(def_id, module, def_tree, builtins):
+class CellAlias:
+    def __init__(self, var, nd2):
+        self.var = var
+        self.nd2 = nd2
+        self._id = None
+
+    @property
+    def id(self):
+        if self._id is None:
+            left, right = self.nd2
+            name = self.var
+            try: id = left.index(name)
+            except ValueError:
+                id = len(left) + right.index(self)
+            self._id = id
+        return self._id
+
+    def __str__(self):
+        return str(self.id)
+
+    def __eq__(self, right):
+        return self.var == right.var
+
+def scope_handler(module: Module, builtins):
     from HIR_parser import HAS_LHS, uses_getters
 
     READ = 0
@@ -796,6 +842,9 @@ def scope_handler(def_id, module, def_tree, builtins):
     ARG = 2
     GLOBAL = 3
     NONLOCAL = 4
+
+    root_def = module.root_def
+    def_tree = module.def_tree
 
     # flag reader
 
@@ -832,12 +881,14 @@ def scope_handler(def_id, module, def_tree, builtins):
 
     used_builtins = set()
     dotted_builtins = set()
-    nonlocal_edges = {}
-    nonlocal_defs = set()
+    nonlocal_data = [defaultdict(set) for i in range(len(module))]
+    def2cell_left  = [{} for i in range(len(module))]
+    def2cell_right = [{} for i in range(len(module))]
     for id, (blocks, preds, succs) in enumerate(module):
-        is_global = id == def_id
+        is_global = id == root_def
         var_flags = flag_index[id]
-        print("•", id)
+        print(f"• {module.def_names[id]}   (def#{id})")
+      # print("   ", var_flags.get("_var1"))
         for var, flags in var_flags.items():
             if is_global or flags[GLOBAL]:
                 print("BUILTIN:" if var[1:] in builtins else "GLOBAL:", var)
@@ -846,44 +897,70 @@ def scope_handler(def_id, module, def_tree, builtins):
             elif (flags[WRITE] or flags[ARG]) and not flags[NONLOCAL]:
                 print("LOCAL:", var)
             else:
-                # print("NOT LOCAL:", var, flags) # nonlocal or global or builtin
-                cur_id = def_tree[id]
+              # print("NOT LOCAL:", var, flags) # nonlocal or global or builtin
+                cur_id = next_id = def_tree[id]
                 while cur_id is not None:
                     pflags = flag_index[cur_id][var]
-                    if cur_id == def_id or pflags[GLOBAL]:
-                        if flags[NONLOCAL]: raise SyntaxError("no binding for nonlocal 'glob_var' found")
+                  # if var == "_var1":
+                  #     print("  id:", cur_id, pflags)
+                    if cur_id == root_def or pflags[GLOBAL]:
+                        if flags[NONLOCAL]:
+                            raise SyntaxError("no binding for nonlocal 'glob_var' found")
                         print("BUILTIN:" if var[1:] in builtins else "GLOBAL:", var)
                         add_flag(var, GLOBAL)
                         if var[1:] in builtins: used_builtins.add(var)
                         break
                     elif (pflags[WRITE] or pflags[ARG]) and not pflags[NONLOCAL]:
-                        print("NONLOCAL:", var, f"({id} -> {cur_id})")
-                        var_flags = flag_index[cur_id]
-                        add_flag(var, NONLOCAL)
+                        end_id = cur_id
+                        print("NONLOCAL:", var, f"({id} -> {end_id})" if end_id == next_id else f"({id} -> {next_id} ->... {end_id})")
                         var_flags = flag_index[id]
                         add_flag(var, NONLOCAL)
-                        flag_index[cur_id][var]
-                        nonlocal_edges[(id, var)] = cur_id
-                        nonlocal_edges[(cur_id, var)] = cur_id
-                        nonlocal_defs.add(cur_id)
+                        flag_index[end_id][var]
+
+                        cur_id = id
+                        while cur_id != end_id:
+                            def2cell_R = def2cell_right[cur_id]
+                            if var not in def2cell_R:
+                                def2cell_R[var] = len(def2cell_R)
+                            next_id = def_tree[cur_id]
+                            nonlocal_data[next_id][cur_id].add(var)
+                            cur_id = next_id
+                        def2cell_L = def2cell_left[end_id]
+                        if var not in def2cell_L:
+                            def2cell_L[var] = len(def2cell_L)
                         break
                     cur_id = def_tree[cur_id]
                 else:
-                    if flags[NONLOCAL]: raise SyntaxError("no binding for nonlocal 'glob_var' found")
-                    if var[1:] not in builtins: raise NameError(f"name {var!r} is not defined")
+                    if flags[NONLOCAL]:
+                        raise SyntaxError("no binding for nonlocal 'glob_var' found")
+                    if var[1:] not in builtins:
+                        raise NameError(f"name {var!r} is not defined")
                     print("BUILTIN:", var)
                     add_flag(var, GLOBAL)
                     used_builtins.add(var)
 
-    # applier
+    for id in range(len(module)):
+        print("•••", id, def2cell_left[id], def2cell_right[id])
+    for id, vars in enumerate(def2cell_left):
+        var_flags = flag_index[id]
+        for var in vars:
+            add_flag(var, NONLOCAL)
 
-    ids = tuple(i for i in range(len(module)) if i != def_id)
+    # applier (nonlocal & local)
+
+    ids = tuple(i for i in range(len(module)) if i != root_def)
     read_globals = set(); read_glob_add = read_globals.add
     write_globals = set(); write_glob_add = write_globals.add
 
     for id in ids:
         blocks, preds, succs = module[id]
         var_flags = flag_index[id]
+
+        def2cell_L, def2cell_R = def2cell_left[id], def2cell_right[id]
+        def get_id(var):
+            try: return def2cell_L[var]
+            except KeyError: return len(def2cell_L) + def2cell_R[var]
+
         for bb, insts in blocks.items():
             blocks[bb] = new_insts = deque()
             add = new_insts.append
@@ -908,9 +985,15 @@ def scope_handler(def_id, module, def_tree, builtins):
                         add((20, var, var, None)) # <var> = glob:<var>
                         read_glob_add(var)
                     elif flags[NONLOCAL]:
-                        from_id = nonlocal_edges[(id, var)]
-                        add((22, var, from_id, var, None)) # <var> = scope:<def>:<var>
+                        add((22, var, get_id(var), None)) # <var> = cell:#<n>
+
+                if kind == 18:  # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)"
+                    _, var_name, def_id, defaults, _, _, meta = inst
+                    size = len(def2cell_left[def_id])
+                    nd = tuple(map(get_id, def2cell_right[def_id]))
+                    inst = (kind, var_name, def_id, defaults, size, nd, meta)
                 add(inst)
+
                 # write
                 if HAS_LHS[kind]:
                     var = inst[1]
@@ -920,10 +1003,11 @@ def scope_handler(def_id, module, def_tree, builtins):
                         add((21, var, var, None)) # glob:<var> = <var>
                         write_glob_add(var)
                     elif flags[NONLOCAL]:
-                        to_id = nonlocal_edges[(id, var)]
-                        add((23, to_id, var, var, None)) # scope:<def>:<var> = <var>
+                        add((23, get_id(var), var, None)) # cell:#<n> = <var>
 
-    blocks, preds, succs = module[def_id]
+    # applier (global)
+
+    blocks, preds, succs = module[root_def]
     for bb, insts in blocks.items():
         for inst in insts:
             kind = inst[0]
@@ -957,7 +1041,13 @@ def scope_handler(def_id, module, def_tree, builtins):
             for var in vars:
                 if var[0] == '_' and var in write_globals:
                     add((20, var, var, None)) # <var> = glob:<var>
+
+            if kind == 18:  # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)"
+                _, var_name, def_id, defaults, _, _, meta = inst
+                size = len(def2cell_left[def_id])
+                inst = (kind, var_name, def_id, defaults, size, (), meta)
             add(inst)
+
             # write
             if HAS_LHS[kind]:
                 var = inst[1]
@@ -978,13 +1068,14 @@ outer()
 
 
 
-def py_visitor(code, builtins):
+def py_visitor(code, builtins={}):
     ast = parse_it(code)
-    module = []
-    def_tree = {}
-    def_id = visitors(ast, module, def_tree)
-    scope_handler(def_id, module, def_tree, builtins)
-    return module, def_id
+    module = Module()
+
+    module.root_def = visitors(ast, module)
+
+    scope_handler(module, builtins)
+    return module
 
 
 
@@ -1068,6 +1159,6 @@ print(a, b, c)
 # print(ast_boolop.__doc__) # and all 2!
 
 if __name__ == "__main__":
-    module, def_id = py_visitor(source_2)
+    module = py_visitor(source_2)
     for F in module:
         stringify_cfg(F)

@@ -58,6 +58,9 @@ def misc_loader(F, plug, memory=None, value_host=None):
 
 
 
+class Cell:
+    __slots__ = ("v",)
+
 def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None):
     F = module[id]
     if memory is None:
@@ -124,9 +127,14 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
     def code_17(var): # raise <var>
         raise Exceptor(memory[var])
 
-    def code_18(var, def_id, defaults): # <var> = <def>, defaults:(<var>, ...)
+    def code_18(var, def_id, defaults, new_cells, old_cells): # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)"
         defaults = [memory[d] for d in defaults]
-        memory[var] = executor(def_id, globals, {}, defaults)
+        def run_wrapper(*args):
+            new_closure = [Cell() for i in range(new_cells)]
+            for cell_n in old_cells:
+                new_closure.append(closure[cell_n])
+            return executor(def_id, globals, {}, defaults, new_closure)(*args)
+        memory[var] = run_wrapper
 
     def code_19(var, name): # <var> = builtin:<var>
         memory[var] = builtins[name]
@@ -137,11 +145,13 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
     def code_21(name, var): # glob:<var> = <var>
         globals[name] = memory[var]
 
-    def code_22(var, from_id, name): # <var> = scope:<def>:<var>
-        memory[var] = cells[from_id][name]
+    def code_22(var, n): # <var> = cell:#<n>
+        try: memory[var] = closure[n].v
+        except AttributeError:
+            raise NameError(f"cell#<n>") from None
 
-    def code_23(to_id, name, var): # scope:<def>:<var> = <var>
-        cells[to_id][name] = memory[var]
+    def code_23(n, var): # cell:#<n> = <var>
+        closure[n].v = memory[var]
 
     def code_24(args, var, n, _):  # <var> = ARGS[<n>]   (type: <ann>)
         try: memory[var] = args[n]
@@ -172,6 +182,7 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
     def run_block(bb, block):
         skips = (Goto, Result)
         for i, inst in enumerate(block):
+          # print(id, inst)
             it = iter(inst)
             try: dispatch[next(it)](*it)
             except skips: raise
@@ -401,9 +412,40 @@ checker2(1)
 checker2(1, 2)
 """
 
+source7 = """
+def func_a(level = 0):  # closure=()
+    var1 = 123
+    pad = "  " * level
+    def meow():  # closure=()
+        print(pad + "meow")
+    def func_b():  # closure=(var1)
+        print(pad + "var1:", var1)
+        var2 = 42
+        if level == 1:
+            func_a(2)
+        def func_c():  # closure=(var1, var2)
+            nonlocal var1
+            var1 += 1
+            print(pad + "var1:", var1)
+
+            def func_d():  # closure=(var2)
+                print(pad + "var2:", var2)
+            if level == 0:
+                func_a(1)
+            nonlocal var2
+            var2 *= 2
+            return func_d
+        print(pad + "var2:", var2)
+        func_c()()
+    meow()
+    func_b()
+func_a()
+"""
+
 
 if __name__ == "__main__":
-    module, def_id = py_visitor(source6, builtins)
+    module = py_visitor(source7, builtins)
+    def_id = module.root_def
 
     for id, F in enumerate(module):
         print(f"\n••• def#{id}")
@@ -416,18 +458,18 @@ if __name__ == "__main__":
     cells = tuple({} for i in range(len(module)))
     is_global = True
     for id in (def_id, *(i for i in range(len(module)) if i != def_id)):
-        F = module[id]
         print(dashed_separator)
-        stringify_cfg(F)
+        print(f"    {module.def_names[id]} (def#{id})\n")
+        stringify_cfg(module[id])
         print()
 
         if is_global:
-            value_host, F = main_loop(F, builtins, debug=True, is_global=True)
+            value_host, F = main_loop(module, id, builtins, debug=True, is_global=True)
             applier = value_host.global_to_value
             is_global = False
         else:
-            applier(F)
-            value_host, F = main_loop(F, builtins, debug=True)
+            applier(module[id])
+            value_host, F = main_loop(module, id, builtins, debug=True)
 
         print()
         stringify_cfg(F)

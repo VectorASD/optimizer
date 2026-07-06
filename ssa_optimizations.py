@@ -1,5 +1,5 @@
 from ssa import SSA, compute_idom_fast
-from HIR_parser import stringify_cfg, HAS_LHS, uses_V_getters, WITHOUT_SIDE_EFFECT, ssa_hash, Value
+from HIR_parser import stringify_cfg, HAS_LHS, uses_V_getters, CAN_DCE, CAN_CSE, ssa_hash, Value
 from utils import bin_ops, unar_ops
 from folding import FOLDING_ATTRIBUTE_DICT, FOLDING_SET
 
@@ -328,6 +328,25 @@ def block_merging(F): # BM
 
 
 
+def can_DCE(inst):
+    kind = inst[0]
+    if kind == 6: # <var> = <func>(<var>, ...)
+        return inst[2].const in FOLDING_SET
+    if HAS_LHS[kind] and inst[1].side_effect:
+        return False
+    return CAN_DCE[kind]
+
+def can_CSE(inst):
+    kind = inst[0]
+    if HAS_LHS[kind]:
+        if kind == 6: # <var> = <func>(<var>, ...)
+            return inst[2].const in FOLDING_SET
+        if inst[1].side_effect:
+            return False
+        return CAN_CSE[kind]
+    return False
+
+
 def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
     size = len(value_host.index)
     use_count = [0] * size
@@ -345,9 +364,7 @@ def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
             if HAS_LHS[kind]:
                 idx = inst[1].n
                 idx2uses[idx] = uses
-                if kind == 6: # <var> = <func>(<var|num>, ...)
-                    idx2can_delete[idx] = inst[2].const in FOLDING_SET
-                else: idx2can_delete[idx] = WITHOUT_SIDE_EFFECT[kind]
+                idx2can_delete[idx] = can_DCE(inst)
 
     queue = []
     queue_append = queue.append
@@ -384,10 +401,6 @@ def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
         value_host.shift()
     return new_blocks
 
-def fake_DCE(blocks, value_host):
-    tmp_blocks = dead_code_elimination(blocks, value_host, rewrite_bb=False)
-    return sum(map(len, tmp_blocks.values()))
-
 
 
 def common_subexpression_elimination(blocks, IDom, intersect): # CSE
@@ -395,7 +408,7 @@ def common_subexpression_elimination(blocks, IDom, intersect): # CSE
     for bb, insts in blocks.items():
         for i, inst in enumerate(insts):
             kind = inst[0]
-            if HAS_LHS[kind] and (WITHOUT_SIDE_EFFECT[kind] or kind == 6 and inst[2].const in FOLDING_SET):
+            if can_CSE(inst):
                 part = inst[2:-1]
                 subs[(kind, part, type(part[0]) if part else None)].add((bb, i, inst[1]))
 
@@ -456,6 +469,7 @@ def global_elimination(F, value_host): # GlobE
             elif kind == 21: # glob:<var> = <var>
                 name, value = inst[1], inst[2]
                 value.label = name
+                value.side_effect = True
                 try: old_value = global_to_value[name]
                 except KeyError: global_to_value[name] = value
                 # else: rename(value.n, old_value.n)
@@ -502,7 +516,8 @@ def print_log(pred_ref):
         name += ":"
         print(f"{name:{length - len(str(size))}} {size}")
 
-def main_loop(F, builtins, debug=False, is_global=False):
+def main_loop(module, def_id, builtins, debug=False, is_global=False):
+    F = module[def_id]
     IDom, dom_tree, DF, value_host, F = SSA(F, predefined=tuple(builtins))
 
     blocks = F[0]
