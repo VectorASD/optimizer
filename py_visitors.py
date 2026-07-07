@@ -80,6 +80,13 @@ def visitors(ast, module: Module, def_name: str = "<root>", init_insts=()):
     def free_regs(*regs):
         for reg in regs:
             free_reg(reg)
+    def to_reg(var):
+        if var.startswith("r"):
+            return var
+        assert var.startswith("_")
+        reg = new_reg()
+        add(0, reg, var)  # <var> = <var>
+        return reg
 
     blocks, preds, succs = {}, {}, {}
     add_inst = None
@@ -218,7 +225,9 @@ compound_stmt:
     | match_stmt ❌
 """
 
-    def get_statement_dict():
+    statement_dict = None
+    def apply_statement_dict():
+        nonlocal statement_dict
         statement_dict = {
             "Assign": lambda node: visit_Assign(node, "Assign"),
             "AugAssign": lambda node: visit_Assign(node, "AugAssign"),
@@ -238,7 +247,6 @@ compound_stmt:
             "Global": visit_Global,
             "Nonlocal": visit_Nonlocal,
         } # TODO
-        return statement_dict
 
     def visit_statement(node):
         # statement[list]: a=compound_stmt { [a] } | a=simple_stmts { a }
@@ -482,7 +490,9 @@ compound_stmt:
 
     # expressions
 
-    def get_expression_dict():
+    expression_dict = assign_expression_dict = None
+    def apply_expression_dict():
+        nonlocal expression_dict, assign_expression_dict
         expression_dict = {
             "Constant": visit_Constant,
             "Name": visit_Name,
@@ -495,12 +505,13 @@ compound_stmt:
             "BoolOp": visit_BoolOp,
             "Call": visit_Call,
             "IfExp": visit_IfExp,
+            "JoinedStr": visit_JoinedStr,
+            "FormattedValue": visit_FormattedValue,
         }
         assign_expression_dict = {
             **expression_dict,
             "Tuple": visit_assignTuple,
         }
-        return expression_dict, assign_expression_dict
 
     def visit_assign_expression(node):
         visitor = assign_expression_dict[type(node).__name__]
@@ -511,6 +522,8 @@ compound_stmt:
         visitor = expression_dict[type(node).__name__]
         reg = visitor(node)
         return reg
+
+
 
     def free_recurs(regs):
         if type(regs) is tuple:
@@ -778,6 +791,35 @@ compound_stmt:
         on_block(next)
         return result_L
 
+    def visit_JoinedStr(node):
+        regs = tuple(map(visit_expression, node.values))
+        free_regs(*regs)
+        result = new_reg()
+        add(28, result, regs)  # <var> = ''.join((<var>, ...))
+        return result
+
+    def visit_FormattedValue(node):
+        conv = node.conversion
+        assert conv == -1 or chr(conv) in ('s', 'r', 'a')
+
+        reg = to_reg(visit_expression(node.value))
+        if node.format_spec is None:
+            format_reg = new_reg()
+            add(7, format_reg, "")  # <var> = <const>
+        else:
+            format_reg = to_reg(visit_expression(node.format_spec))
+
+        reg2 = new_reg()
+        if conv != -1:
+            conv = ("str", "repr", "ascii")["sra".index(chr(conv))]
+            add(19, reg2, conv)  # <var> = builtin:<var>
+            add(6, reg, reg2, (reg,))  # <var> = <func>(<var>, ...)
+        add(19, reg2, "format")  # <var> = builtin:<var>
+        add(6, reg, reg2, (reg, format_reg))  # <var> = <func>(<var>, ...)
+
+        free_regs(format_reg, reg2)
+        return reg
+
 
 
     def visit_(node):
@@ -791,8 +833,8 @@ compound_stmt:
     F = blocks, preds, succs
     def_id = module.add(F, def_name)
 
-    statement_dict = get_statement_dict()
-    expression_dict, assign_expression_dict = get_expression_dict()
+    apply_statement_dict()
+    apply_expression_dict()
 
     if def_id: visit_statements(ast)
     else:
@@ -810,29 +852,6 @@ compound_stmt:
     return def_id
 
 
-
-class CellAlias:
-    def __init__(self, var, nd2):
-        self.var = var
-        self.nd2 = nd2
-        self._id = None
-
-    @property
-    def id(self):
-        if self._id is None:
-            left, right = self.nd2
-            name = self.var
-            try: id = left.index(name)
-            except ValueError:
-                id = len(left) + right.index(self)
-            self._id = id
-        return self._id
-
-    def __str__(self):
-        return str(self.id)
-
-    def __eq__(self, right):
-        return self.var == right.var
 
 def scope_handler(module: Module, builtins):
     from HIR_parser import HAS_LHS, uses_getters
@@ -1065,6 +1084,7 @@ outer()
 
 
 
+print(parse_it(r'print(f"meow\n{23!s}")').body[0].value)
 def py_visitor(code, builtins={}):
     ast = parse_it(code)
     module = Module()

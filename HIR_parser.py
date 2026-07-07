@@ -80,6 +80,8 @@ definitions = (
     (1, 0, (),        1, 1, "#25: <var> = ARGS[<n>] or <default_n>   (type: <ann>)"),
     (1, 0, (),        1, 1, "#26: <var> = ARGS[<n>:]   (type: <ann>)"),
     (0, 0, (),        0, 0, "#27: if ARGS[<n>:]: raise TypeError(...)"),
+
+    (1, 2, (),        1, 1, "#28: <var> = ''.join((<var>, ...))"),
 )
 def to_tuple(obj):
     if not obj:
@@ -260,6 +262,8 @@ def stringify_instr(ops, i, write):
             if op[3] is not None:
                 write(f"   (type: {op[3]})")
         case 27: write(f"if ARGS[{op[1]}:]: raise TypeError(...)")
+
+        case 28: write(f"{op[1]} = ''.join(({', '.join(map(str, op[2]))}))")
 
         case _: write(f"{op} ???")
 

@@ -72,13 +72,14 @@ def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
     for insts in blocks.values():
         for inst in insts:
             kind = inst[0]
-            if kind in (1, 6, 8, 10, 12, 15):
+            if kind in (1, 6, 8, 10, 12, 15, 28):
                 # 1: <var> = <var> <+|-|*|/|%|...> <var>
                 # 6: <var> = <func>(<var|num>, ...)
                 # 8: <var> = tuple(<var>, ...)
                 #10: <var> = <var>[<var>]
                 #12: <var> = <var>.<attr>
                 #15: <var> = <+|-|~|not ><var>
+                #28: <var> = ''.join((<var>, ...))
                 uses = []
                 uses_V_getters[kind](inst, uses.append)
                 match kind:
@@ -87,7 +88,8 @@ def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
                     case 8: op = lambda *a: tuple(a)
                     case 10: op = lambda arr, index: arr[index]
                     case 12: op = scope_for_12(inst[3])
-                    case 15: op = unar_ops[inst[2]] 
+                    case 15: op = unar_ops[inst[2]]
+                    case 28: op = lambda *a: "".join(a)
 
                 idx = inst[1].n
                 uses = tuple(uses)

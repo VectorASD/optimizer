@@ -176,13 +176,16 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
         if vararg_size > 0:
             raise TypeError(f"def#{id}() takes {n} positional arguments but {len(args)} were given")
 
+    def code_28(var, items):  # <var> = ''.join((<var>, ...))
+        memory[var] = "".join(memory[reg] for reg in items)
+
     dispatch = [
         code_0, code_1, code_2, code_3, code_4,
         code_5, code_6, code_7, code_8, code_9,
         code_10, code_11, code_12, code_13, code_14,
         code_15, code_16, code_17, code_18, code_19,
         code_20, code_21, code_22, code_23, code_24,
-        code_25, code_26, code_27
+        code_25, code_26, code_27, code_28,
     ]
 
     def run_block(bb, block):
@@ -448,9 +451,20 @@ def func_a(level = 0):  # closure=()
 func_a()
 """
 
+source8 = r"""
+num1 = 10
+num2 = b"15"
+print(f"abc: {num1}, xyz: {num2}")
+target = "кощка"
+print(f"common: {target}"
+      f"\nstr:    {target!s}"
+      f"\nrepr:  {target!r}"
+      f"\nascii: {target!a}")
+"""
+
 
 if __name__ == "__main__":
-    module = py_visitor(source7, builtins)
+    module = py_visitor(source8, builtins)
     def_id = module.root_def
 
     for id, F in enumerate(module):
