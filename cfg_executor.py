@@ -179,13 +179,18 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
     def code_28(var, items):  # <var> = ''.join((<var>, ...))
         memory[var] = "".join(memory[reg] for reg in items)
 
+    def code_29(var, name, bases, names, regs):  # <var> = type(<name>, (<base_reg>, ...), (<local_name>, ...), (<local_reg>, ...))
+        bases = tuple(memory[base] for base in bases)
+        locals = {name: memory[reg] for name, reg in zip(names, regs)}
+        memory[var] = type(name, bases, locals)
+
     dispatch = [
         code_0, code_1, code_2, code_3, code_4,
         code_5, code_6, code_7, code_8, code_9,
         code_10, code_11, code_12, code_13, code_14,
         code_15, code_16, code_17, code_18, code_19,
         code_20, code_21, code_22, code_23, code_24,
-        code_25, code_26, code_27, code_28,
+        code_25, code_26, code_27, code_28, code_29,
     ]
 
     def run_block(bb, block):
@@ -462,9 +467,50 @@ print(f"common: {target}"
       f"\nascii: {target!a}")
 """
 
+source9 = r"""
+def decorator(var1, var2):
+    def real_decorator(func):
+        def func_wrapper():
+            print("data:", var1, var2)
+            return func() + 1
+        return func_wrapper
+    return real_decorator
+
+@decorator(16, 12)
+@decorator(123, 42)
+def func():
+    print("meow")
+    return 9
+
+print("result:", func())
+"""
+
+source10 = """
+class FirstClass:
+    def __init__(self):
+        self.var1 = 10
+        self.var2 = 12
+    def check(self):
+        print("check:", self)
+        print("var3:", self.var3)
+    @property
+    def var3(self):
+        return self.var2 * 2
+
+class NumClass(int):
+    def print(self):
+        print("log me:", self)
+
+fc = FirstClass()
+print("fc:", fc)
+fc.check()
+
+NumClass(50).print()
+"""
+
 
 if __name__ == "__main__":
-    module = py_visitor(source8, builtins)
+    module = py_visitor(source10, builtins)
     def_id = module.root_def
 
     for id, F in enumerate(module):

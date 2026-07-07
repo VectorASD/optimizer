@@ -1,5 +1,5 @@
 from peg_driver import parse_it
-from HIR_parser import stringify_cfg, stringify_instr
+from HIR_parser import stringify_cfg, stringify_instr, HAS_LHS
 
 import sys
 import traceback
@@ -28,11 +28,13 @@ class Module:
         self.def_tree = {}
         self.def_names = []
         self.root_def = None
+        self.is_class = []
 
     def add(self, F, name):
         def_id = len(self.defs)
         self.defs.append(F)
         self.def_names.append(name)
+        self.is_class.append(False)
         return def_id
 
     def __len__(self):
@@ -45,7 +47,7 @@ class Module:
         return self.defs[def_id]
 
 
-def visitors(ast, module: Module, def_name: str = "<root>", init_insts=()):
+def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit=None):
     def typename(T):
         if T.__module__ == "builtins": return T.__name__
         return f"{T.__module__}.{T.__name__}"
@@ -133,8 +135,6 @@ def visitors(ast, module: Module, def_name: str = "<root>", init_insts=()):
         succs[current_block].extend((yeah, nop))
 
     on_block()
-    for inst in init_insts:
-        add_inst((*inst, {}))
 
     def trace():
         def add_inst_wrap(inst):
@@ -243,6 +243,7 @@ compound_stmt:
             "Assert": visit_Assert,
             "Raise": visit_Raise,
             "FunctionDef": visit_FunctionDef,
+            "ClassDef": visit_ClassDef,
             "Return": visit_Return,
             "Global": visit_Global,
             "Nonlocal": visit_Nonlocal,
@@ -453,7 +454,6 @@ compound_stmt:
       # explore_node(node)
         assert not node.type_comment, node.type_comment  # TODO
         assert not node.type_params, node.type_params  # TODO
-        assert not node.decorator_list, node.decorator_list  # TODO
         assert not node.returns, node.returns  # TODO
 
         init_insts = []
@@ -461,9 +461,50 @@ compound_stmt:
         free_regs(*defaults)
 
         def_name = node.name
+        def_var = f"_{def_name}"
+
         def_id2 = visitors(node.body, module, def_name, init_insts)
         module.def_tree[def_id2] = def_id
-        add(18, f"_{def_name}", def_id2, defaults, 0, ())  # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)"
+        add(18, def_var, def_id2, defaults, 0, ())  # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)"
+
+        for decorator in reversed(node.decorator_list):
+            reg = visit_expression(decorator)
+            add(6, def_var, reg, (def_var,))  # <var> = <func>(<var>, ...)
+            free_reg(reg)
+
+    def visit_ClassDef(node):
+      # explore_node(node)
+        assert not node.keywords, node.keywords  # TODO
+        assert not node.type_params, node.type_params  # TODO
+
+        class_name = node.name
+        class_var = f"_{class_name}"
+
+        def postinit(add, visit_expression, blocks):
+            vars = {}
+            for insts in blocks.values():
+                for inst in insts:
+                    kind = inst[0]
+                    if HAS_LHS[kind]:
+                        lhs = inst[1]
+                        if lhs.startswith('_'):
+                            vars[lhs[1:]] = lhs
+            names, locals = zip(*vars.items())
+
+            bases = tuple(map(visit_expression, node.bases))
+            add(29, class_var, class_name, bases, names, locals)  # <var> = type(<name>, (<base_reg>, ...), (<local_name>, ...), (<local_reg>, ...))
+            add(4, class_var)  # return <var>
+
+        def_id2 = visitors(node.body, module, class_name, (), postinit)
+        module.def_tree[def_id2] = def_id
+        module.is_class[def_id2] = True
+        add(18, class_var, def_id2, (), 0, ())  # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)"
+
+        add(6, class_var, class_var, ())  # <var> = <func>(<var>, ...)
+        for decorator in reversed(node.decorator_list):
+            reg = visit_expression(decorator)
+            add(6, class_var, reg, (class_var,))  # <var> = <func>(<var>, ...)
+            free_reg(reg)
 
     def visit_Return(node):
         if node.value:
@@ -836,10 +877,16 @@ compound_stmt:
     apply_statement_dict()
     apply_expression_dict()
 
+    for inst in preinit:
+        add_inst((*inst, {}))
+
     if def_id: visit_statements(ast)
     else:
         module.def_tree[def_id] = None
         visit_Module(ast)
+
+    if postinit is not None:
+        postinit(add, visit_expression, blocks)
 
     if not blocks[current_block] or blocks[current_block][-1][0] != 4:
         add(4, ".None") # return <var>
@@ -854,7 +901,7 @@ compound_stmt:
 
 
 def scope_handler(module: Module, builtins):
-    from HIR_parser import HAS_LHS, uses_getters
+    from HIR_parser import uses_getters
 
     READ = 0
     WRITE = 1
@@ -864,6 +911,7 @@ def scope_handler(module: Module, builtins):
 
     root_def = module.root_def
     def_tree = module.def_tree
+    is_class = module.is_class
 
     # flag reader
 
@@ -900,8 +948,20 @@ def scope_handler(module: Module, builtins):
 
     used_builtins = set()
     dotted_builtins = set()
+
     def2cell_left  = [{} for i in range(len(module))]
     def2cell_right = [{} for i in range(len(module))]
+    def apply_id(id, end_id):
+        def2cell_L = def2cell_left[end_id]
+        if var not in def2cell_L:
+            def2cell_L[var] = len(def2cell_L)
+
+        while id != end_id:
+            def2cell_R = def2cell_right[id]
+            if var not in def2cell_R:
+                def2cell_R[var] = len(def2cell_R)
+            id = def_tree[id]
+
     for id, (blocks, preds, succs) in enumerate(module):
         is_global = id == root_def
         var_flags = flag_index[id]
@@ -918,6 +978,9 @@ def scope_handler(module: Module, builtins):
               # print("NOT LOCAL:", var, flags) # nonlocal or global or builtin
                 cur_id = next_id = def_tree[id]
                 while cur_id is not None:
+                    if is_class[cur_id]:
+                        cur_id = def_tree[cur_id]
+                        continue
                     pflags = flag_index[cur_id][var]
                   # if var == "_var1":
                   #     print("  id:", cur_id, pflags)
@@ -928,22 +991,13 @@ def scope_handler(module: Module, builtins):
                         add_flag(var, GLOBAL)
                         if var[1:] in builtins: used_builtins.add(var)
                         break
-                    elif (pflags[WRITE] or pflags[ARG]) and not pflags[NONLOCAL]:
-                        end_id = cur_id
-                        print("NONLOCAL:", var, f"({id} -> {end_id})" if end_id == next_id else f"({id} -> {next_id} ->... {end_id})")
+                    if (pflags[WRITE] or pflags[ARG]) and not pflags[NONLOCAL]:
+                        print("NONLOCAL:", var, f"({id} -> {cur_id})" if cur_id == next_id else f"({id} -> {next_id} ->... {cur_id})")
                         var_flags = flag_index[id]
                         add_flag(var, NONLOCAL)
-                        flag_index[end_id][var]
+                        flag_index[cur_id][var]
 
-                        cur_id = id
-                        while cur_id != end_id:
-                            def2cell_R = def2cell_right[cur_id]
-                            if var not in def2cell_R:
-                                def2cell_R[var] = len(def2cell_R)
-                            cur_id = def_tree[cur_id]
-                        def2cell_L = def2cell_left[end_id]
-                        if var not in def2cell_L:
-                            def2cell_L[var] = len(def2cell_L)
+                        apply_id(id, cur_id)
                         break
                     cur_id = def_tree[cur_id]
                 else:
@@ -1084,7 +1138,6 @@ outer()
 
 
 
-print(parse_it(r'print(f"meow\n{23!s}")').body[0].value)
 def py_visitor(code, builtins={}):
     ast = parse_it(code)
     module = Module()

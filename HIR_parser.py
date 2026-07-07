@@ -82,6 +82,7 @@ definitions = (
     (0, 0, (),        0, 0, "#27: if ARGS[<n>:]: raise TypeError(...)"),
 
     (1, 2, (),        1, 1, "#28: <var> = ''.join((<var>, ...))"),
+    (1, (3,5), (),    0, 0, "#29: <var> = type(<name>, (<base_reg>, ...), (<local_name>, ...), (<local_reg>, ...))"),
 )
 def to_tuple(obj):
     if not obj:
@@ -264,6 +265,9 @@ def stringify_instr(ops, i, write):
         case 27: write(f"if ARGS[{op[1]}:]: raise TypeError(...)")
 
         case 28: write(f"{op[1]} = ''.join(({', '.join(map(str, op[2]))}))")
+        case 29:
+            locals = dict(zip(op[4], op[5]))
+            write(f"{op[1]} = type({op[2]}, ({', '.join(map(str, op[3]))}), {locals})")
 
         case _: write(f"{op} ???")
 
