@@ -495,10 +495,11 @@ for kind, _def in enumerate(definitions):
                  "            if isinstance(var, str): append(get(var))",
                 f"        inst[{value}] = tuple(arr)",
             ))
-        code.extend((
-            "    except IndexError:",
-            "        raise SSA_Error(f'{var!r} is undefined: {stringify_instr_wrap(insts, i)!r}')",
-        ))
+        code.append("    except IndexError:")
+        if kind:
+            code.append("        raise SSA_Error(f'{var!r} is undefined: {stringify_instr_wrap(insts, i)!r}')")
+        else:
+            code.append("        return (16, None)  # nop")
     if _def[0]:
         code.append("    value_host.add(inst)")
 

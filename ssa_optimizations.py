@@ -456,7 +456,20 @@ def common_subexpression_elimination(blocks, IDom, intersect): # CSE
 def global_elimination(F, value_host): # GlobE
     blocks = F[0]
     global_to_value = {}
-    # rename = value_host.rename Так нельзя!
+    can_eliminate = {}
+    for bb, insts in blocks.items():
+        for inst in insts:
+            kind = inst[0]
+            if kind == 21: # glob:<var> = <var>
+                name, value = inst[1], inst[2]
+                value.label = name
+                try:
+                    if global_to_value[name] != value:
+                        can_eliminate[name] = False
+                except KeyError:
+                    global_to_value[name] = value
+                    can_eliminate[name] = True
+
     for bb, insts in blocks.items():
         blocks[bb] = new_insts = []
         add = new_insts.append
@@ -465,16 +478,14 @@ def global_elimination(F, value_host): # GlobE
             if kind == 20: # <var> = glob:<var>
                 value, name = inst[1], inst[2]
                 value.label = name
-                try: old_value = global_to_value[name]
-                except KeyError: global_to_value[name] = value
-                # else: rename(value.n, old_value.n)
+                if can_eliminate[name]:
+                    add(0, var, global_to_value[name])  # <var> = <var>
+                else: add(inst)
             elif kind == 21: # glob:<var> = <var>
                 name, value = inst[1], inst[2]
-                value.label = name
-                value.side_effect = True
-                try: old_value = global_to_value[name]
-                except KeyError: global_to_value[name] = value
-                # else: rename(value.n, old_value.n)
+                if can_eliminate[name]:
+                    value.side_effect = True
+                else: add(inst)
             else: add(inst)
 
     def applier(F):
@@ -483,15 +494,20 @@ def global_elimination(F, value_host): # GlobE
             for i, inst in enumerate(insts):
                 kind = inst[0]
                 if kind == 20: # <var> = glob:<var>
-                    insts[i] = (kind, inst[1], global_to_value[inst[2]], inst[3])
+                    value, name = inst[1], inst[2]
+                    insts[i] = (kind, value, global_to_value[name], inst[3])
                 elif kind == 21: # glob:<var> = <var>
-                    insts[i] = (kind, global_to_value[inst[1]], inst[2], inst[3])
+                    name, value = inst[1], inst[2]
+                    insts[i] = (kind, global_to_value[name], value, inst[3])
 
     index = value_host.index
     for name, value in global_to_value.items():
         index[value.n].label = name
 
-    # value_host.shift()
+    for name, can in can_eliminate.items():
+        if not can:
+            global_to_value[name] = name
+
     applier(F)
     value_host.global_to_value = applier
 

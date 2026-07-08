@@ -67,7 +67,8 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
         memory = globals  # locals <-> globals
 
     def code_0(var, setter): # <var> = <var>
-        memory[var] = memory[setter]
+        try: memory[var] = memory[setter]
+        except KeyError: pass
 
     def code_1(var, left, op, right): # <var> = <var> <+|-|*|/|%|...> <var>
         try: func = bin_ops[op]
@@ -537,6 +538,16 @@ source12 = """
 
 func = lambda: 42
 print(func())
+
+i = j = 123
+arr = list(range(0, 32, 2))
+print([i // 2 for i in arr])
+print([i for i in arr if i % 3])
+R = range(3)
+print([(i, j) for i in R for j in R])
+print([(lambda i: i*10)(i) for i in R])
+print([(lambda: i*10)() for i in R])
+print(i, j)
 """
 
 

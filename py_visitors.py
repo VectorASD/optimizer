@@ -47,6 +47,12 @@ class Module:
         return self.defs[def_id]
 
 
+def new_name(name, names={}):
+    n = names.get(name, 0)
+    names[name] = n + 1
+    return f"s{n}{name}"
+
+
 def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit=None):
     def typename(T):
         if T.__module__ == "builtins": return T.__name__
@@ -122,14 +128,14 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
             terminator_pos = len(blocks[current_block])
         if len(a) == 1:
             label = a[0]
-            add(3, label) # goto <label>
+            add(3, label)  # goto <label>
             preds[label].append(current_block)
             succs[current_block].append(label)
             return
-        yeah, reg, nop = a # assert len(a) == 3
+        yeah, reg, nop = a  # assert len(a) == 3
         if yeah == nop:
             return control(yeah)
-        add(14, yeah, reg, nop) # goto <label> if <var> else <label>
+        add(14, yeah, reg, nop)  # goto <label> if <var> else <label>
         preds[yeah].append(current_block)
         preds[nop].append(current_block)
         succs[current_block].extend((yeah, nop))
@@ -151,22 +157,24 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
         add_inst = add_inst_wrap
         is_trace = True
 
-    def exceptor(name, to_bb):
+
+    def get_meta():
         insts = blocks[current_block]
         inst = insts[-1]
-        if inst[-1] is None: insts[-1] = inst = (*inst[:-1], {})
         meta = inst[-1]
+        if meta is None:
+            meta = {}
+            insts[-1] = (*inst[:-1], meta)
+        return meta
+    def set_meta(key, value):
+        get_meta()[key] = value
+
+    def exceptor(name, to_bb):
+        meta = get_meta()
         try: meta["exc"].append((name, to_bb))
         except KeyError: meta["exc"] = [(name, to_bb)]
         preds[to_bb].append(current_block)
         succs[current_block].append(to_bb)
-
-    def set_meta(key, value):
-        insts = blocks[current_block]
-        inst = insts[-1]
-        if inst[-1] is None: insts[-1] = inst = (*inst[:-1], {})
-        meta = inst[-1]
-        meta[key] = value
 
     loop_stack = []
     cause_stack = []
@@ -555,7 +563,7 @@ EXPR_NAME_MAPPING = {
     ast.Yield: "yield expression", ❌
     ast.YieldFrom: "yield expression", ❌
     ast.Await: "await expression", ❌
-    ast.ListComp: "list comprehension", ❌
+    ast.ListComp: "list comprehension", ✅
     ast.SetComp: "set comprehension", ❌
     ast.DictComp: "dict comprehension", ❌
     ast.Dict: "dict literal", ✅
@@ -591,6 +599,7 @@ TODO
             "Set": visit_Set,
             "Starred": visit_Starred,
             "Lambda": visit_Lambda,
+            "ListComp": visit_ListComp,
         }
         assign_expression_dict = {
             **expression_dict,
@@ -616,8 +625,10 @@ TODO
             return
         free_reg(regs)
     def name2reg(name):
-        if type(name) is tuple: return to_regs_recurs(name)
-        if name[0] == "r": return name
+        if type(name) is tuple:
+            return to_regs_recurs(name)
+        if name[0] == "r":
+            return name
         reg = new_reg()
         add(0, reg, name) # <var> = <var>
         return reg
@@ -682,6 +693,12 @@ TODO
         else: # type(left) is str
             add(0, left, right) # <var> = <var>
             free_reg(right)
+    def extract_targets(left, add):
+        if type(left) is tuple:
+            for _left in left:
+                extract_targets(_left)
+        else:
+            add(left)
 
     const_types = type(None), int, float, complex, str, bytes, bool, type(...)
     def visit_Constant(node):
@@ -979,14 +996,14 @@ TODO
         add(6, result, result, (zipped,))  # <var> = <func>(<var>, ...)
 
         if count < len(keys):
-            update, void = new_reg(), new_reg()
+            update = new_reg()
             add(12, update, result, "update")  # <var> = <var>.<attr>
             while count < len(keys):
                 key = keys[count]
                 if key is None:
                     item = visit_expression(values[count])
                     free_reg(item)
-                    add(6, void, update, (item,))  # <var> = <func>(<var>, ...)
+                    add(6, '_', update, (item,))  # <var> = <func>(<var>, ...)
                     count += 1
                 else:
                     count2 = count
@@ -999,9 +1016,9 @@ TODO
                         add(11, result, kreg, vreg) # <var>[<var>] = <var>
                     else:
                         zip_it(keys[count:count2], values[count:count2])
-                        add(6, void, update, (zipped,))  # <var> = <func>(<var>, ...)
+                        add(6, '_', update, (zipped,))  # <var> = <func>(<var>, ...)
                     count = count2
-            free_regs(update, void)
+            free_reg(update)
 
         free_regs(zip, zipped)
         return result
@@ -1028,15 +1045,15 @@ TODO
             add(6, result, result, ())  # <var> = <func>(<var>, ...)
 
         if mask2:
-            update, void = new_reg(), new_reg()
+            update = new_reg()
             add(12, update, result, "update")  # <var> = <var>.<attr>
             for i in mask2:
                 element = elts[i]
                 assert isinstance(element.ctx, ast_Load), element
                 item = visit_expression(element.value)
                 free_reg(item)
-                add(6, void, update, (item,))  # <var> = <func>(<var>, ...)
-            free_regs(update, void)
+                add(6, '_', update, (item,))  # <var> = <func>(<var>, ...)
+            free_reg(update)
 
         return result
 
@@ -1052,6 +1069,78 @@ TODO
             body=[ast_Return(value=node.body)]
         )
         visit_statement(alias)
+        return result
+
+    vars_stack = []
+    def catched_visit_targets(targets_arr):
+        vars = set()
+        for targets in targets_arr:
+            extract_targets(targets, vars.add)
+        vars = [(name, new_name(name)) for name in vars]
+
+        for old, new in vars:
+            add(0, new, old)  # <var> = <var>
+          # add(7, "S", f"Save {old[1:]!r}:")
+          # add(6, "void", ".print", ("S", new))
+        vars_stack.append(vars)
+    def reset_cathed():
+        vars = vars_stack.pop()
+        for old, new in vars:
+            add(0, old, new)  # <var> = <var>
+          # add(7, "S", f"Restore {old[1:]!r}:")
+          # add(6, "void", ".print", ("S", old))
+
+    def visit_ListComp(node):
+        result, append = new_reg(), new_reg()
+        add(19, result, "list")  # <var> = builtin:<var>
+        add(6, result, result, ())  # <var> = <func>(<var>, ...)
+        add(12, append, result, "append")  # <var> = <var>.<attr>
+
+        end = new_block()
+        prev_loop = end
+        regs = []
+
+        targets_arr = [visit_assign_expression(gen.target) for gen in node.generators]
+        catched_visit_targets(targets_arr)
+
+        for gen in node.generators:
+          # explore_node(gen)
+            assert gen.is_async == 0, node.type_comment  # TODO
+
+            loop = new_block()
+            var = visit_expression(gen.iter)
+            free_reg(var)
+            iter_reg = new_reg()
+            add(6, iter_reg, ".iter", (var,))  # <var> = <func>(<var>, ...)
+            control(loop)  # goto <label>
+
+            on_block(loop)
+            reg = new_reg()
+            add(6, reg, ".next", (iter_reg,))  # <var> = <func>(<var>, ...)
+            exceptor(".StopIteration", prev_loop)
+            targets = visit_assign_expression(gen.target)
+            visit_targets(targets, reg, [None])
+            free_reg(reg)
+
+            for if_expr in gen.ifs:
+                if_ok = new_block()
+                reg = visit_expression(if_expr)
+                control(if_ok, reg, loop) # goto <label> if <var> else <label>
+                on_block(if_ok)
+                free_reg(reg)
+
+            prev_loop = loop
+            regs.append(iter_reg)
+
+        item = visit_expression(node.elt)
+        add(6, '_', append, (item,))  # <var> = <func>(<var>, ...)
+        free_reg(item)
+
+        control(loop)  # goto <label>
+        on_block(end)
+
+        reset_cathed()
+        free_regs(append, *regs)
         return result
 
 
@@ -1314,7 +1403,7 @@ def scope_handler(module: Module, builtins):
             # write
             if HAS_LHS[kind]:
                 var = inst[1]
-                if var[0] in "_.":
+                if var[0] in "_." and var in read_globals:
                     add((21, var, var, None)) # glob:<var> = <var>
 
 """
