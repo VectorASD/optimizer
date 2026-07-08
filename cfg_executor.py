@@ -512,8 +512,17 @@ source11 = """
 print([])
 arr = [1, 2, 3]
 print(arr)
-arr2 = [7, *arr, 8, *arr, 9, 10]
-print(arr2)
+print([7, *arr, 8, *arr, 9, 10])
+# Значение 8 добавлено через append,
+# а значения 9 и 10 - через extend
+
+print({})
+dict = {1: "meow", 2: "woof", 3: "dog"}
+print(dict)
+print({4: "deer", **dict, 5: "beef", **dict, 6: "cat", 7: "dog"})
+# Порядок ключей: 4, 1, 2, 3, 5, 6, 7
+# Ключ 5 добавлен через dict[key] = value,
+# а ключи 6 и 7 - через dict.update(zip(keys, values))
 """
 
 

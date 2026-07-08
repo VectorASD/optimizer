@@ -554,7 +554,7 @@ EXPR_NAME_MAPPING = {
     ast.ListComp: "list comprehension", ❌
     ast.SetComp: "set comprehension", ❌
     ast.DictComp: "dict comprehension", ❌
-    ast.Dict: "dict literal", ❌
+    ast.Dict: "dict literal", ✅
     ast.Set: "set display", ❌
     ast.JoinedStr: "f-string expression", ✅
     ast.FormattedValue: "f-string expression", ✅
@@ -583,6 +583,7 @@ TODO
             "JoinedStr": visit_JoinedStr,
             "FormattedValue": visit_FormattedValue,
             "List": visit_List,
+            "Dict": visit_Dict,
         }
         assign_expression_dict = {
             **expression_dict,
@@ -940,7 +941,62 @@ TODO
                         free_reg(tmp)
                     count = count2
             free_regs(extend, append, null)
-        explore_node(node)
+        return result
+
+    def visit_Dict(node):
+        zip, zipped = new_reg(), new_reg()
+        add(19, zip, "zip")  # <var> = builtin:<var>
+
+        def zip_it(keys, values):
+            keys = tuple(map(visit_expression, keys))
+            free_regs(*keys)
+            kreg = new_reg()
+            add(8, kreg, keys)  # <var> = tuple(<var>, ...)
+
+            values = tuple(map(visit_expression, values))
+            free_regs(*values)
+            vreg = new_reg()
+            add(8, vreg, values)  # <var> = tuple(<var>, ...)
+
+            add(6, zipped, zip, (kreg, vreg))  # <var> = <func>(<var>, ...)
+            free_regs(kreg, vreg)
+
+        keys, values = node.keys, node.values
+        count = 0
+        while count < len(keys) and keys[count] is not None:
+            count += 1
+
+        zip_it(keys[:count], values[:count])
+        result = new_reg()
+        add(19, result, "dict")  # <var> = builtin:<var>
+        add(6, result, result, (zipped,))  # <var> = <func>(<var>, ...)
+
+        if count < len(keys):
+            update, void = new_reg(), new_reg()
+            add(12, update, result, "update")  # <var> = <var>.<attr>
+            while count < len(keys):
+                key = keys[count]
+                if key is None:
+                    item = visit_expression(values[count])
+                    free_reg(item)
+                    add(6, void, update, (item,))  # <var> = <func>(<var>, ...)
+                    count += 1
+                else:
+                    count2 = count
+                    while count2 < len(keys) and keys[count2] is not None:
+                        count2 += 1
+                    if count2 - count == 1:
+                        kreg = visit_expression(keys[count])
+                        vreg = visit_expression(values[count])
+                        free_regs(kreg, vreg)
+                        add(11, result, kreg, vreg) # <var>[<var>] = <var>
+                    else:
+                        zip_it(keys[count:count2], values[count:count2])
+                        add(6, void, update, (zipped,))  # <var> = <func>(<var>, ...)
+                    count = count2
+            free_regs(update, void)
+
+        free_regs(zip, zipped)
         return result
 
 
