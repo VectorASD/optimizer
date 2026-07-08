@@ -213,16 +213,18 @@ simple_stmt (memo):
     | 'continue' { ast.Continue(LOCATIONS) } ✅
     | &'global' global_stmt ✅
     | &'nonlocal' nonlocal_stmt ✅
+TODO
 
 compound_stmt:
-    | &('def' | '@' | 'async') function_def ✅❌❌
+    | &('def' | '@' | 'async') function_def ✅✅❌
     | &'if' if_stmt ✅
-    | &('class' | '@') class_def ❌❌
+    | &('class' | '@') class_def ✅✅
     | &('with' | 'async') with_stmt ❌❌
     | &('for' | 'async') for_stmt ✅❌
     | &'try' try_stmt ❌
     | &'while' while_stmt ✅
     | match_stmt ❌
+TODO
 """
 
     statement_dict = None
@@ -530,6 +532,38 @@ compound_stmt:
 
 
     # expressions
+
+    """
+ast.Constant (ellipsis, None, True, False, literal) ✅
+EXPR_NAME_MAPPING = {
+    ast.Attribute: "attribute", ✅
+    ast.Subscript: "subscript", ✅
+    ast.Starred: "starred", ❌
+    ast.Name: "name", ✅
+    ast.List: "list", ❌
+    ast.Tuple: "tuple", ✅
+    ast.Lambda: "lambda", ❌
+    ast.Call: "function call", ✅
+    ast.BoolOp: "expression", ✅
+    ast.BinOp: "expression", ✅
+    ast.UnaryOp: "expression", ✅
+    ast.GeneratorExp: "generator expression", ❌
+    ast.Yield: "yield expression", ❌
+    ast.YieldFrom: "yield expression", ❌
+    ast.Await: "await expression", ❌
+    ast.ListComp: "list comprehension", ❌
+    ast.SetComp: "set comprehension", ❌
+    ast.DictComp: "dict comprehension", ❌
+    ast.Dict: "dict literal", ❌
+    ast.Set: "set display", ❌
+    ast.JoinedStr: "f-string expression", ✅
+    ast.FormattedValue: "f-string expression", ✅
+    ast.Compare: "comparison", ✅
+    ast.IfExp: "conditional expression", ✅
+    ast.NamedExpr: "named expression", ❌
+}
+TODO
+"""
 
     expression_dict = assign_expression_dict = None
     def apply_expression_dict():
