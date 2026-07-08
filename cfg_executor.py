@@ -527,14 +527,21 @@ print({4: "deer", **dict, 5: "beef", **dict, 6: "cat", 7: "dog"})
 print({1})  # Нельзя создать пустое множество синтаксическим путём, без "set()" :)
 a = {1, 2, 3}
 print(a)
-print({*()})  # Но это не совсем пустой set() ;'-} elts в узле ast.Set всё ещё не пустой!
+print({*()})  # Но это всё ещё не пустой set() ;'-} elts в узле ast.Set всё ещё не пустой!
 print({*a, 4})
 print({4, *a})
 """
 
+source12 = """
+# *()  # SyntaxError: can't use starred expression here
+
+func = lambda: 42
+print(func())
+"""
+
 
 if __name__ == "__main__":
-    module = py_visitor(source11, builtins)
+    module = py_visitor(source12, builtins)
     def_id = module.root_def
 
     for id, F in enumerate(module):

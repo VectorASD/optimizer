@@ -463,7 +463,11 @@ TODO
         free_regs(*defaults)
 
         def_name = node.name
-        def_var = f"_{def_name}"
+        if def_name.startswith("<lambda>"):
+            def_var = def_name[len("<lambda>"):]
+            def_name = "<lambda>"
+        else:
+            def_var = f"_{def_name}"
 
         def_id2 = visitors(node.body, module, def_name, init_insts)
         module.def_tree[def_id2] = def_id
@@ -538,11 +542,11 @@ ast.Constant (ellipsis, None, True, False, literal) ✅
 EXPR_NAME_MAPPING = {
     ast.Attribute: "attribute", ✅
     ast.Subscript: "subscript", ✅
-    ast.Starred: "starred", ❌
+    ast.Starred: "starred", ✅
     ast.Name: "name", ✅
     ast.List: "list", ✅
     ast.Tuple: "tuple", ✅
-    ast.Lambda: "lambda", ❌
+    ast.Lambda: "lambda", ✅
     ast.Call: "function call", ✅
     ast.BoolOp: "expression", ✅
     ast.BinOp: "expression", ✅
@@ -585,6 +589,8 @@ TODO
             "List": visit_List,
             "Dict": visit_Dict,
             "Set": visit_Set,
+            "Starred": visit_Starred,
+            "Lambda": visit_Lambda,
         }
         assign_expression_dict = {
             **expression_dict,
@@ -1033,6 +1039,21 @@ TODO
             free_regs(update, void)
 
         return result
+
+    def visit_Starred(node):
+        "Встречается и нормально обрабатывается пока только в ast.List и ast.Set"
+        raise SyntaxError("can't use starred expression here")
+
+    def visit_Lambda(node):
+        result = new_reg()
+        alias = ast_FunctionDef(
+            name=f"<lambda>{result}",
+            args=node.args,
+            body=[ast_Return(value=node.body)]
+        )
+        visit_statement(alias)
+        return result
+
 
 
     def visit_(node):
