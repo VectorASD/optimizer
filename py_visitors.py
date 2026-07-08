@@ -555,7 +555,7 @@ EXPR_NAME_MAPPING = {
     ast.SetComp: "set comprehension", ❌
     ast.DictComp: "dict comprehension", ❌
     ast.Dict: "dict literal", ✅
-    ast.Set: "set display", ❌
+    ast.Set: "set display", ✅
     ast.JoinedStr: "f-string expression", ✅
     ast.FormattedValue: "f-string expression", ✅
     ast.Compare: "comparison", ✅
@@ -584,6 +584,7 @@ TODO
             "FormattedValue": visit_FormattedValue,
             "List": visit_List,
             "Dict": visit_Dict,
+            "Set": visit_Set,
         }
         assign_expression_dict = {
             **expression_dict,
@@ -997,6 +998,40 @@ TODO
             free_regs(update, void)
 
         free_regs(zip, zipped)
+        return result
+
+    def visit_Set(node):
+        assert node.elts, node
+        result = new_reg()
+        add(19, result, "set")  # <var> = builtin:<var>
+        elts = node.elts
+
+        mask, mask2 = [], []
+        app, app2 = mask.append, mask2.append
+        for i, element in enumerate(elts):
+            (app2 if isinstance(element, ast_Starred) else app)(i)
+
+        init = [visit_expression(elts[i]) for i in mask]
+        free_regs(*init)
+        if init:
+            tmp = new_reg()
+            add(8, tmp, init)  # <var> = tuple(<var>, ...)
+            add(6, result, result, (tmp,))  # <var> = <func>(<var>, ...)
+            free_reg(tmp)
+        else:
+            add(6, result, result, ())  # <var> = <func>(<var>, ...)
+
+        if mask2:
+            update, void = new_reg(), new_reg()
+            add(12, update, result, "update")  # <var> = <var>.<attr>
+            for i in mask2:
+                element = elts[i]
+                assert isinstance(element.ctx, ast_Load), element
+                item = visit_expression(element.value)
+                free_reg(item)
+                add(6, void, update, (item,))  # <var> = <func>(<var>, ...)
+            free_regs(update, void)
+
         return result
 
 
