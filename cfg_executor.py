@@ -508,9 +508,17 @@ fc.check()
 NumClass(50).print()
 """
 
+source11 = """
+print([])
+arr = [1, 2, 3]
+print(arr)
+arr2 = [7, *arr, 8, *arr, 9, 10]
+print(arr2)
+"""
+
 
 if __name__ == "__main__":
-    module = py_visitor(source10, builtins)
+    module = py_visitor(source11, builtins)
     def_id = module.root_def
 
     for id, F in enumerate(module):

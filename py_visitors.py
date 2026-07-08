@@ -540,7 +540,7 @@ EXPR_NAME_MAPPING = {
     ast.Subscript: "subscript", ✅
     ast.Starred: "starred", ❌
     ast.Name: "name", ✅
-    ast.List: "list", ❌
+    ast.List: "list", ✅
     ast.Tuple: "tuple", ✅
     ast.Lambda: "lambda", ❌
     ast.Call: "function call", ✅
@@ -582,6 +582,7 @@ TODO
             "IfExp": visit_IfExp,
             "JoinedStr": visit_JoinedStr,
             "FormattedValue": visit_FormattedValue,
+            "List": visit_List,
         }
         assign_expression_dict = {
             **expression_dict,
@@ -895,6 +896,52 @@ TODO
         free_regs(format_reg, reg2)
         return reg
 
+    def visit_List(node):
+        assert isinstance(node.ctx, ast_Load), node
+        elts = node.elts
+        result = new_reg()
+        add(19, result, "list")  # <var> = builtin:<var>
+        count = 0
+        while count < len(elts) and not isinstance(elts[count], ast_Starred):
+            count += 1
+        if count:
+            init = tuple(map(visit_expression, elts[:count]))
+            free_regs(*init)
+            tmp = new_reg()
+            add(8, tmp, init)  # <var> = tuple(<var>, ...)
+            add(6, result, result, (tmp,))  # <var> = <func>(<var>, ...)
+            free_reg(tmp)
+        else:
+            add(6, result, result, ())  # <var> = <func>(<var>, ...)
+        if count < len(elts):
+            extend, append, null = new_reg(), new_reg(), new_reg()
+            add(12, extend, result, "extend")  # <var> = <var>.<attr>
+            add(12, append, result, "append")  # <var> = <var>.<attr>
+            while count < len(elts):
+                element = elts[count]
+                if isinstance(element, ast_Starred):
+                    assert isinstance(element.ctx, ast_Load), element
+                    item = visit_expression(element.value)
+                    free_reg(item)
+                    add(6, null, extend, (item,))  # <var> = <func>(<var>, ...)
+                    count += 1
+                else:
+                    count2 = count
+                    while count2 < len(elts) and not isinstance(elts[count2], ast_Starred):
+                        count2 += 1
+                    arr = tuple(map(visit_expression, elts[count:count2]))
+                    free_regs(*arr)
+                    if len(arr) == 1:
+                        add(6, null, append, (arr[0],))  # <var> = <func>(<var>, ...)
+                    else:
+                        tmp = new_reg()
+                        add(8, tmp, arr)  # <var> = tuple(<var>, ...)
+                        add(6, null, extend, (tmp,))  # <var> = <func>(<var>, ...)
+                        free_reg(tmp)
+                    count = count2
+            free_regs(extend, append, null)
+        explore_node(node)
+        return result
 
 
     def visit_(node):
