@@ -1,6 +1,6 @@
 from py_visitors import py_visitor
 from ssa_optimizations import main_loop
-from HIR_parser import stringify_cfg
+from HIR_parser import stringify_cfg, stringify_instr_wrap
 from utils import dashed_separator, bin_ops, unar_ops
 
 
@@ -28,32 +28,22 @@ def make_preds2idx(preds):
         block: {pred: i for i, pred in enumerate(predz)}
         for block, predz in preds.items()}
 
-def misc_loader(F, plug, memory=None, value_host=None):
+def misc_loader(F, plug):
     blocks, preds, succs = F
     exc_index = {}
     new_blocks = {}
     for bb, insts in blocks.items():
         items = []; add = items.append
+        any = False
         for i, inst in enumerate(insts):
             attrs = inst[-1]
-            if attrs is not None:
-                assert isinstance(attrs, dict), inst
-                try:
-                    exc = attrs["exc"]
-                except KeyError: pass
-                else:
-                    if value_host and False:
-                        print(exc, value_host)
-                        exc = tuple((value_host.get(e), to_bb) for e, to_bb in exc)
-                        for value, _ in exc:
-                            memory[value] = builtins[value.label]
-                        add(exc)
-                        continue
-                    add(tuple(exc))
-                    continue
-            add(())
+            if isinstance(attrs, dict) and "exc" in attrs:
+                add(attrs["exc"])
+                any = True
+            else:
+                add(None)
         new_blocks[bb] = tuple(inst[:-1] if inst[0] else inst for inst in insts)
-        exc_index[bb] = items if any(items) else plug
+        exc_index[bb] = items if any else plug
     return (new_blocks, preds, succs), exc_index
 
 
@@ -61,7 +51,7 @@ def misc_loader(F, plug, memory=None, value_host=None):
 class Cell:
     __slots__ = ("v",)
 
-def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None):
+def executor(id, globals, memory=None, defaults=(), closure=(), depth=0):
     F = module[id]
     if memory is None:
         memory = globals  # locals <-> globals
@@ -91,7 +81,10 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
 
     def code_6(var, func, args): # <var> = <func>(<var>, ...)
         func = memory[func]
-        memory[var] = func(*(memory[arg] for arg in args))
+        try: args = [memory[arg] for arg in args]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
+        memory[var] = func(*args)
 
     def code_7(var, const): # <var> = <const>
         memory[var] = const
@@ -139,11 +132,11 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
                 new_closure = [Cell() for i in range(new_cells)]
                 for cell_n in old_cells:
                     new_closure.append(closure[cell_n])
-                return executor(def_id, globals, {}, defaults, new_closure)(*args)
+                return executor(def_id, globals, {}, defaults, new_closure, depth+1)(*args)
             memory[var] = run_wrapper
         else:
             new_closure = [closure[cell_n] for cell_n in old_cells]
-            memory[var] = executor(def_id, globals, {}, defaults, new_closure)
+            memory[var] = executor(def_id, globals, {}, defaults, new_closure, depth+1)
 
     def code_19(var, name): # <var> = builtin:<var>
         memory[var] = builtins[name]
@@ -187,6 +180,12 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
         locals = {name: memory[reg] for name, reg in zip(names, regs)}
         memory[var] = type(name, bases, locals)
 
+    def code_30(var):  # <var> = LAST_EXC
+        nonlocal last_exc
+        assert last_exc is not None
+        memory[var] = last_exc
+        last_exc = None
+
     dispatch = [
         code_0, code_1, code_2, code_3, code_4,
         code_5, code_6, code_7, code_8, code_9,
@@ -194,27 +193,28 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
         code_15, code_16, code_17, code_18, code_19,
         code_20, code_21, code_22, code_23, code_24,
         code_25, code_26, code_27, code_28, code_29,
+        code_30,
     ]
 
     def run_block(bb, block):
+        nonlocal last_exc
         skips = (Goto, Result)
         for i, inst in enumerate(block):
-          # print(id, inst)
+            if VERBOSE:
+                print("  " * depth, id, bb, i, " ", stringify_instr_wrap(block, i))
             it = iter(inst)
             try: dispatch[next(it)](*it)
-            except skips: raise
-            except Exceptor as e:
-                exc = e.args[0]
-                for name, to_bb in exc_items[i]:
-                    if isinstance(exc, memory[name]): raise Goto(to_bb)
-                print("• exc:", id, bb, i, "•", inst)
-                raise e
-            except Exception as e:
-                for name, to_bb in exc_items[i]:
-                    if isinstance(e, builtins[name[1:]] if name[0] == "." else memory[name]):
-                        raise Goto(to_bb)
-                print("• exc:", id, bb, i, "•", inst)
-                raise e
+            except skips:
+                raise
+            except Exception as exc:
+                if isinstance(exc, Exceptor):
+                    exc = exc.args[0]
+                to_bb = exc_items[i]
+                if to_bb is not None:
+                    last_exc = exc
+                    raise Goto(to_bb)
+                print("• exc:", id, bb, i, " ", stringify_instr_wrap(block, i))
+                raise exc from exc.__cause__
 
     def runner(*args):
         if preinit is not None:
@@ -239,9 +239,6 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
                 cur_idx = preds2idx[bb][pred_bb]
             except Result as res:
                 return res.args[0]
-            except Exceptor as wrap:
-                exc = wrap.args[0]
-                raise exc from exc.__cause__
             except KeyError as e:
                 raise NameError(e.args[0]) from None
 
@@ -249,13 +246,14 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
     cur_idx = None
     exc_items = None
     exc_index = None
+    last_exc = None
 
     max_size = max(len(insts) for F in module for insts in F[0].values())
-    plug = ((),) * max_size
+    plug = (None,) * max_size
 
     def preinit():
         nonlocal F, exc_index, preinit
-        F, exc_index = misc_loader(F, plug, memory, value_host)
+        F, exc_index = misc_loader(F, plug)
         preinit = None
 
     return runner
@@ -563,9 +561,72 @@ print(k)  # 42
 print({v*1.5 for v in data.values()})
 """
 
+source13 = """
+counter = {"cat": 123}
+name = "dog"
+try: value = counter[name]
+except KeyError:
+    print(f"where is my {name!r}?")
+
+def test_exc(key, arg):
+    try:
+        exc = arg
+        counter[key] / 0
+    except exc as e:
+        print(f"catched {e!r}")
+
+test_exc(name, KeyError)
+test_exc("cat", ZeroDivisionError)
+
+try:
+    counter["dog"] = 123
+finally:
+    print("it's finally #1")
+
+try:
+    try:
+        counter["meow"]
+    finally:
+        print("it's finally #2")
+except KeyError:
+    print("    ok KeyError")
+
+try:
+    counter["meow"]
+except KeyError:
+    print("ok KeyError")
+finally:
+    print("    it's finally #3")
+
+counter = {}
+try:
+    try:
+        counter["meow"]
+    except KeyError:
+        counter["meow"]
+    finally:
+        print("it's finally #4")
+except KeyError:
+    pass
+"""
+
+source14 = """
+counter = {}
+for i in range(10):
+    try:
+        counter["meow"]
+    except:
+        break
+    finally:
+        print("it's finally #5")
+TODO
+"""
+
+VERBOSE = False
+
 
 if __name__ == "__main__":
-    module = py_visitor(source12, builtins)
+    module = py_visitor(source13, builtins)
     def_id = module.root_def
 
     for id, F in enumerate(module):
@@ -596,4 +657,4 @@ if __name__ == "__main__":
         stringify_cfg(F)
 
     print(dashed_separator)
-    executor(def_id, {}, value_host=value_host)()
+    executor(def_id, {})()

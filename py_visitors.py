@@ -1,5 +1,5 @@
 from peg_driver import parse_it
-from HIR_parser import stringify_cfg, stringify_instr, HAS_LHS
+from HIR_parser import stringify_cfg, stringify_instr, HAS_LHS, DONT_CATCH
 
 import sys
 import traceback
@@ -105,7 +105,7 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
         name = f"b{len(blocks)}"
         blocks[name] = []
         preds[name] = []
-        succs[name] = []
+        # preds и succs заполняются в конце этой функции (visitors)
         return name
     def on_block(name = None):
         nonlocal add_inst, current_block, terminator_pos, is_trace
@@ -120,8 +120,8 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
         if is_trace:
             is_trace = False
             trace()
-    def add(*inst, meta=None):
-        add_inst((*inst, meta))
+    def add(*inst):
+        add_inst((*inst, None))
     def control(*a):
         nonlocal terminator_pos
         if terminator_pos is None:
@@ -129,16 +129,11 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
         if len(a) == 1:
             label = a[0]
             add(3, label)  # goto <label>
-            preds[label].append(current_block)
-            succs[current_block].append(label)
             return
         yeah, reg, nop = a  # assert len(a) == 3
         if yeah == nop:
             return control(yeah)
         add(14, yeah, reg, nop)  # goto <label> if <var> else <label>
-        preds[yeah].append(current_block)
-        preds[nop].append(current_block)
-        succs[current_block].extend((yeah, nop))
 
     on_block()
 
@@ -169,12 +164,22 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
     def set_attr(key, value):
         get_meta()[key] = value
 
-    def exceptor(name, to_bb):
-        meta = get_meta()
-        try: meta["exc"].append((name, to_bb))
-        except KeyError: meta["exc"] = [(name, to_bb)]
-        preds[to_bb].append(current_block)
-        succs[current_block].append(to_bb)
+    class exceptor:
+        def __init__(self, to_bb):
+            self.to_bb = to_bb
+        def __enter__(self):
+            nonlocal add
+            self.prev_add = add
+            exc = {"exc": self.to_bb}
+            def _add(*inst):
+                if DONT_CATCH[inst[0]]:
+                    add_inst((*inst, None))
+                else:
+                    add_inst((*inst, exc))
+            add = _add
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            nonlocal add
+            add = self.prev_add
 
     loop_stack = []
     cause_stack = []
@@ -229,7 +234,7 @@ compound_stmt:
     | &('class' | '@') class_def ✅✅
     | &('with' | 'async') with_stmt ❌❌
     | &('for' | 'async') for_stmt ✅❌
-    | &'try' try_stmt ❌
+    | &'try' try_stmt ✅
     | &'while' while_stmt ✅
     | match_stmt ❌
 TODO
@@ -257,6 +262,7 @@ TODO
             "Return": visit_Return,
             "Global": visit_Global,
             "Nonlocal": visit_Nonlocal,
+            "Try": visit_Try,
         } # TODO
 
     def visit_statement(node):
@@ -298,12 +304,12 @@ TODO
                 free_regs(target, value)
         else: # name == "AnnAssign":
             explore_node(node)
-            exit() # TODO
+            assert False  # TODO
 
     def visit_TypeAlias(node):
         # type_alias
         explore_node(node)
-        exit() # TODO
+        assert False  # TODO
 
     def visit_Expr(node):
         reg = visit_expression(node.value)
@@ -333,10 +339,11 @@ TODO
         add(6, iter_reg, ".iter", (var,)) # <var> = <func>(<var>, ...)
         control(loop) # goto <label>
 
+        catcher = iter_catcher(orelse)
         on_block(loop)
         reg = new_reg()
-        add(6, reg, ".next", (iter_reg,)) # <var> = <func>(<var>, ...)
-        exceptor(".StopIteration", orelse)
+        with exceptor(catcher):
+            add(6, reg, ".next", (iter_reg,)) # <var> = <func>(<var>, ...)
         targets = visit_assign_expression(node.target)
         visit_targets(targets, reg, [None])
         free_reg(reg)
@@ -536,6 +543,79 @@ TODO
     def visit_Nonlocal(node):
         add(16) # nop
         set_attr("nonlocals", node.names)
+
+
+    def iter_catcher(stopper):
+        catcher, fail = new_block(), new_block()
+        exc_reg, reg = new_reg(), new_reg()
+
+        on_block(catcher)
+        add(30, exc_reg)  # <var> = LAST_EXC
+        add(6, reg, ".isinstance", (exc_reg, ".StopIteration"))  # <var> = <func>(<var>, ...)
+        control(stopper, reg, fail)  # goto <label> if <var> else <label>
+
+        on_block(fail)
+        add(17, exc_reg)  # raise <var>
+
+        free_regs(exc_reg, reg)
+        return catcher
+
+    def visit_Try(node):
+        catcher, end = new_block(), new_block()
+        with exceptor(catcher):
+            visit_statements(node.body)
+        visit_statements(node.orelse)
+        visit_statements(node.finalbody)
+        control(end)  # goto <label>
+
+        exc_reg = new_reg()
+        handler_blocks = []
+
+        if node.finalbody:
+            catcher_l2 = new_block()
+            on_block(catcher_l2)
+            add(30, exc_reg)  # <var> = LAST_EXC
+            visit_statements(node.finalbody)
+            add(17, exc_reg)  # raise <var>
+
+        for handler in node.handlers:
+            block = new_block()
+            on_block(block)
+            if handler.name is not None:
+                add(0, f"_{handler.name}", exc_reg)
+            if node.finalbody:
+                with exceptor(catcher_l2):
+                    visit_statements(handler.body)
+            else:
+                visit_statements(handler.body)
+            visit_statements(node.finalbody)
+            control(end)  # goto <label>
+            handler_blocks.append((block, handler.type))
+
+        def catcher_body():
+            for block, exc_type in handler_blocks:
+                if exc_type is None:
+                    control(block)  # goto <label>
+                    break
+                reg = to_reg(visit_expression(exc_type))
+                add(6, reg, ".isinstance", (exc_reg, reg))  # <var> = <func>(<var>, ...)
+                free_reg(reg)
+                nop = new_block()
+                control(block, reg, nop)  # goto <label> if <var> else <label>
+                on_block(nop)
+            else:
+                add(17, exc_reg)  # raise <var>
+
+        on_block(catcher)
+        add(30, exc_reg)  # <var> = LAST_EXC
+        if node.finalbody:
+            with exceptor(catcher_l2):
+                catcher_body()
+        else:
+            catcher_body()
+
+        on_block(end)
+        free_reg(exc_reg)
 
 
 
@@ -914,15 +994,12 @@ TODO
         else:
             format_reg = to_reg(visit_expression(node.format_spec))
 
-        reg2 = new_reg()
         if conv != -1:
-            conv = ("str", "repr", "ascii")["sra".index(chr(conv))]
-            add(19, reg2, conv)  # <var> = builtin:<var>
-            add(6, reg, reg2, (reg,))  # <var> = <func>(<var>, ...)
-        add(19, reg2, "format")  # <var> = builtin:<var>
-        add(6, reg, reg2, (reg, format_reg))  # <var> = <func>(<var>, ...)
+            conv = (".str", ".repr", ".ascii")["sra".index(chr(conv))]
+            add(6, reg, conv, (reg,))  # <var> = <func>(<var>, ...)
+        add(6, reg, ".format", (reg, format_reg))  # <var> = <func>(<var>, ...)
 
-        free_regs(format_reg, reg2)
+        free_regs(format_reg)
         return reg
 
     def visit_List(node):
@@ -1116,10 +1193,11 @@ TODO
             add(6, iter_reg, ".iter", (var,))  # <var> = <func>(<var>, ...)
             control(loop)  # goto <label>
 
+            catcher = iter_catcher(prev_loop)
             on_block(loop)
             reg = new_reg()
-            add(6, reg, ".next", (iter_reg,))  # <var> = <func>(<var>, ...)
-            exceptor(".StopIteration", prev_loop)
+            with exceptor(catcher):
+                add(6, reg, ".next", (iter_reg,))  # <var> = <func>(<var>, ...)
             targets = visit_assign_expression(gen.target)
             visit_targets(targets, reg, [None])
             free_reg(reg)
@@ -1203,7 +1281,7 @@ TODO
     apply_expression_dict()
 
     for inst in preinit:
-        add_inst((*inst, {}))
+        add(*inst)
 
     if def_id: visit_statements(ast)
     else:
@@ -1220,6 +1298,24 @@ TODO
         stringify_cfg(F)
         print("REGS:", regs)
         raise AssertionError("Не все регистры освобождены!")
+
+    for bb, insts in blocks.items():
+        _succs = set(); add_s = _succs.add
+        for inst in insts:
+            attrs = inst[-1]
+            if attrs is not None and "exc" in attrs:
+                add_s(attrs["exc"])
+        term_inst = insts[-1]
+        kind = term_inst[0]
+        if kind == 3:  # goto <label>
+            add_s(term_inst[1])
+        elif kind == 14:  # goto <label> if <var> else <label>
+            add_s(term_inst[1])
+            add_s(term_inst[3])
+        _succs = list(_succs)
+        succs[bb] = _succs
+        for s_bb in _succs:
+            preds[s_bb].append(bb)
 
     return def_id
 
@@ -1264,9 +1360,6 @@ def scope_handler(module: Module, builtins):
                         for var in meta["globals"]: add_flag(f"_{var}", GLOBAL)
                     if "nonlocals" in meta:
                         for var in meta["nonlocals"]: add_flag(f"_{var}", NONLOCAL)
-                    if "exc" in meta:
-                        for name, _ in meta["exc"]:
-                            if name[0] == "_": add_flag(name, READ)
         flag_index.append(var_flags)
 
     # tree checker
@@ -1364,10 +1457,6 @@ def scope_handler(module: Module, builtins):
                 # read
                 vars = set()
                 uses_getters[kind](inst, vars.add)
-                meta = inst[-1]
-                if meta is not None and "exc" in meta:
-                    print(meta)
-                    exit() # TODO
                 for var in vars:
                     if var[0] == ".":
                         dotted_builtins.add(var)
@@ -1428,11 +1517,6 @@ def scope_handler(module: Module, builtins):
             # read
             vars = set()
             uses_getters[kind](inst, vars.add)
-            meta = inst[-1]
-            if meta is not None and "exc" in meta:
-                for name, _ in meta["exc"]:
-                    if name[0] == "_":
-                        add((20, name, name, None)) # <var> = glob:<var>
             for var in vars:
                 if var[0] == '_' and var in write_globals:
                     add((20, var, var, None)) # <var> = glob:<var>

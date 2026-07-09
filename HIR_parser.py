@@ -83,7 +83,11 @@ definitions = (
 
     (1, 2, (),        1, 1, "#28: <var> = ''.join((<var>, ...))"),
     (1, (3,5), (),    0, 0, "#29: <var> = type(<name>, (<base_reg>, ...), (<local_name>, ...), (<local_reg>, ...))"),
+    (1, 0, (),        1, 0, "#30: <var> = LAST_EXC"),
 )
+dont_catch = {0, 3, 5, 7, 14, 16, 18, 19, 28, 29, 30}
+DONT_CATCH = tuple(i in dont_catch for i in range(len(definitions)))
+
 def to_tuple(obj):
     if not obj:
         return ()
@@ -268,6 +272,7 @@ def stringify_instr(ops, i, write):
         case 29:
             locals = dict(zip(op[4], op[5]))
             write(f"{op[1]} = type({op[2]}, ({', '.join(map(str, op[3]))}), {locals})")
+        case 30: write(f"{op[1]} = LAST_EXC")
 
         case _: write(f"{op} ???")
 

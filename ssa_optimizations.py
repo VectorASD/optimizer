@@ -172,6 +172,19 @@ def branch_folding(F, bb, erased_bb): # BF
 
 
 
+def filter_exc(insts, bb, target):
+    for inst in insts:
+        attrs = inst[-1]
+        if attrs is not None and "exc" in attrs:
+            exc_bb = attrs["exc"]
+            if exc_bb == bb:
+                attrs["exc"] = target
+
+def filter_succs(succs, bb, target):
+    for i, succ_bb in enumerate(succs):
+        if succ_bb == bb:
+            succs[i] = target
+
 def unconditional_jump_forwarding(F): # UJF
     blocks, preds, succs = F
     queue = tuple(blocks)
@@ -199,25 +212,25 @@ def unconditional_jump_forwarding(F): # UJF
                 changed = False
 
                 if p_kind == 3: # goto <bb> → goto <target>
-                    assert p_last[1] == bb # TODO: пока не поддерживаются ветвления исключений
-                    p_insts[-1] = (3, target, p_last[2])
-                    p_succs = succs[pred]
-                    for i, succ_bb in enumerate(p_succs):
-                        if succ_bb == bb: p_succs[i] = target
+                    filter_exc(p_insts, bb, target)
+                    filter_succs(succs[pred], bb, target)
+
+                    if p_last[1] == bb:
+                        p_insts[-1] = (3, target, p_last[2])
                     changed = True
                 elif p_kind == 14: # goto <yeah> if <var> else <nop>
+                    filter_exc(p_insts, bb, target)
+                    filter_succs(succs[pred], bb, target)
+
                     yeah, cond, nop = p_last[1], p_last[2], p_last[3]
-                    assert bb == yeah or bb == nop # TODO: пока не поддерживаются ветвления исключений
-                    p_succs = succs[pred]
-                    for i, succ_bb in enumerate(p_succs):
-                        if succ_bb == bb: p_succs[i] = target
-                    yeah2 = target if bb == yeah else yeah
-                    nop2 = target if bb == nop else nop
-                    if yeah2 == nop2:
-                        p_insts[-1] = (3, yeah2, p_last[4]) # goto <label>
-                        branch_folding(F, bb, nop2) # BF
-                    else:
-                        p_insts[-1] = (14, yeah2, cond, nop2, p_last[4])
+                    if bb == yeah or bb == nop:
+                        yeah2 = target if bb == yeah else yeah
+                        nop2 = target if bb == nop else nop
+                        if yeah2 == nop2:
+                            p_insts[-1] = (3, yeah2, p_last[4]) # goto <label>
+                            branch_folding(F, bb, nop2) # BF
+                        else:
+                            p_insts[-1] = (14, yeah2, cond, nop2, p_last[4])
                     changed = True
 
                 if changed:
@@ -321,7 +334,8 @@ def block_merging(F): # BM
                     # print(bb, "<->", next_bb)
                     insts.pop()
                     insts.extend(blocks[next_bb])
-                    succs[bb] = succs[next_bb]
+                    succs[bb].remove(next_bb)  # т.к. здесь могут ещё быть succs от исключений!
+                    succs[bb].extend(succs[next_bb])
                     del blocks[next_bb], preds[next_bb], succs[next_bb] # minus node/vertex ;'-}
                     for succ in succs[bb]:
                         preds[succ] = [bb if label == next_bb else label for label in preds[succ]]
@@ -336,6 +350,9 @@ def can_DCE(inst):
         return inst[2].const in FOLDING_SET
     if HAS_LHS[kind] and inst[1].side_effect:
         return False
+    attrs = inst[-1]
+    if attrs is not None and "exc" in attrs:
+        return False
     return CAN_DCE[kind]
 
 def can_CSE(inst):
@@ -346,6 +363,13 @@ def can_CSE(inst):
         if inst[1].side_effect:
             return False
         return CAN_CSE[kind]
+    return False
+
+def has_exc(insts):
+    for inst in insts:
+        attrs = inst[-1]
+        if attrs is not None and "exc" in attrs:
+            return True
     return False
 
 
@@ -423,6 +447,9 @@ def common_subexpression_elimination(blocks, IDom, intersect): # CSE
         for next_def in defs:
             next_bb = next_def[0]
             bb = intersect(bb, next_bb)
+      # print("DEFS:", sub, bb, has_exc(blocks[bb]))
+        if has_exc(blocks[bb]):
+            continue
 
         commons = []; add = commons.append
         for next_bb, i, name in sub:
