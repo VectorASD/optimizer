@@ -35,11 +35,11 @@ def misc_loader(F, plug, memory=None, value_host=None):
     for bb, insts in blocks.items():
         items = []; add = items.append
         for i, inst in enumerate(insts):
-            meta = inst[-1]
-            if meta:
-                assert isinstance(meta, dict), inst
+            attrs = inst[-1]
+            if attrs is not None:
+                assert isinstance(attrs, dict), inst
                 try:
-                    exc = meta["exc"]
+                    exc = attrs["exc"]
                 except KeyError: pass
                 else:
                     if value_host and False:
@@ -52,7 +52,7 @@ def misc_loader(F, plug, memory=None, value_host=None):
                     add(tuple(exc))
                     continue
             add(())
-        new_blocks[bb] = tuple(inst[:-1] for inst in insts)
+        new_blocks[bb] = tuple(inst[:-1] if inst[0] else inst for inst in insts)
         exc_index[bb] = items if any(items) else plug
     return (new_blocks, preds, succs), exc_index
 
@@ -66,9 +66,11 @@ def executor(id, globals, memory=None, defaults=(), closure=(), value_host=None)
     if memory is None:
         memory = globals  # locals <-> globals
 
-    def code_0(var, setter): # <var> = <var>
+    def code_0(var, setter, attrs): # <var> = <var>
         try: memory[var] = memory[setter]
-        except KeyError: pass
+        except KeyError:
+            if attrs is None or "can_del" not in attrs:
+                raise
 
     def code_1(var, left, op, right): # <var> = <var> <+|-|*|/|%|...> <var>
         try: func = bin_ops[op]
@@ -347,6 +349,10 @@ pass
 if input(): var = range(5, 8)
 else: var = range(5, 8)
 print(var) # check function CSE
+
+R = range(2, 9, 3)
+for i in R: print("a:", i)
+for i in R: print("b:", i)
 """
 
 source3 = """
@@ -536,8 +542,8 @@ print({4, *a})
 source12 = """
 # *()  # SyntaxError: can't use starred expression here
 
-func = lambda: 42
-print(func())
+# func = lambda: 42
+# print(func())
 
 i = j = 123
 arr = list(range(0, 32, 2))
@@ -547,7 +553,14 @@ R = range(3)
 print([(i, j) for i in R for j in R])
 print([(lambda i: i*10)(i) for i in R])
 print([(lambda: i*10)() for i in R])
-print(i, j)
+print(i, j)  # 123 123
+
+data = {"a": 1, "b": 3, "c": 10}
+k = 42
+print({k: v*2 for k, v in data.items()})
+print(k)  # 42
+
+print({v*1.5 for v in data.values()})
 """
 
 

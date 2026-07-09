@@ -166,7 +166,7 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
             meta = {}
             insts[-1] = (*inst[:-1], meta)
         return meta
-    def set_meta(key, value):
+    def set_attr(key, value):
         get_meta()[key] = value
 
     def exceptor(name, to_bb):
@@ -327,17 +327,19 @@ TODO
     def visit_For(node):
         loop, end = new_block(), new_block()
         orelse = new_block() if node.orelse else end
-        reg = visit_expression(node.iter)
-        add(6, reg, ".iter", (reg,)) # <var> = <func>(<var>, ...)
+        var = visit_expression(node.iter)
+        free_reg(var)
+        iter_reg = new_reg()
+        add(6, iter_reg, ".iter", (var,)) # <var> = <func>(<var>, ...)
         control(loop) # goto <label>
 
         on_block(loop)
-        reg2 = new_reg()
-        add(6, reg2, ".next", (reg,)) # <var> = <func>(<var>, ...)
+        reg = new_reg()
+        add(6, reg, ".next", (iter_reg,)) # <var> = <func>(<var>, ...)
         exceptor(".StopIteration", orelse)
         targets = visit_assign_expression(node.target)
-        visit_targets(targets, reg2, [None])
-        free_reg(reg2)
+        visit_targets(targets, reg, [None])
+        free_reg(reg)
 
         loop_stack.append((end, loop))
         visit_statements(node.body)
@@ -345,7 +347,7 @@ TODO
 
         control(loop) # goto <label>
 
-        free_reg(reg)
+        free_reg(iter_reg)
         if node.orelse:
             on_block(orelse)
             visit_statements(node.orelse)
@@ -529,11 +531,11 @@ TODO
 
     def visit_Global(node):
         add(16) # nop
-        set_meta("globals", node.names)
+        set_attr("globals", node.names)
 
     def visit_Nonlocal(node):
         add(16) # nop
-        set_meta("nonlocals", node.names)
+        set_attr("nonlocals", node.names)
 
 
 
@@ -564,8 +566,8 @@ EXPR_NAME_MAPPING = {
     ast.YieldFrom: "yield expression", ❌
     ast.Await: "await expression", ❌
     ast.ListComp: "list comprehension", ✅
-    ast.SetComp: "set comprehension", ❌
-    ast.DictComp: "dict comprehension", ❌
+    ast.SetComp: "set comprehension", ✅
+    ast.DictComp: "dict comprehension", ✅
     ast.Dict: "dict literal", ✅
     ast.Set: "set display", ✅
     ast.JoinedStr: "f-string expression", ✅
@@ -600,6 +602,8 @@ TODO
             "Starred": visit_Starred,
             "Lambda": visit_Lambda,
             "ListComp": visit_ListComp,
+            "DictComp": visit_DictComp,
+            "SetComp": visit_SetComp,
         }
         assign_expression_dict = {
             **expression_dict,
@@ -696,7 +700,7 @@ TODO
     def extract_targets(left, add):
         if type(left) is tuple:
             for _left in left:
-                extract_targets(_left)
+                extract_targets(_left, add)
         else:
             add(left)
 
@@ -1080,6 +1084,7 @@ TODO
 
         for old, new in vars:
             add(0, new, old)  # <var> = <var>
+            set_attr("can_del", 1)
           # add(7, "S", f"Save {old[1:]!r}:")
           # add(6, "void", ".print", ("S", new))
         vars_stack.append(vars)
@@ -1087,25 +1092,22 @@ TODO
         vars = vars_stack.pop()
         for old, new in vars:
             add(0, old, new)  # <var> = <var>
+            set_attr("can_del", 1)
           # add(7, "S", f"Restore {old[1:]!r}:")
           # add(6, "void", ".print", ("S", old))
 
-    def visit_ListComp(node):
-        result, append = new_reg(), new_reg()
-        add(19, result, "list")  # <var> = builtin:<var>
-        add(6, result, result, ())  # <var> = <func>(<var>, ...)
-        add(12, append, result, "append")  # <var> = <var>.<attr>
-
+    def visit_comprehensions(generators, collector):
         end = new_block()
         prev_loop = end
         regs = []
 
-        targets_arr = [visit_assign_expression(gen.target) for gen in node.generators]
+        targets_arr = [visit_assign_expression(gen.target) for gen in generators]
         catched_visit_targets(targets_arr)
 
-        for gen in node.generators:
+        for gen in generators:
+            assert isinstance(gen, ast_comprehension), gen
           # explore_node(gen)
-            assert gen.is_async == 0, node.type_comment  # TODO
+            assert gen.is_async == 0, gen  # TODO
 
             loop = new_block()
             var = visit_expression(gen.iter)
@@ -1132,15 +1134,56 @@ TODO
             prev_loop = loop
             regs.append(iter_reg)
 
-        item = visit_expression(node.elt)
-        add(6, '_', append, (item,))  # <var> = <func>(<var>, ...)
-        free_reg(item)
+        collector()
 
         control(loop)  # goto <label>
         on_block(end)
 
         reset_cathed()
-        free_regs(append, *regs)
+        free_regs(*regs)
+
+    def visit_ListComp(node):
+        result, append = new_reg(), new_reg()
+        add(19, result, "list")  # <var> = builtin:<var>
+        add(6, result, result, ())  # <var> = <func>(<var>, ...)
+        add(12, append, result, "append")  # <var> = <var>.<attr>
+
+        def collector():
+            item = visit_expression(node.elt)
+            add(6, '_', append, (item,))  # <var> = <func>(<var>, ...)
+            free_reg(item)
+        visit_comprehensions(node.generators, collector)
+
+        free_reg(append)
+        return result
+
+    def visit_DictComp(node):
+        explore_node(node)
+        result = new_reg()
+        add(19, result, "dict")  # <var> = builtin:<var>
+        add(6, result, result, ())  # <var> = <func>(<var>, ...)
+
+        def collector():
+            kreg = visit_expression(node.key)
+            vreg = visit_expression(node.value)
+            add(11, result, kreg, vreg)  # <var>[<var>] = <var>
+            free_regs(kreg, vreg)
+        visit_comprehensions(node.generators, collector)
+        return result
+
+    def visit_SetComp(node):
+        result, _add = new_reg(), new_reg()
+        add(19, result, "set")  # <var> = builtin:<var>
+        add(6, result, result, ())  # <var> = <func>(<var>, ...)
+        add(12, _add, result, "add")  # <var> = <var>.<attr>
+
+        def collector():
+            item = visit_expression(node.elt)
+            add(6, '_', _add, (item,))  # <var> = <func>(<var>, ...)
+            free_reg(item)
+        visit_comprehensions(node.generators, collector)
+
+        free_reg(_add)
         return result
 
 

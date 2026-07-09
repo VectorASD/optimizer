@@ -496,10 +496,13 @@ for kind, _def in enumerate(definitions):
                 f"        inst[{value}] = tuple(arr)",
             ))
         code.append("    except IndexError:")
-        if kind:
-            code.append("        raise SSA_Error(f'{var!r} is undefined: {stringify_instr_wrap(insts, i)!r}')")
-        else:
-            code.append("        return (16, None)  # nop")
+        if kind == 0:  # <var> = <var>
+            code.extend((
+                "        attrs = inst[-1]",
+                "        if attrs is not None and 'can_del' in attrs:",
+                "            return (16, None)  # nop",
+            ))
+        code.append("        raise SSA_Error(f'{var!r} is undefined: {stringify_instr_wrap(insts, i)!r}')")
     if _def[0]:
         code.append("    value_host.add(inst)")
 
