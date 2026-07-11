@@ -515,6 +515,9 @@ for kind, _def in enumerate(definitions):
     if len(code) == 3: code = (code[0] + " return insts[i]",)
     locs = {"SSA_Error": SSA_Error, "stringify_instr_wrap": stringify_instr_wrap, "Value": Value}
     exec("\n".join(code), locs)
+  # if kind == 6:
+  #     for line_n, line in enumerate(code, 1):
+  #         print(f"{line_n:2}: {line}")
     renamers.append(locs["rename"])
 
 def insts_renamer(insts, value_host):

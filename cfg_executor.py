@@ -196,12 +196,13 @@ def executor(id, globals, memory=None, defaults=(), closure=(), depth=0):
         code_30,
     ]
 
-    def run_block(bb, block):
+    def run_block(bb):
         nonlocal last_exc
         skips = (Goto, Result)
+        block = blocks[bb]
         for i, inst in enumerate(block):
             if VERBOSE:
-                print("  " * depth, id, bb, i, " ", stringify_instr_wrap(block, i))
+                print("  " * depth, id, bb, i, " ", stringify_instr_wrap(orig_blocks[bb], i))
             it = iter(inst)
             try: dispatch[next(it)](*it)
             except skips:
@@ -213,7 +214,7 @@ def executor(id, globals, memory=None, defaults=(), closure=(), depth=0):
                 if to_bb is not None:
                     last_exc = exc
                     raise Goto(to_bb)
-                print("• exc:", id, bb, i, " ", stringify_instr_wrap(block, i))
+                print("• exc:", id, bb, i, " ", stringify_instr_wrap(orig_blocks[bb], i))
                 raise exc from exc.__cause__
 
     def runner(*args):
@@ -226,12 +227,11 @@ def executor(id, globals, memory=None, defaults=(), closure=(), depth=0):
         dispatch[27] = lambda n: code_27(args, n)
 
         nonlocal cur_idx, exc_items
-        blocks, preds, succs = F
         bb = "b0"
         while True:
             try:
                 exc_items = exc_index[bb]
-                run_block(bb, blocks[bb])
+                run_block(bb)
                 raise RuntimeError(f"Base-block {bb!r} exited without Goto and Result!")
             except Goto as e:
                 pred_bb = bb
@@ -248,13 +248,17 @@ def executor(id, globals, memory=None, defaults=(), closure=(), depth=0):
     exc_index = None
     last_exc = None
 
+    orig_blocks = F[0]
+    blocks = None
+
     max_size = max(len(insts) for F in module for insts in F[0].values())
     plug = (None,) * max_size
 
     def preinit():
-        nonlocal F, exc_index, preinit
+        nonlocal F, exc_index, preinit, blocks
         F, exc_index = misc_loader(F, plug)
         preinit = None
+        blocks = F[0]
 
     return runner
 
@@ -598,7 +602,6 @@ except KeyError:
 finally:
     print("    it's finally #3")
 
-counter = {}
 try:
     try:
         counter["meow"]
@@ -608,18 +611,25 @@ try:
         print("it's finally #4")
 except KeyError:
     pass
-"""
 
-source14 = """
-counter = {}
+try: pass  # deadcode in catcher block (Нельзя попасть в "except ValueError")
+except ValueError:
+    print("???")
+
+try:
+    counter["meow"]
+except:
+    pass  # deadcode in catcher_l2 block (finally пытается отловить невозможную ошибку внутри exceptor)
+finally:
+    print("dead exceptor")
+
 for i in range(10):
     try:
         counter["meow"]
     except:
-        break
+        break  # а не то-то было!!! make_finalizer ВСЁ видит! ;"-}}}
     finally:
         print("it's finally #5")
-TODO
 """
 
 VERBOSE = False

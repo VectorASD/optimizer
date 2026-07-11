@@ -101,12 +101,15 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
     current_block = None
     is_trace = False
     terminator_pos = None
+    deleted_blocks = []
     def new_block():
-        name = f"b{len(blocks)}"
+        name = deleted_blocks.pop() if deleted_blocks else f"b{len(blocks)}"
         blocks[name] = []
-        preds[name] = []
-        # preds и succs заполняются в конце этой функции (visitors)
+        # preds и succs заполняются в make_CFG
         return name
+    def del_block(name):
+        deleted_blocks.append(name)
+        del blocks[name]
     def on_block(name = None):
         nonlocal add_inst, current_block, terminator_pos, is_trace
         if terminator_pos is not None:
@@ -171,12 +174,16 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
             nonlocal add
             self.prev_add = add
             exc = {"exc": self.to_bb}
+            has_exc = False
             def _add(*inst):
+                nonlocal has_exc
                 if DONT_CATCH[inst[0]]:
                     add_inst((*inst, None))
                 else:
                     add_inst((*inst, exc))
+                    has_exc = True
             add = _add
+            return lambda: has_exc
         def __exit__(self, exc_type, exc_val, exc_tb):
             nonlocal add
             add = self.prev_add
@@ -560,62 +567,97 @@ TODO
         free_regs(exc_reg, reg)
         return catcher
 
-    def visit_Try(node):
-        catcher, end = new_block(), new_block()
-        with exceptor(catcher):
-            visit_statements(node.body)
-        visit_statements(node.orelse)
-        visit_statements(node.finalbody)
-        control(end)  # goto <label>
-
+    def make_catcher(catcher, finalbody, handlers=(), end=None):
         exc_reg = new_reg()
+
         handler_blocks = []
+        for handler in handlers:
+            exc_block = new_block()
+            handler_blocks.append((exc_block, handler.type))
 
-        if node.finalbody:
-            catcher_l2 = new_block()
-            on_block(catcher_l2)
-            add(30, exc_reg)  # <var> = LAST_EXC
-            visit_statements(node.finalbody)
-            add(17, exc_reg)  # raise <var>
-
-        for handler in node.handlers:
-            block = new_block()
-            on_block(block)
+            on_block(exc_block)
             if handler.name is not None:
                 add(0, f"_{handler.name}", exc_reg)
-            if node.finalbody:
-                with exceptor(catcher_l2):
-                    visit_statements(handler.body)
-            else:
-                visit_statements(handler.body)
-            visit_statements(node.finalbody)
+            visit_statements(handler.body)
             control(end)  # goto <label>
-            handler_blocks.append((block, handler.type))
-
-        def catcher_body():
-            for block, exc_type in handler_blocks:
-                if exc_type is None:
-                    control(block)  # goto <label>
-                    break
-                reg = to_reg(visit_expression(exc_type))
-                add(6, reg, ".isinstance", (exc_reg, reg))  # <var> = <func>(<var>, ...)
-                free_reg(reg)
-                nop = new_block()
-                control(block, reg, nop)  # goto <label> if <var> else <label>
-                on_block(nop)
-            else:
-                add(17, exc_reg)  # raise <var>
 
         on_block(catcher)
         add(30, exc_reg)  # <var> = LAST_EXC
-        if node.finalbody:
-            with exceptor(catcher_l2):
-                catcher_body()
+        for exc_block, exc_type in handler_blocks:
+            if exc_type is None:
+                control(exc_block)  # goto <label>
+                break
+            reg = to_reg(visit_expression(exc_type))
+            add(6, reg, ".isinstance", (exc_reg, reg))  # <var> = <func>(<var>, ...)
+            free_reg(reg)
+            nop = new_block()
+            control(exc_block, reg, nop)  # goto <label> if <var> else <label>
+            on_block(nop)
         else:
-            catcher_body()
-
-        on_block(end)
+            visit_statements(finalbody)
+            add(17, exc_reg)  # raise <var>
         free_reg(exc_reg)
+
+    def make_finalizer():
+        old_blocks = set(blocks)
+        old_blocks.remove(current_block)
+      # print("old_blocks:", old_blocks)
+        def apply(finalbody):
+            new_blocks = set(blocks) - old_blocks
+          # print("new_blocks:", new_blocks)
+            for bb in new_blocks:
+                insts = blocks[bb]
+                if not insts:
+                    continue
+                term_inst = insts[-1]
+                kind = term_inst[0]
+                if kind == 3:  # goto <label>
+                    if term_inst[1] in old_blocks:
+                      # print("Попытка смыться:", bb, "->", term_inst[1])
+                        insts.pop()
+                        on_block(bb)
+                        visit_statements(finalbody)
+                        add_inst(term_inst)
+                elif kind == 14:  # goto <label> if <var> else <label>
+                    if term_inst[1] in old_blocks or term_inst[3] in old_blocks:
+                        assert False  # Кажется, что это недостижимое условие...
+                        # Как вообще возможно обойти finally через УСЛОВНЫЙ переход?!
+                        # break и continue абсолютно всегда БЕЗУСЛОВНЫЕ
+            #exit()
+        return apply
+
+    def visit_Try(node):
+        end = new_block()
+        apply_finally = make_finalizer()
+
+        catcher = new_block()
+        with exceptor(catcher) as has_exc:
+            visit_statements(node.body)
+            has_exc = has_exc()
+        visit_statements(node.orelse)
+        control(end)  # goto <label>
+
+        if not has_exc:
+            del_block(catcher)  # deadcode block
+        elif node.finalbody:
+            only_final = not node.handlers
+            if only_final:
+                # shortcut для того, чтобы не создавать две одинаковые чисто-try-finally конструкции
+                make_catcher(catcher, node.finalbody)
+            else:
+                catcher_l2 = new_block()
+                with exceptor(catcher_l2) as has_exc:
+                    make_catcher(catcher, node.finalbody, node.handlers, end)
+                    has_exc = has_exc()
+                if has_exc:
+                    make_catcher(catcher_l2, node.finalbody)
+                else:
+                    del_block(catcher_l2)
+        else:
+            make_catcher(catcher, node.finalbody, node.handlers, end)
+
+        apply_finally(node.finalbody)
+        on_block(end)
 
 
 
@@ -1071,10 +1113,13 @@ TODO
         while count < len(keys) and keys[count] is not None:
             count += 1
 
-        zip_it(keys[:count], values[:count])
-        result = new_reg()
-        add(19, result, "dict")  # <var> = builtin:<var>
-        add(6, result, result, (zipped,))  # <var> = <func>(<var>, ...)
+        if count:
+            zip_it(keys[:count], values[:count])
+            result = new_reg()
+            add(6, result, ".dict", (zipped,))  # <var> = <func>(<var>, ...)
+        else:
+            result = new_reg()
+            add(6, result, ".dict", ())  # <var> = <func>(<var>, ...)
 
         if count < len(keys):
             update = new_reg()
@@ -1299,6 +1344,19 @@ TODO
         print("REGS:", regs)
         raise AssertionError("Не все регистры освобождены!")
 
+    make_CFG(blocks, preds, succs)
+
+    # с появлением del_block, ключи теперь могут перемешаться...
+    sorted_blocks = {bb: blocks[bb] for bb in sorted(blocks, key = lambda bb: int(bb[1:]))}
+    blocks.clear(); blocks.update(sorted_blocks)
+
+    return def_id
+
+
+
+def make_CFG(blocks, preds, succs):
+    for bb in blocks:
+        preds[bb] = []
     for bb, insts in blocks.items():
         _succs = set(); add_s = _succs.add
         for inst in insts:
@@ -1312,12 +1370,32 @@ TODO
         elif kind == 14:  # goto <label> if <var> else <label>
             add_s(term_inst[1])
             add_s(term_inst[3])
-        _succs = list(_succs)
         succs[bb] = _succs
         for s_bb in _succs:
             preds[s_bb].append(bb)
 
-    return def_id
+def check_CFG(F):
+    # TODO: отключить (сделать return True), когда подтвердится непоколебимость пассов
+    preds, succs = {}, {}
+    make_CFG(F[0], preds, succs)
+    ok = True
+    if F[1].keys() != preds.keys():
+        print(f"!!! Разные блоки в preds: {tuple(F[1])} != {tuple(preds)}")
+        ok = False
+    else:
+        for bb, p_blocks in F[1].items():
+            if set(p_blocks) != set(preds[bb]):
+                print(f"!!! Разные preds[{bb}]: сейчас: {p_blocks}, а должно быть: {preds[bb]}")
+                ok = False
+    if F[2].keys() != succs.keys():
+        print(f"!!! Разные блоки в succs: {tuple(F[1])} != {tuple(succs)}")
+        ok = False
+    else:
+        for bb, s_blocks in F[2].items():
+            if s_blocks != succs[bb]:
+                print(f"!!! Разные succs[{bb}]: сейчас: {s_blocks}, а должно быть: {succs[bb]}")
+                ok = False
+    return ok
 
 
 

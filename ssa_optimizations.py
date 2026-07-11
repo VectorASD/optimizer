@@ -1,5 +1,6 @@
 from ssa import SSA, compute_idom_fast
 from HIR_parser import stringify_cfg, HAS_LHS, uses_V_getters, CAN_DCE, CAN_CSE, ssa_hash, Value
+from py_visitors import check_CFG
 from utils import bin_ops, unar_ops
 from folding import FOLDING_ATTRIBUTE_DICT, FOLDING_SET
 
@@ -180,16 +181,44 @@ def filter_exc(insts, bb, target):
             if exc_bb == bb:
                 attrs["exc"] = target
 
-def filter_succs(succs, bb, target):
-    for i, succ_bb in enumerate(succs):
-        if succ_bb == bb:
-            succs[i] = target
+def UJF_change_preds(F, bb, target):
+    # пример: bb = b3, target = b1,
+    # preds[b3] = b0, b5
+    # было: preds[b1] = b3, b7
+    # стало: preds[b1] = b0, b5, b7
+    blocks, preds, _ = F
+
+    part = preds[bb]
+    new_preds = []
+    if len(part) == 1:
+        for i, s_bb in enumerate(preds[target]):
+            if s_bb == bb: new_preds.extend(part)
+            else: new_preds.append(s_bb)
+        preds[target] = new_preds
+        return
+
+    phi_idx = []
+    for i, s_bb in enumerate(preds[target]):
+        if s_bb == bb:
+            new_preds.extend(part)
+            phi_idx.extend((i,) * len(part))
+        else:
+            new_preds.append(s_bb)
+            phi_idx.append(i)
+    preds[target] = new_preds
+
+    insts = blocks[target]
+    for i, inst in enumerate(insts):
+        if inst[0] != 5:
+            break
+        _, var, phi, attrs = inst
+        new_phi = tuple(phi[i] for i in phi_idx)
+        insts[i] = 5, var, new_phi, attrs
 
 def unconditional_jump_forwarding(F): # UJF
     blocks, preds, succs = F
     queue = tuple(blocks)
 
-    # stringify_cfg(F) # TODO: убрать после фикса source2 на исключения
     while queue:
         new_queue = []
         queue_append = new_queue.append
@@ -209,18 +238,18 @@ def unconditional_jump_forwarding(F): # UJF
 
                 p_last = p_insts[-1]
                 p_kind = p_last[0]
-                changed = False
 
                 if p_kind == 3: # goto <bb> → goto <target>
                     filter_exc(p_insts, bb, target)
-                    filter_succs(succs[pred], bb, target)
+                    succs[pred].remove(bb)
+                    succs[pred].add(target)
 
                     if p_last[1] == bb:
                         p_insts[-1] = (3, target, p_last[2])
-                    changed = True
                 elif p_kind == 14: # goto <yeah> if <var> else <nop>
                     filter_exc(p_insts, bb, target)
-                    filter_succs(succs[pred], bb, target)
+                    succs[pred].remove(bb)
+                    succs[pred].add(target)
 
                     yeah, cond, nop = p_last[1], p_last[2], p_last[3]
                     if bb == yeah or bb == nop:
@@ -231,19 +260,13 @@ def unconditional_jump_forwarding(F): # UJF
                             branch_folding(F, bb, nop2) # BF
                         else:
                             p_insts[-1] = (14, yeah2, cond, nop2, p_last[4])
-                    changed = True
-
-                if changed:
-                    s_preds = preds[target]
-                    for i, pred_bb in enumerate(s_preds):
-                        if pred_bb == bb: s_preds[i] = pred
-                    queue_append(pred)
+                else:
+                    continue
+                queue_append(pred)
+            UJF_change_preds(F, bb, target)
             del blocks[bb], preds[bb], succs[bb] # minus node/vertex ;'-}
+            assert check_CFG(F)
         queue = new_queue
-    # TODO: убрать после фикса source2 на исключения
-    # print("\n")
-    # stringify_cfg(F)
-    # print("~" * 77)
 
 def conditional_jump_forwarding(F): # CJF (under construction)
     blocks, preds, succs = F
@@ -276,13 +299,14 @@ def conditional_jump_forwarding(F): # CJF (under construction)
 
                 # Заменяем всю инструкцию терминатора
                 p_insts[-1] = (14, yeah, cond, nop, last_inst[4])
-                succs[pred] = [yeah, nop]
+                succs[pred] = {yeah, nop}
 
                 # обновляем preds для L1 и L2
                 preds[yeah].append(pred)
                 preds[nop].append(pred)
                 preds[bb].remove(pred)
 
+                assert check_CFG(F)
                 queue_append(pred)
         queue = new_queue
 
@@ -298,10 +322,11 @@ def branch_elimination(F): # BE
         new_queue = []
         queue_append = new_queue.append
         for bb in queue:
-            for erased_bb in succs[bb]:
+            for erased_bb in tuple(succs[bb]):
                 branch_folding(F, bb, erased_bb) # BF
                 if not preds[erased_bb]: queue_append(erased_bb)
             del blocks[bb], preds[bb], succs[bb] # minus node/vertex ;'-}
+            assert check_CFG(F)
         queue = new_queue
 
 def phi_elimination(blocks): # φE
@@ -331,14 +356,15 @@ def block_merging(F): # BM
                 p = preds[next_bb]
                 if len(p) == 1:
                     assert p[0] == bb
-                    # print(bb, "<->", next_bb)
                     insts.pop()
                     insts.extend(blocks[next_bb])
-                    succs[bb].remove(next_bb)  # т.к. здесь могут ещё быть succs от исключений!
-                    succs[bb].extend(succs[next_bb])
-                    del blocks[next_bb], preds[next_bb], succs[next_bb] # minus node/vertex ;'-}
-                    for succ in succs[bb]:
+                    succs[bb].remove(next_bb)  # т.к. здесь могут быть succs ещё и от исключений!
+                    succs[bb] |= succs[next_bb]
+                    for succ in succs[next_bb]:
                         preds[succ] = [bb if label == next_bb else label for label in preds[succ]]
+                    del blocks[next_bb], preds[next_bb], succs[next_bb] # minus node/vertex ;'-}
+
+                    assert check_CFG(F)
                     queue_append(bb)
         queue = new_queue
 
@@ -583,15 +609,15 @@ def main_loop(module, def_id, builtins, debug=False, is_global=False):
         dead_code_elimination(blocks, value_host) # DCE
         if debug: check_size(("ConstProp", "DCE"), blocks, pred_ref)
 
+        phi_elimination(blocks) # φE
+        block_merging(F) # BM
+        if debug: check_size(("φE", "BM"), blocks, pred_ref)
+
         unconditional_jump_forwarding(F) # UJF
         if debug: check_size(("UJF",), blocks, pred_ref)
 
         branch_elimination(F) # BE
         if debug: check_size(("BE",), blocks, pred_ref)
-
-        phi_elimination(blocks) # φE
-        block_merging(F) # BM
-        if debug: check_size(("φE", "BM"), blocks, pred_ref)
 
         index, index_arr, IDom, intersect = compute_idom_fast(F)
 

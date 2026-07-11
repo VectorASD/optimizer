@@ -146,7 +146,7 @@ def compute_dominators(BB_F): # Algorithm D
     if custom_entry:
         entry = "<entry>"
         for bb in entrances: preds[bb].append(entry)
-        # succs[entry] = list(entrances)
+        # succs[entry] = entrances
     else:
         entry = next(iter(entrances))
 
@@ -172,7 +172,7 @@ def compute_dominators(BB_F): # Algorithm D
 
     if custom_entry:
         for bb in entrances: preds[bb].pop() # append(entry)
-        # del succs[entry] # succs[entry] = list(entrances)
+        # del succs[entry] # succs[entry] = entrances
         del Dom[entry]
         for bb in Dom: Dom[bb] >>= 1
         index = {bb: 1 << i for i, bb in enumerate(blocks)}
@@ -232,9 +232,11 @@ def compute_idom_fast(BB_F): # Cooper–Harvey–Kennedy (2001)
 
     custom_entry = len(entrances) > 1
     if custom_entry:
+        raise RuntimeError(f"Multiple roots are deprecated: {entrances}")
+
         entry = "<entry>"
         for bb in entrances: preds[bb].append(entry)
-        succs[entry] = list(entrances)
+        succs[entry] = entrances
     else:
         entry = next(iter(entrances))
 
@@ -254,7 +256,11 @@ def compute_idom_fast(BB_F): # Cooper–Harvey–Kennedy (2001)
     # map block → DFS index
     index_arr = tuple(order) if custom_entry else (entry, *order)
     index = {bb: 1 << i for i, bb in enumerate(index_arr)}
-    if custom_entry: index[entry] = 1 << len(index_arr)
+    if custom_entry:
+        index[entry] = 0  # 0, вместо 1 << len(index_arr),
+        # чтобы не сломался intersect
+        # но тогда сломается compute_df ;"-}
+        # по тому пока поддержка custom_entry прекращена!
 
     # 2. init IDom
     def intersect(b1, b2):
