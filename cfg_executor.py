@@ -621,7 +621,7 @@ try:
 except:
     pass  # deadcode in catcher_l2 block (finally пытается отловить невозможную ошибку внутри exceptor)
 finally:
-    print("dead exceptor")
+    print("it's finally #5")
 
 for i in range(10):
     try:
@@ -629,7 +629,21 @@ for i in range(10):
     except:
         break  # а не то-то было!!! make_finalizer ВСЁ видит! ;"-}}}
     finally:
-        print("it's finally #5")
+        print("it's finally #6")
+
+def check_it(size):
+    try:
+        arr = []
+        for i in range(1, 10):
+            arr.append(i * 1.5)
+            if i % size == 0:
+                return arr
+    except ZeroDivisionError: pass
+    finally:
+        print(f"it's finally #7   ({size:2})")
+print(check_it(5))
+print(check_it(11))
+check_it(0)
 """
 
 VERBOSE = False

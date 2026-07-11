@@ -97,10 +97,23 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
         return reg
 
     blocks, preds, succs = {}, {}, {}
+
+    terminator_pos = None
+    def check_terminator():
+        nonlocal terminator_pos
+        if terminator_pos is not None:
+            insts = blocks[current_block]
+            dead_code_size = len(insts) - terminator_pos - 1
+            for i in range(dead_code_size): insts.pop()
+            terminator_pos = None
+    def apply_terminator():
+        nonlocal terminator_pos
+        if terminator_pos is None:
+            terminator_pos = len(blocks[current_block])
+
     add_inst = None
     current_block = None
     is_trace = False
-    terminator_pos = None
     deleted_blocks = []
     def new_block():
         name = deleted_blocks.pop() if deleted_blocks else f"b{len(blocks)}"
@@ -111,12 +124,8 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
         deleted_blocks.append(name)
         del blocks[name]
     def on_block(name = None):
-        nonlocal add_inst, current_block, terminator_pos, is_trace
-        if terminator_pos is not None:
-            insts = blocks[current_block]
-            dead_code_size = len(insts) - terminator_pos - 1
-            for i in range(dead_code_size): insts.pop()
-            terminator_pos = None
+        nonlocal add_inst, current_block, is_trace
+        check_terminator()
         name = name or new_block()
         add_inst = blocks[name].append
         current_block = name
@@ -126,9 +135,7 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
     def add(*inst):
         add_inst((*inst, None))
     def control(*a):
-        nonlocal terminator_pos
-        if terminator_pos is None:
-            terminator_pos = len(blocks[current_block])
+        apply_terminator()
         if len(a) == 1:
             label = a[0]
             add(3, label)  # goto <label>
@@ -537,6 +544,7 @@ TODO
             free_reg(reg)
 
     def visit_Return(node):
+        apply_terminator()
         if node.value:
             result = visit_expression(node.value)
             add(4, result) # return <var>
@@ -618,12 +626,16 @@ TODO
                         on_block(bb)
                         visit_statements(finalbody)
                         add_inst(term_inst)
+                elif kind == 4:  # return <var>
+                    insts.pop()
+                    on_block(bb)
+                    visit_statements(finalbody)
+                    add_inst(term_inst)
                 elif kind == 14:  # goto <label> if <var> else <label>
                     if term_inst[1] in old_blocks or term_inst[3] in old_blocks:
                         assert False  # Кажется, что это недостижимое условие...
                         # Как вообще возможно обойти finally через УСЛОВНЫЙ переход?!
                         # break и continue абсолютно всегда БЕЗУСЛОВНЫЕ
-            #exit()
         return apply
 
     def visit_Try(node):
@@ -1336,8 +1348,8 @@ TODO
     if postinit is not None:
         postinit(add, visit_expression, blocks)
 
-    if not blocks[current_block] or blocks[current_block][-1][0] != 4:
-        add(4, ".None") # return <var>
+    add(4, ".None") # return <var>
+    check_terminator()
 
     if not all(regs):
         stringify_cfg(F)
