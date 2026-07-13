@@ -159,12 +159,13 @@ def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
 
 
 
-def branch_folding(F, bb, erased_bb): # BF
+def branch_folding(F, bb, erased_bb, is_UJF = False): # BF
     blocks, preds, succs = F
     # print(bb, "-x->", erased_bb)
     idx = preds[erased_bb].index(bb)
-    preds[erased_bb].pop(idx)
-    succs[bb].remove(erased_bb)
+    if not is_UJF:
+        preds[erased_bb].pop(idx)
+        succs[bb].remove(erased_bb)
     insts = blocks[erased_bb]
     for i, inst in enumerate(insts):
         if inst[0] != 5: break # not phi
@@ -219,6 +220,8 @@ def unconditional_jump_forwarding(F): # UJF
     blocks, preds, succs = F
     queue = tuple(blocks)
 
+  # stringify_cfg(F)
+
     while queue:
         new_queue = []
         queue_append = new_queue.append
@@ -232,7 +235,11 @@ def unconditional_jump_forwarding(F): # UJF
             if kind != 3: continue #3: goto <label>
 
             target = last_inst[1]
+            if blocks[target][0][0] == 5 and set(preds[bb]) & set(preds[target]):
+                continue  # иначе приведён к разрушению ромба в phi
+
             # Проталкиваем переход через bb к target
+          # print("UJF:", bb, "->", target)
             for pred in preds[bb]:
                 p_insts = blocks[pred]
 
@@ -257,7 +264,7 @@ def unconditional_jump_forwarding(F): # UJF
                         nop2 = target if bb == nop else nop
                         if yeah2 == nop2:
                             p_insts[-1] = (3, yeah2, p_last[4]) # goto <label>
-                            branch_folding(F, bb, nop2) # BF
+                            branch_folding(F, bb, nop2, is_UJF = True) # BF
                         else:
                             p_insts[-1] = (14, yeah2, cond, nop2, p_last[4])
                 else:
@@ -588,41 +595,58 @@ def print_log(pred_ref):
         print(f"{name:{length - len(str(size))}} {size}")
 
 def main_loop(module, def_id, builtins, debug=False, is_global=False):
+    def after_it(name):
+        return
+        if is_global:
+            print()
+            print("•" * 66)
+            print(name)
+            print()
+            stringify_cfg(F)
+
     F = module[def_id]
     IDom, dom_tree, DF, value_host, F = SSA(F, predefined=tuple(builtins))
 
     blocks = F[0]
     pred_ref = [None, [], []]
     if debug: check_size(("original",), blocks, pred_ref)
+    after_it("original")
 
     if is_global:
         global_elimination(F, value_host) # GlobE
         if debug: check_size(("GlobE",), blocks, pred_ref)
+        after_it("global_elimination")
 
     prev_hash = None
     for i in range(7):
         copy_propagation(blocks, value_host) # CP
         trivial_copy_elemination(blocks) # TCE
         if debug: check_size(("CP", "TCE"), blocks, pred_ref)
+        after_it("copy_propagation")
 
         idx2value = constant_propogation_and_folding(F, value_host, builtins) # ConstProp
         dead_code_elimination(blocks, value_host) # DCE
         if debug: check_size(("ConstProp", "DCE"), blocks, pred_ref)
+        after_it("ConstProp + DCE")
 
         phi_elimination(blocks) # φE
         block_merging(F) # BM
         if debug: check_size(("φE", "BM"), blocks, pred_ref)
+        after_it("phi_elimination + block_merging")
 
         unconditional_jump_forwarding(F) # UJF
         if debug: check_size(("UJF",), blocks, pred_ref)
+        after_it("unconditional_jump_forwarding")
 
         branch_elimination(F) # BE
         if debug: check_size(("BE",), blocks, pred_ref)
+        after_it("branch_elimination")
 
         index, index_arr, IDom, intersect = compute_idom_fast(F)
 
         common_subexpression_elimination(blocks, IDom, intersect)
         if debug: check_size(("CSE",), blocks, pred_ref)
+        after_it("CSE")
 
         next_hash = ssa_hash(F)
         if next_hash == prev_hash: break

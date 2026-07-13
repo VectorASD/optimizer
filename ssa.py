@@ -245,7 +245,15 @@ def compute_idom_fast(BB_F): # Cooper–Harvey–Kennedy (2001)
     visited = set()
 
     def dfs(bb):
-        for succ in succs[bb]:
+        #   т.к. succs - теперь set, а не list, то:
+        # IDom каждый раз будет разный;
+        # dom_tree из IDom тоже будет разным;
+        # функцию rename из static_renaming начнёт колбасить;
+        # порядок value_host.get и value_host.set станет хаотичным;
+        # Value().n все будут постоянно разными;
+        # сложнее точечно отлаживать ошибки!
+        #   Поэтому здесь теперь sorted:   Это всё решение ;'-}
+        for succ in sorted(succs[bb]):
             if succ not in visited:
                 visited.add(succ)
                 order.append(succ)
@@ -403,20 +411,30 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
 
         stack_pop()
 
-    def rename_phi():
-        for bb, insts in blocks.items():
-            preds_bb = tuple(preds[bb])
-            removes = False
-            for i, inst in enumerate(insts):
-                if inst[0] != 5: break
-                var = inst[2][0]
-                names = end_collector[var]
-                try: insts[i] = (5, inst[1], tuple(names[pred_bb] for pred_bb in preds_bb), None)
-                except KeyError:
-                    insts[i] = None
-                    removes = True
-            if removes:
-                list_shift(insts)
+    def rename_phi(bb):
+        insts = blocks[bb]
+        preds_bb = tuple(preds[bb])
+        removes = False
+        for i, inst in enumerate(insts):
+            if inst[0] != 5:
+                break
+            var = inst[2][0]
+            names = end_collector[var]
+            try:
+                new_phis = tuple(names[pred_bb] for pred_bb in preds_bb)
+                for value in new_phis:
+                    if dead_phis[value.n]:
+                        raise KeyError
+                insts[i] = (5, inst[1], new_phis, None)
+            except KeyError:
+                insts[i] = None
+                removes = True
+                dead_phis[inst[1].n] = True
+        if removes:
+            list_shift(insts)
+
+        for next_bb in dom_tree[bb]:
+            rename_phi(next_bb)
 
     dom_used = set()
     dom_update = dom_used.update
@@ -428,7 +446,10 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
 
     for bb in roots:
         rename(bb)
-    rename_phi()
+
+    dead_phis = [False] * value_host.counter
+    for bb in roots:
+        rename_phi(bb)
 
     new_BB_F = blocks, preds, succs
     return value_host, new_BB_F
@@ -456,7 +477,7 @@ def SSA(BB_F, debug=False, predefined=(), best=True): # Static Single Assignment
         if debug:
             for bb, bit_mask in Dom.items():
                 print(f"Dom({bb}): {bits_by_index(index_arr, bit_mask)}")
-    
+
         IDom, dom_tree = compute_idom(Dom, index, index_arr)
         # IDom[bb] - это САМЫЙ ПОСЛЕДНИЙ блок, который невозможно обойти, чтобы попасть в bb
     else:

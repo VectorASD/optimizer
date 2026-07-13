@@ -16,7 +16,7 @@ def import_ast():
     import ast
     glob = globals()
     for name in dir(ast):
-        if name[0] != "_":
+        if name[0] != '_':
             glob[f"ast_{name}"] = getattr(ast, name)
 import_ast()
 
@@ -82,16 +82,16 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
         return name
     def free_reg(reg):
         assert isinstance(reg, str)
-        if not reg.startswith("_"):
-            assert reg.startswith("r")
+        if not reg.startswith('_'):
+            assert reg.startswith('r')
             regs[int(reg[1:])] = True
     def free_regs(*regs):
         for reg in regs:
             free_reg(reg)
     def to_reg(var):
-        if var.startswith("r"):
+        if var.startswith('r'):
             return var
-        assert var.startswith("_")
+        assert var.startswith('_')
         reg = new_reg()
         add(0, reg, var)  # <var> = <var>
         return reg
@@ -103,7 +103,7 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
         nonlocal terminator_pos
         if terminator_pos is not None:
             insts = blocks[current_block]
-            dead_code_size = len(insts) - terminator_pos - 1
+            dead_code_size = len(insts) - terminator_pos
             for i in range(dead_code_size): insts.pop()
             terminator_pos = None
     def apply_terminator():
@@ -135,15 +135,18 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
     def add(*inst):
         add_inst((*inst, None))
     def control(*a):
-        apply_terminator()
         if len(a) == 1:
             label = a[0]
+            check_control_hooks((label,))
             add(3, label)  # goto <label>
+            apply_terminator()
             return
         yeah, reg, nop = a  # assert len(a) == 3
         if yeah == nop:
             return control(yeah)
+        check_control_hooks((yeah, nop))
         add(14, yeah, reg, nop)  # goto <label> if <var> else <label>
+        apply_terminator()
 
     on_block()
 
@@ -198,6 +201,11 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
     loop_stack = []
     cause_stack = []
 
+    control_hooks = []
+    def check_control_hooks(targets=()):
+        for hook in reversed(control_hooks):
+            hook(targets)
+
 
 
     # root
@@ -214,6 +222,9 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
 
     def visit_statements(node):
         # statements[list]: a=statement+ { list(itertools.chain.from_iterable(a)) }
+        if callable(node):
+            node()
+            return
         check_type(node)
         for statement in node:
            visit_statement(statement)
@@ -246,7 +257,7 @@ compound_stmt:
     | &('def' | '@' | 'async') function_def ✅✅❌
     | &'if' if_stmt ✅
     | &('class' | '@') class_def ✅✅
-    | &('with' | 'async') with_stmt ❌❌
+    | &('with' | 'async') with_stmt ✅❌
     | &('for' | 'async') for_stmt ✅❌
     | &'try' try_stmt ✅
     | &'while' while_stmt ✅
@@ -277,6 +288,7 @@ TODO
             "Global": visit_Global,
             "Nonlocal": visit_Nonlocal,
             "Try": visit_Try,
+            "With": visit_With,
         } # TODO
 
     def visit_statement(node):
@@ -429,8 +441,9 @@ TODO
         reg = new_reg()
         add(6, reg, ".AssertionError", args) # <var> = <func>(<var>, ...)
         add(17, reg) # raise <var>
-        free_reg(reg)
+        apply_terminator()
 
+        free_reg(reg)
         on_block(yeah)
 
     def visit_Raise(node):
@@ -446,6 +459,7 @@ TODO
 
         if cause: add(13, exc, "__cause__", cause) # <var>.<attr> = <var>
         add(17, exc) # raise <var>
+        apply_terminator()
 
     def visit_FunctionDef(node):
         def visit_arg(node):
@@ -517,7 +531,7 @@ TODO
         class_name = node.name
         class_var = f"_{class_name}"
 
-        def postinit(add, visit_expression, blocks):
+        def postinit(add, visit_expression, blocks, apply_terminator):
             vars = {}
             for insts in blocks.values():
                 for inst in insts:
@@ -531,6 +545,7 @@ TODO
             bases = tuple(map(visit_expression, node.bases))
             add(29, class_var, class_name, bases, names, locals)  # <var> = type(<name>, (<base_reg>, ...), (<local_name>, ...), (<local_reg>, ...))
             add(4, class_var)  # return <var>
+            apply_terminator()
 
         def_id2 = visitors(node.body, module, class_name, (), postinit)
         module.def_tree[def_id2] = def_id
@@ -544,12 +559,13 @@ TODO
             free_reg(reg)
 
     def visit_Return(node):
-        apply_terminator()
+        check_control_hooks()
         if node.value:
             result = visit_expression(node.value)
             add(4, result) # return <var>
             free_reg(result)
         else: add(4, ".None") # return <var>
+        apply_terminator()
 
     def visit_Global(node):
         add(16) # nop
@@ -571,6 +587,7 @@ TODO
 
         on_block(fail)
         add(17, exc_reg)  # raise <var>
+        apply_terminator()
 
         free_regs(exc_reg, reg)
         return catcher
@@ -602,45 +619,52 @@ TODO
             control(exc_block, reg, nop)  # goto <label> if <var> else <label>
             on_block(nop)
         else:
-            visit_statements(finalbody)
+            if callable(finalbody):
+                finalbody(exc_reg)
+            else:
+                visit_statements(finalbody)
             add(17, exc_reg)  # raise <var>
+            apply_terminator()
         free_reg(exc_reg)
 
-    def make_finalizer():
+    def make_finalizer(finalbody):
         old_blocks = set(blocks)
         old_blocks.remove(current_block)
       # print("old_blocks:", old_blocks)
-        def apply(finalbody):
-            new_blocks = set(blocks) - old_blocks
-          # print("new_blocks:", new_blocks)
-            for bb in new_blocks:
-                insts = blocks[bb]
-                if not insts:
-                    continue
-                term_inst = insts[-1]
-                kind = term_inst[0]
-                if kind == 3:  # goto <label>
-                    if term_inst[1] in old_blocks:
-                      # print("Попытка смыться:", bb, "->", term_inst[1])
-                        insts.pop()
-                        on_block(bb)
-                        visit_statements(finalbody)
-                        add_inst(term_inst)
-                elif kind == 4:  # return <var>
-                    insts.pop()
-                    on_block(bb)
-                    visit_statements(finalbody)
-                    add_inst(term_inst)
-                elif kind == 14:  # goto <label> if <var> else <label>
-                    if term_inst[1] in old_blocks or term_inst[3] in old_blocks:
-                        assert False  # Кажется, что это недостижимое условие...
-                        # Как вообще возможно обойти finally через УСЛОВНЫЙ переход?!
-                        # break и continue абсолютно всегда БЕЗУСЛОВНЫЕ
-        return apply
+        in_finalbody = False
+        def hook(labels):
+            nonlocal in_finalbody
+            if in_finalbody:
+                return
+
+            L = len(labels)
+            if L == 1:  # goto <label>
+                if labels[0] not in old_blocks:
+                    return
+            elif L == 2:  # goto <label> if <var> else <label>
+                if labels[0] in old_blocks or labels[1] in old_blocks:
+                    assert False  # Кажется, что это недостижимое условие...
+                    # Как вообще возможно обойти finally через УСЛОВНЫЙ переход?!
+                    # break и continue абсолютно всегда БЕЗУСЛОВНЫЕ
+                return
+            else:
+                assert L == 0  # return <var>
+
+            visit_statements(finalbody)
+
+        control_hooks.append(hook)
+        size = len(control_hooks)
+        def apply():
+            assert len(control_hooks) == size, "control_hooks is crushed"
+            control_hooks.pop()
+        def activate(_in_finalbody):
+            nonlocal in_finalbody
+            in_finalbody = _in_finalbody
+        return apply, activate
 
     def visit_Try(node):
         end = new_block()
-        apply_finally = make_finalizer()
+        apply_finally, _ = make_finalizer(node.finalbody)
 
         catcher = new_block()
         with exceptor(catcher) as has_exc:
@@ -668,8 +692,99 @@ TODO
         else:
             make_catcher(catcher, node.finalbody, node.handlers, end)
 
-        apply_finally(node.finalbody)
+        apply_finally()
         on_block(end)
+
+    def visit_With(node):
+        assert not node.type_comment, node.type_comment  # TODO
+        exit_regs = []
+        for withitem in node.items:
+            ctx = visit_expression(withitem.context_expr)
+            reg = new_reg()
+            add(12, reg, ctx, "__enter__")  # <var> = <var>.<attr>
+            add(6, reg, reg, ())  # <var> = <func>(<var>, ...)
+            if withitem.optional_vars is not None:
+                targets = visit_assign_expression(withitem.optional_vars)
+                visit_targets(targets, reg, [None])
+            add(12, reg, ctx, "__exit__")  # <var> = <var>.<attr>
+            free_reg(ctx)
+            exit_regs.append(reg)
+
+        def finalbody(exc_reg = None):
+            if terminator_pos is not None:
+                return  # 5 часов до этого доходил...
+                # и действительно, после return в python коде может попытаться появиться finalbody!
+
+            in_finalbody(True)
+            exc_is_none = exc_reg is None
+            if exc_is_none:
+                exc_reg, type_reg, tb_reg = new_reg(), new_reg(), new_reg()
+                add(0, exc_reg, ".None")
+                add(0, type_reg, exc_reg)
+                add(0, tb_reg, exc_reg)
+                end_final = new_block()
+            else:
+                type_reg, tb_reg = new_reg(), new_reg()
+                add(6, type_reg, ".type", (exc_reg,))  # <var> = <func>(<var>, ...)
+                add(12, tb_reg, exc_reg, "__traceback__")  # <var> = <var>.<attr>
+                end_final = end
+
+            ok_reg = new_reg()
+            for i in range(len(exit_regs)-1, -1, -1):
+                reg = exit_regs[i]
+                fail_block = new_block()
+                with exceptor(fail_block):
+                    add(6, ok_reg, reg, (type_reg, exc_reg, tb_reg))  # <var> = <func>(<var>, ...)
+                ok_block = new_block() if i else end_final
+                next_block = new_block()
+                control(ok_block, ok_reg, next_block)  # goto <label> if <var> else <label>
+
+                if i:
+                    on_block(ok_block)
+                    add(0, exc_reg, ".None")
+                    add(0, type_reg, exc_reg)
+                    add(0, tb_reg, exc_reg)
+                    control(next_block)  # goto <label>
+
+                on_block(fail_block)
+                add(30, exc_reg)  # <var> = LAST_EXC
+                add(6, type_reg, ".type", (exc_reg,))  # <var> = <func>(<var>, ...)
+                add(12, tb_reg, exc_reg, "__traceback__")  # <var> = <var>.<attr>
+                control(next_block)  # goto <label>
+
+                on_block(next_block)
+
+            raise_block = new_block()
+            add(1, ok_reg, exc_reg, "is", ".None")  # <var> = <var> <+|-|*|/|%|...> <var>
+            control(end_final, ok_reg, raise_block)  # goto <label> if <var> else <label>
+
+            on_block(raise_block)
+            if exc_is_none:
+                add(17, exc_reg)  # raise <var>
+                free_reg(exc_reg)
+                apply_terminator()
+
+                on_block(end_final)
+
+            free_regs(type_reg, tb_reg, ok_reg)
+            in_finalbody(False)
+
+        end = new_block()
+        apply_finally, in_finalbody = make_finalizer(finalbody)
+
+        catcher = new_block()
+        with exceptor(catcher) as has_exc:
+            visit_statements(node.body)
+            has_exc = has_exc()
+        control(end)  # goto <label>
+
+        if has_exc:
+            make_catcher(catcher, finalbody)
+        else:
+            del_block(catcher)
+        apply_finally()
+        on_block(end)
+        free_regs(*exit_regs)
 
 
 
@@ -1346,15 +1461,15 @@ TODO
         visit_Module(ast)
 
     if postinit is not None:
-        postinit(add, visit_expression, blocks)
+        postinit(add, visit_expression, blocks, apply_terminator)
 
     add(4, ".None") # return <var>
     check_terminator()
 
     if not all(regs):
-        stringify_cfg(F)
         print("REGS:", regs)
         raise AssertionError("Не все регистры освобождены!")
+    assert not control_hooks, "control_hooks is crushed"
 
     make_CFG(blocks, preds, succs)
 

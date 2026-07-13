@@ -380,7 +380,7 @@ class Value:
         self.side_effect = False
     def __repr__(self):
         n, label = self.n, self.label
-        return f"%{n}" if label is None else f"{label}→%{n}"
+        return f"%{n}" if label is None else f"%{n}→{label}"
     def __eq__(self, right):
         return self.n == right.n
     def __gt__(self, right):

@@ -11,15 +11,42 @@ import struct
 builtins["struct"] = struct
 
 def not_input(*a):
-    print(*a, end="") #; print(7)
+    print(*a, end=""); print(7)
     return 7
 builtins["input"] = not_input
+
+import io, sys
+
+def filtered_str(obj):
+    t = type(obj)
+    if t.__str__ is not object.__str__ or t.__repr__ is not object.__repr__:
+        return str(obj)
+    return f"<{t.__name__} object at 0x?>"
+
+class PrintWrap:
+    def __init__(self, builtins, print_it=True):
+        buffer = io.StringIO()
+        def printer(*a, sep=' ', end='\n', file=None, flush=False):
+            file = sys.stdout if file is None else file
+            line = sep.join(map(filtered_str, a))
+            if print_it:
+                file.write(line)
+                file.write(end)
+                if flush:
+                    file.flush()
+            buffer.write(line)
+            buffer.write(end)
+        self.builtins = {**builtins, "print": printer}
+        self.buffer = buffer
+    def __enter__(self):
+        return self.builtins, self.buffer
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
 
 
 
 class Result(Exception): pass
 class Goto(Exception): pass
-class Exceptor(Exception): pass
 
 
 
@@ -51,7 +78,7 @@ def misc_loader(F, plug):
 class Cell:
     __slots__ = ("v",)
 
-def executor(id, globals, memory=None, defaults=(), closure=(), depth=0):
+def executor(id, builtins, globals, memory=None, defaults=(), closure=(), depth=0):
     F = module[id]
     if memory is None:
         memory = globals  # locals <-> globals
@@ -121,7 +148,7 @@ def executor(id, globals, memory=None, defaults=(), closure=(), depth=0):
         pass
 
     def code_17(var): # raise <var>
-        raise Exceptor(memory[var])
+        raise memory[var]
 
     def code_18(var, def_id, defaults, new_cells, old_cells): # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)"
         defaults = [memory[d] for d in defaults]
@@ -132,11 +159,11 @@ def executor(id, globals, memory=None, defaults=(), closure=(), depth=0):
                 new_closure = [Cell() for i in range(new_cells)]
                 for cell_n in old_cells:
                     new_closure.append(closure[cell_n])
-                return executor(def_id, globals, {}, defaults, new_closure, depth+1)(*args)
+                return executor(def_id, builtins, globals, {}, defaults, new_closure, depth+1)(*args)
             memory[var] = run_wrapper
         else:
             new_closure = [closure[cell_n] for cell_n in old_cells]
-            memory[var] = executor(def_id, globals, {}, defaults, new_closure, depth+1)
+            memory[var] = executor(def_id, builtins, globals, {}, defaults, new_closure, depth+1)
 
     def code_19(var, name): # <var> = builtin:<var>
         memory[var] = builtins[name]
@@ -208,8 +235,6 @@ def executor(id, globals, memory=None, defaults=(), closure=(), depth=0):
             except skips:
                 raise
             except Exception as exc:
-                if isinstance(exc, Exceptor):
-                    exc = exc.args[0]
                 to_bb = exc_items[i]
                 if to_bb is not None:
                     last_exc = exc
@@ -261,6 +286,18 @@ def executor(id, globals, memory=None, defaults=(), closure=(), depth=0):
         blocks = F[0]
 
     return runner
+
+
+
+def run_F(wrapper = None):
+    if wrapper is None:
+        wrapper = PrintWrap(builtins)
+
+    print(dashed_separator)
+    with wrapper as (new_builtins, buffer):
+        executor(def_id, new_builtins, {})()
+        actual_print = buffer.getvalue()
+        print("\nCORRECT PRINT:", "❌✅"[actual_print == reference_print])
 
 
 
@@ -646,20 +683,59 @@ print(check_it(11))
 check_it(0)
 """
 
+source14 = """
+class CheckWith:
+    def __init__(self, exc):
+        print(f"init {exc.__name__[0]}E")
+        self.exc = exc
+    def __enter__(self):
+        print(f"enter {self.exc.__name__[0]}E")
+        return 123, 543
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        print(f"exit {self.exc.__name__[0]}E", exc_type, exc_val, exc_tb)
+        if isinstance(exc_val, TypeError):
+            raise ValueError("unknown exc_type: TypeError")
+        return isinstance(exc_val, self.exc)
+
+try:
+    for error in (None, ValueError, KeyError, TypeError, AttributeError):
+        with CheckWith(ValueError) as (num, num2), CheckWith(KeyError):
+            print("num:", num)
+            print("num2:", num2)
+            if error is not None:
+                raise error
+except Exception as e:
+    print("uncatched:", type(e))
+
+with CheckWith(ValueError):
+    pass  # deadcode in catcher block
+
+def check_it():
+    with CheckWith(ValueError):
+        return "meow"
+print("check_it:", check_it())
+"""
+
 VERBOSE = False
 
 
 if __name__ == "__main__":
-    module = py_visitor(source13, builtins)
+    source = source14
+
+    with PrintWrap(builtins, print_it=False) as (new_builtins, buffer):
+        exec(source, new_builtins)
+        reference_print = buffer.getvalue()
+
+    module = py_visitor(source, builtins)
     def_id = module.root_def
 
     for id, F in enumerate(module):
         print(f"\n••• def#{id}")
         stringify_cfg(F)
 
-    print(dashed_separator)
-    executor(def_id, {})()
+    run_F()
 
+    print_wrap = PrintWrap(builtins)
     runners = []
     cells = tuple({} for i in range(len(module)))
     is_global = True
@@ -670,15 +746,14 @@ if __name__ == "__main__":
         print()
 
         if is_global:
-            value_host, F = main_loop(module, id, builtins, debug=True, is_global=True)
+            value_host, F = main_loop(module, id, print_wrap.builtins, debug=True, is_global=True)
             applier = value_host.global_to_value
             is_global = False
         else:
             applier(module[id])
-            value_host, F = main_loop(module, id, builtins, debug=True)
+            value_host, F = main_loop(module, id, print_wrap.builtins, debug=True)
 
         print()
         stringify_cfg(F)
 
-    print(dashed_separator)
-    executor(def_id, {})()
+    run_F(print_wrap)
