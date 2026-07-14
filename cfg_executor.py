@@ -716,15 +716,32 @@ def check_it():
 print("check_it:", check_it())
 """
 
+source15 = """
+def generator():
+    for i in range(5):
+        yield ("i:", i)
+        if i % 2:
+            for j in range(7):
+                yield ("j:", j)
+                if j % 3:
+                    yield (i, j)
+
+for pair in generator():
+    print(pair)
+"""
+
 VERBOSE = False
+ONLY_REF = False
 
 
 if __name__ == "__main__":
-    source = source14
+    source = source15
 
-    with PrintWrap(builtins, print_it=False) as (new_builtins, buffer):
+    with PrintWrap(builtins, print_it=ONLY_REF) as (new_builtins, buffer):
         exec(source, new_builtins)
         reference_print = buffer.getvalue()
+    if ONLY_REF:
+        exit()
 
     module = py_visitor(source, builtins)
     def_id = module.root_def

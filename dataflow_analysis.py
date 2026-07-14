@@ -1,33 +1,18 @@
 from utils import bits_by_index
-from HIR_parser import parse_program
+from HIR_parser import parse_program, uses_getters, HAS_LHS
 
 from collections import defaultdict
 from pprint import pprint, pformat
-
+from functools import cache
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ENGINE ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-def dataflow_analysis(
-    BB_F,
-    GEN,
-    KILL,
-    *,
-    direction="forward",   # "forward" или "backward"
-    meet="or",             # "or" (join) или "and" (meet)
-    entry_bottom=True,     # нужно ли ставить bottom на entry (RD, AE)
-    debug=None
-):
-    """
-    Универсальный движок анализа потока данных.
-    Позволяет реализовать RD, AE, LV, VeryBusy, Anticipated и т.д.
-    """
-    blocks, preds, succs = BB_F
-    if meet == "and" and direction == "backward":
-        raise ValueError("Backward + meet='and' не существует в классических анализах")
-
+@cache
+def engine_generator(direction, meet, entry_bottom):
+    init = """
     # Вселенная битов
     all_bits = 0
     for bb in blocks:
@@ -39,18 +24,21 @@ def dataflow_analysis(
 
     # актуальные настройки в случае meet = "or" (RD, LV)
     IN  = {bb: 0 for bb in blocks}
-    OUT = IN.copy()
+    OUT = IN.copy()"""
 
     if meet == "and": # AE
-        for bb in blocks:
-            IN[bb] = all_bits
-        if entry_bottom:
-            entry = next(iter(blocks))
-            IN[entry] = 0
+        init += """
+    for bb in blocks:
+        IN[bb] = all_bits"""
+
+    if entry_bottom:
+        init += """
+    entry = next(iter(blocks))
+    IN[entry] = 0"""
     # если бы имел смысл Backward + meet='and', то 0 ставится в exit вместо entry
 
     # порядок обхода
-    order = tuple(reversed(blocks) if direction == "backward" else blocks)
+    order = "reversed(blocks)" if direction == "backward" else "blocks"
 
     if direction == "forward":
         if meet == "or":
@@ -94,22 +82,40 @@ def dataflow_analysis(
                 changed = True"""
 
     full_code = f"""
-changed = True
-while changed:
-    changed = False
-    for bb in {order}:{meet_code}{transfer_code}{update_code}
+def func(F, GEN, KILL):
+    blocks, preds, succs = F
+    {init}
+    changed = True
+    while changed:
+        changed = False
+        for bb in {order}:{meet_code}{transfer_code}{update_code}
+    return IN, OUT
 """
+    glob = {}
+    exec(full_code, glob)
+    return glob["func"]
 
-    # print(full_code)
-    exec(full_code, {}, {
-        "blocks": blocks, "all_bits": all_bits,
-        "preds": preds, "succs": succs,
-        "GEN": GEN, "notKILL": notKILL,
-        "IN": IN, "OUT": OUT
-    })
+def dataflow_analysis(
+    F, GEN, KILL,
+    *,
+    direction="forward",   # "forward" или "backward"
+    meet="or",             # "or" (join) или "and" (meet)
+    entry_bottom=True,     # нужно ли ставить bottom на entry (RD, AE)
+    debug=None
+):
+    """
+    Универсальный движок анализа потока данных.
+    Позволяет реализовать RD, AE, LV, VeryBusy, Anticipated и т.д.
+    """
+    if meet == "and" and direction == "backward":
+        raise ValueError("Backward + meet='and' не существует в классических анализах")
+
+    func = engine_generator(direction, meet, entry_bottom)
+    IN, OUT = func(F, GEN, KILL)
 
     if debug:
         prefix, index = debug
+        blocks = F[0]
         for bb in blocks:
             print()
             print(f"{prefix}IN({bb}): {bits_by_index(index, IN[bb])}")
@@ -341,70 +347,37 @@ def available_expressions(BB_F, debug=False):
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ LV ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-def collect_variables(blocks):
-    vars_set = set()
-    for bb, ops in blocks.items():
-        for op in ops:
-            kind = op[0]
-            match kind:
-                case 0 | 1: # <var> = <var|num> [<+|-|*|/|%> <var|num>]
-                    vars_set.add(op[1]) # <var> = ...
-                    for v in (op[2], op[4] if kind == 1 else None):
-                        if isinstance(v, str):
-                            vars_set.add(v)
-                case 2: # if (<lhs> <cmp> <rhs>) goto <label>
-                    for v in (op[1], op[3]):
-                        if isinstance(v, str): vars_set.add(v)
-                # case 3: goto — без переменных
-                case 4: # return <value>
-                    v = op[1]
-                    if isinstance(v, str): vars_set.add(v)
-                case 5 | 6: # <var> = phi(<var>, ...) | <func>(<var|num>, ...)
-                    vars_set.add(op[1]) # <var> = ...
-                    for origin in op[3 if kind == 6 else 2]:
-                        if isinstance(origin, str): vars_set.add(origin)
-    vars_list = sorted(vars_set) # для детерминированности (косметика)
-    index = {v: i for i, v in enumerate(vars_list)}
-    return vars_list, index
-
 def LV_gen_kill_maker(blocks):
-    vars_list, index = collect_variables(blocks)
-    GEN  = {bb: 0 for bb in blocks}
-    KILL = {bb: 0 for bb in blocks}
+    index = {}
+    GEN, KILL = {}, {}
 
-    for bb, ops in blocks.items():
+    for bb, insts in blocks.items():
         gen_bits = kill_bits = 0
         defined = set()
 
-        for op in ops:
-            kind = op[0]
-            match kind:
-                case 0 | 1: # <var> = <var|num> [<+|-|*|/|%> <var|num>]
-                    for v in (op[2], op[4] if kind == 1 else None):
-                        if isinstance(v, str) and v not in defined:
-                            gen_bits |= 1 << index[v]
-                    var = op[1] # <var> = ...
-                    kill_bits |= 1 << index[var]
-                    defined.add(var)
-                case 2: # if (<lhs> <cmp> <rhs>) goto <label>
-                    for v in (op[1], op[3]):
-                        if isinstance(v, str) and v not in defined:
-                            gen_bits |= 1 << index[v]
-                case 4: # return <value>
-                    v = op[1]
-                    if isinstance(v, str) and v not in defined:
-                        gen_bits |= 1 << index[v]
-                case 5 | 6: # <var> = phi(<var>, ...) | <func>(<var|num>, ...)
-                    var = op[1]
-                    kill_bits |= 1 << index[var]
-                    defined.add(var)
-                    if kind == 6:
-                        for v in op[3]:
-                            if isinstance(v, str) and v not in defined:
-                                gen_bits |= 1 << index[v]
+        for inst in insts:
+            kind = inst[0]
+            uses = []
+            uses_getters[kind](inst, uses.append)
+            for var in uses:
+                try: shift =index[var]
+                except KeyError:
+                    shift = index[var] = 1 << len(index)
+                if not kill_bits & shift:
+                    # если переменная уже порождена этим блоком,
+                    # и её всё ещё нет в gen_bits, то она НЕ может
+                    # считаться входом этого блока!
+                    gen_bits |= shift
+            if HAS_LHS[kind]:
+                var = inst[1]
+                try: kill_bits |= index[var]
+                except KeyError:
+                    shift = index[var] = 1 << len(index)
+                    kill_bits |= shift
         GEN[bb]  = gen_bits
         KILL[bb] = kill_bits
 
+    vars_list = sorted(index)  # сортировка для детерминированности (косметика)
     return vars_list, GEN, KILL
 
 def live_variables(BB_F, debug=False):

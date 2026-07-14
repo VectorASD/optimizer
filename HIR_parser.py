@@ -6,6 +6,7 @@ from pprint import pformat
 import sys
 from io import StringIO
 from hashlib import sha256
+from array import array
 
 
 
@@ -84,8 +85,11 @@ definitions = (
     (1, 2, (),        1, 1, "#28: <var> = ''.join((<var>, ...))"),
     (1, (3,5), (),    0, 0, "#29: <var> = type(<name>, (<base_reg>, ...), (<local_name>, ...), (<local_reg>, ...))"),
     (1, 0, (),        1, 0, "#30: <var> = LAST_EXC"),
+
+  # virtual instructions:
+    (0, 0, (1,),      0, 0, "#99: yield <var>"),
 )
-dont_catch = {0, 3, 5, 7, 14, 16, 18, 19, 28, 29, 30}
+dont_catch = {0, 3, 4, 5, 7, 14, 16, 18, 19, 28, 29, 30}
 DONT_CATCH = tuple(i in dont_catch for i in range(len(definitions)))
 
 def to_tuple(obj):
@@ -93,14 +97,21 @@ def to_tuple(obj):
         return ()
     return obj if isinstance(obj, tuple) else (obj,)
 
+_defs = {int(d[5][1:3]): d for d in definitions}
+_max_kind = max(_defs)
+definitions = tuple(_defs.get(i) for i in range(_max_kind + 1))
 
 
-HAS_LHS = tuple(_def[0] for _def in definitions)
-CAN_DCE = tuple(_def[3] for _def in definitions)
-CAN_CSE = tuple(_def[4] for _def in definitions)
+
+HAS_LHS = array("b", (_def[0] if _def else 0 for _def in definitions))
+CAN_DCE = array("b", (_def[3] if _def else 0 for _def in definitions))
+CAN_CSE = array("b", (_def[4] if _def else 0 for _def in definitions))
 
 uses_getters = []
 for _def in definitions:
+    if _def is None:
+        uses_getters.append(None)
+        continue
     code = ["def get(inst, add):"]
     for idx in _def[2]:
         code.extend((
@@ -274,6 +285,7 @@ def stringify_instr(ops, i, write):
             write(f"{op[1]} = type({op[2]}, ({', '.join(map(str, op[3]))}), {locals})")
         case 30: write(f"{op[1]} = LAST_EXC")
 
+        case 99: write(f"yield {op[1]}")
         case _: write(f"{op} ???")
 
     misc = op[-1]
@@ -482,6 +494,9 @@ class ValueHost:
 
 renamers = []
 for kind, _def in enumerate(definitions):
+    if _def is None:
+        renamers.append(None)
+        continue
     code = [
         "def rename(insts, i, value_host):",
         "    inst = list(insts[i])",
@@ -529,6 +544,9 @@ def insts_renamer(insts, value_host):
 
 uses_V_getters = []
 for _def in definitions:
+    if _def is None:
+        uses_V_getters.append(None)
+        continue
     code = ["def get(inst, add):"]
     for idx in _def[2]:
         code.extend((

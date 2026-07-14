@@ -1,5 +1,6 @@
 from peg_driver import parse_it
 from HIR_parser import stringify_cfg, stringify_instr, HAS_LHS, DONT_CATCH
+from dataflow_analysis import live_variables
 
 import sys
 import traceback
@@ -29,12 +30,14 @@ class Module:
         self.def_names = []
         self.root_def = None
         self.is_class = []
+        self.is_yield = []
 
     def add(self, F, name):
         def_id = len(self.defs)
         self.defs.append(F)
         self.def_names.append(name)
         self.is_class.append(False)
+        self.is_yield.append(False)
         return def_id
 
     def __len__(self):
@@ -811,7 +814,7 @@ EXPR_NAME_MAPPING = {
     ast.BinOp: "expression", ✅
     ast.UnaryOp: "expression", ✅
     ast.GeneratorExp: "generator expression", ❌
-    ast.Yield: "yield expression", ❌
+    ast.Yield: "yield expression", ✅
     ast.YieldFrom: "yield expression", ❌
     ast.Await: "await expression", ❌
     ast.ListComp: "list comprehension", ✅
@@ -853,6 +856,7 @@ TODO
             "ListComp": visit_ListComp,
             "DictComp": visit_DictComp,
             "SetComp": visit_SetComp,
+            "Yield": visit_Yield,  # так, стоп... А в смысле это expression, а не statement?!
         }
         assign_expression_dict = {
             **expression_dict,
@@ -1436,6 +1440,22 @@ TODO
         free_reg(_add)
         return result
 
+    def visit_Yield(node):
+        if node.value:
+            result = visit_expression(node.value)
+            add(99, result)  # return <var>
+            free_reg(result)
+        else: add(99, ".None")  # return <var>
+        result = new_reg()
+        add(19, result, "None")  # <var> = builtin:<var>
+
+        module.is_yield[def_id] = True
+        label = new_block()
+        control(label)  # goto <label>
+        on_block(label)
+
+        return result
+
 
 
     def visit_(node):
@@ -1750,6 +1770,15 @@ def outer():
 outer()
 """
 
+def yield_handler(module):
+    for def_id, F in enumerate(module):
+        if not module.is_yield[def_id]:
+            continue
+        blocks, preds, succs = F
+        stringify_cfg(F)
+        live_variables(F, debug=True)
+    exit()
+
 
 
 def py_visitor(code, builtins={}):
@@ -1759,6 +1788,8 @@ def py_visitor(code, builtins={}):
     module.root_def = visitors(ast, module)
 
     scope_handler(module, builtins)
+    yield_handler(module)
+
     return module
 
 
