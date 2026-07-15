@@ -5,15 +5,22 @@ from utils import dashed_separator, bin_ops, unar_ops
 
 
 
-import builtins
-builtins = {f"{name}": builtin for name, builtin in vars(builtins).items()}
-import struct
-builtins["struct"] = struct
+def make_builtins(putch={}):
+    import builtins
+    builtins = {f"{name}": builtin for name, builtin in vars(builtins).items()}
+    import struct
+    builtins["struct"] = struct
 
-def not_input(*a):
-    print(*a, end=""); print(7)
-    return 7
-builtins["input"] = not_input
+    builtins.update(putch)
+
+    print = builtins["print"]
+    def not_input(*a):
+        print(*a, end=""); print(7)
+        return 7
+    builtins["input"] = not_input
+    return builtins
+
+
 
 import io, sys
 
@@ -24,7 +31,7 @@ def filtered_str(obj):
     return f"<{t.__name__} object at 0x?>"
 
 class PrintWrap:
-    def __init__(self, builtins, print_it=True):
+    def __init__(self, print_it=True):
         buffer = io.StringIO()
         def printer(*a, sep=' ', end='\n', file=None, flush=False):
             file = sys.stdout if file is None else file
@@ -36,7 +43,7 @@ class PrintWrap:
                     file.flush()
             buffer.write(line)
             buffer.write(end)
-        self.builtins = {**builtins, "print": printer}
+        self.builtins = make_builtins({"print": printer})
         self.buffer = buffer
     def __enter__(self):
         return self.builtins, self.buffer
@@ -78,7 +85,7 @@ def misc_loader(F, plug):
 class Cell:
     __slots__ = ("v",)
 
-def executor(id, builtins, globals, memory=None, defaults=(), closure=(), depth=0):
+def executor(module, id, builtins, globals, memory=None, defaults=(), closure=(), depth=0):
     F = module[id]
     if memory is None:
         memory = globals  # locals <-> globals
@@ -159,11 +166,11 @@ def executor(id, builtins, globals, memory=None, defaults=(), closure=(), depth=
                 new_closure = [Cell() for i in range(new_cells)]
                 for cell_n in old_cells:
                     new_closure.append(closure[cell_n])
-                return executor(def_id, builtins, globals, {}, defaults, new_closure, depth+1)(*args)
+                return executor(module, def_id, builtins, globals, {}, defaults, new_closure, depth+1)(*args)
             memory[var] = run_wrapper
         else:
             new_closure = [closure[cell_n] for cell_n in old_cells]
-            memory[var] = executor(def_id, builtins, globals, {}, defaults, new_closure, depth+1)
+            memory[var] = executor(module, def_id, builtins, globals, {}, defaults, new_closure, depth+1)
 
     def code_19(var, name): # <var> = builtin:<var>
         memory[var] = builtins[name]
@@ -242,6 +249,7 @@ def executor(id, builtins, globals, memory=None, defaults=(), closure=(), depth=
                 print("• exc:", id, bb, i, " ", stringify_instr_wrap(orig_blocks[bb], i))
                 raise exc from exc.__cause__
 
+    entry = module.entries[id]
     def runner(*args):
         if preinit is not None:
             preinit()
@@ -252,7 +260,7 @@ def executor(id, builtins, globals, memory=None, defaults=(), closure=(), depth=
         dispatch[27] = lambda n: code_27(args, n)
 
         nonlocal cur_idx, exc_items
-        bb = module.b0
+        bb = entry
         while True:
             try:
                 exc_items = exc_index[bb]
@@ -289,13 +297,13 @@ def executor(id, builtins, globals, memory=None, defaults=(), closure=(), depth=
 
 
 
-def run_F(wrapper = None):
+def run_F(module, id, reference_print, wrapper = None):
     if wrapper is None:
-        wrapper = PrintWrap(builtins)
+        wrapper = PrintWrap()
 
     print(dashed_separator)
     with wrapper as (new_builtins, buffer):
-        executor(def_id, new_builtins, {})()
+        executor(module, id, new_builtins, {})()
         actual_print = buffer.getvalue()
         print("\nCORRECT PRINT:", "❌✅"[actual_print == reference_print])
 
@@ -433,8 +441,8 @@ check_anti_DCE()
 def check_nonlocal():
     non = "boom"
     def func():
-        print("nonlocal:", non)
         nonlocal non
+        print("nonlocal:", non)
         non = "knock"
     func()
     print("nonlocal:", non)
@@ -734,47 +742,65 @@ for pair in generator():
     print(pair)
 """
 
+source_index = (
+    source1, source2, source3, source4, source5,
+    source6, source7, source8, source9, source10,
+    source11, source12, source13, source14,
+)
+
 VERBOSE = False
 ONLY_REF = False
+TEST_ALL = True
 
 
-if __name__ == "__main__":
-    source = source14
 
-    with PrintWrap(builtins, print_it=ONLY_REF) as (new_builtins, buffer):
+def main(source, *, debug = False):
+    with PrintWrap(print_it=ONLY_REF) as (new_builtins, buffer):
         exec(source, new_builtins)
         reference_print = buffer.getvalue()
     if ONLY_REF:
         exit()
 
-    module = py_visitor(source, builtins)
+    builtins = make_builtins()
+    module = py_visitor(source, builtins, debug=debug)
     def_id = module.root_def
 
-    for id, F in enumerate(module):
-        print(f"\n••• def#{id}")
-        stringify_cfg(F)
+    if debug:
+        for id, F in enumerate(module):
+            print(f"\n••• def#{id}")
+            stringify_cfg(F)
 
-    run_F()
+    run_F(module, def_id, reference_print)
 
-    print_wrap = PrintWrap(builtins)
+    print_wrap = PrintWrap()
     runners = []
     cells = tuple({} for i in range(len(module)))
     is_global = True
     for id in (def_id, *(i for i in range(len(module)) if i != def_id)):
-        print(dashed_separator)
-        print(f"    {module.def_names[id]} (def#{id})\n")
-        stringify_cfg(module[id])
-        print()
+        if debug:
+            print(dashed_separator)
+            print(f"    {module.def_names[id]} (def#{id})\n")
+            stringify_cfg(module[id])
+            print()
 
         if is_global:
-            value_host, F = main_loop(module, id, print_wrap.builtins, debug=True, is_global=True)
+            value_host, F = main_loop(module, id, print_wrap.builtins, debug=debug, is_global=True)
             applier = value_host.global_to_value
             is_global = False
         else:
             applier(module[id])
-            value_host, F = main_loop(module, id, print_wrap.builtins, debug=True)
+            value_host, F = main_loop(module, id, print_wrap.builtins, debug=debug)
 
-        print()
-        stringify_cfg(F)
+        if debug:
+            print()
+            stringify_cfg(F)
 
-    run_F(print_wrap)
+    run_F(module, def_id, reference_print, print_wrap)
+
+
+if __name__ == "__main__":
+    if TEST_ALL:
+        for source in source_index:
+            main(source)
+    else:
+        main(source14)

@@ -30,7 +30,7 @@ class Label:
         return f"b{self.n}"
 
     def __hash__(self):
-        return hash(self.n)
+        return id(self)  # можно менять n, не ломая словари!
     def __eq__(self, right):
         return isinstance(right, Label) and self.n == right.n
     def __lt__(self, right):  # для сортировки
@@ -39,12 +39,11 @@ class Label:
         return len(repr(self))
 
 class Module:
-    b0 = Label(0)
-
     def __init__(self):
         self.defs = []
         self.def_tree = {}
         self.def_names = []
+        self.entries = []
         self.root_def = None
         self.is_class = []
         self.is_yield = []
@@ -53,6 +52,7 @@ class Module:
         def_id = len(self.defs)
         self.defs.append(F)
         self.def_names.append(name)
+        self.entries.append(next(iter(F[0])))
         self.is_class.append(False)
         self.is_yield.append(False)
         return def_id
@@ -1429,7 +1429,6 @@ TODO
         return result
 
     def visit_DictComp(node):
-        explore_node(node)
         result = new_reg()
         add(19, result, "dict")  # <var> = builtin:<var>
         add(6, result, result, ())  # <var> = <func>(<var>, ...)
@@ -1511,8 +1510,8 @@ TODO
     make_CFG(blocks, preds, succs)
 
     # с появлением del_block, ключи теперь могут перемешаться...
-    sorted_blocks = {bb: blocks[bb] for bb in sorted(blocks, key = lambda bb: bb.n)}
-    blocks.clear(); blocks.update(sorted_blocks)
+    for n, bb in enumerate(blocks):
+        bb.n = n
 
     return def_id
 
@@ -1563,7 +1562,7 @@ def check_CFG(F):
 
 
 
-def scope_handler(module: Module, builtins):
+def scope_handler(module: Module, builtins, *, verbose = False):
     from HIR_parser import uses_getters
 
     READ = 0
@@ -1625,15 +1624,17 @@ def scope_handler(module: Module, builtins):
     for id, (blocks, preds, succs) in enumerate(module):
         is_global = id == root_def
         var_flags = flag_index[id]
-        print(f"• {module.def_names[id]}   (def#{id})")
-      # print("   ", var_flags.get("_var1"))
+        if verbose:
+            print(f"• {module.def_names[id]}   (def#{id})")
         for var, flags in var_flags.items():
             if is_global or flags[GLOBAL]:
-                print("BUILTIN:" if var[1:] in builtins else "GLOBAL:", var)
+                if verbose:
+                    print("BUILTIN:" if var[1:] in builtins else "GLOBAL:", var)
                 add_flag(var, GLOBAL)
                 if var[1:] in builtins: used_builtins.add(var)
             elif (flags[WRITE] or flags[ARG]) and not flags[NONLOCAL]:
-                print("LOCAL:", var)
+                if verbose:
+                    print("LOCAL:", var)
             else:
               # print("NOT LOCAL:", var, flags) # nonlocal or global or builtin
                 cur_id = next_id = def_tree[id]
@@ -1647,12 +1648,14 @@ def scope_handler(module: Module, builtins):
                     if cur_id == root_def or pflags[GLOBAL]:
                         if flags[NONLOCAL]:
                             raise SyntaxError("no binding for nonlocal 'glob_var' found")
-                        print("BUILTIN:" if var[1:] in builtins else "GLOBAL:", var)
+                        if verbose:
+                            print("BUILTIN:" if var[1:] in builtins else "GLOBAL:", var)
                         add_flag(var, GLOBAL)
                         if var[1:] in builtins: used_builtins.add(var)
                         break
                     if (pflags[WRITE] or pflags[ARG]) and not pflags[NONLOCAL]:
-                        print("NONLOCAL:", var, f"({id} -> {cur_id})" if cur_id == next_id else f"({id} -> {next_id} ->... {cur_id})")
+                        if verbose:
+                            print("NONLOCAL:", var, f"({id} -> {cur_id})" if cur_id == next_id else f"({id} -> {next_id} ->... {cur_id})")
                         var_flags = flag_index[id]
                         add_flag(var, NONLOCAL)
                         flag_index[cur_id][var]
@@ -1665,12 +1668,15 @@ def scope_handler(module: Module, builtins):
                         raise SyntaxError("no binding for nonlocal 'glob_var' found")
                     if var[1:] not in builtins:
                         raise NameError(f"name {var!r} is not defined")
-                    print("BUILTIN:", var)
+                    if verbose:
+                        print("BUILTIN:", var)
                     add_flag(var, GLOBAL)
                     used_builtins.add(var)
 
-    for id in range(len(module)):
-        print("•••", id, def2cell_left[id], def2cell_right[id])
+    if verbose:
+        for id in range(len(module)):
+            print("•••", id, def2cell_left[id], def2cell_right[id])
+
     for id, vars in enumerate(def2cell_left):
         var_flags = flag_index[id]
         for var in vars:
@@ -1745,7 +1751,8 @@ def scope_handler(module: Module, builtins):
                     dotted_builtins.add(var)
                     continue
 
-    b0 = Module.b0
+    b0 = next(iter(blocks))
+    assert b0.n == 0
     blocks[b0] = (
         *((19, name, name[1:], None) for name in used_builtins), # <var> = builtin:<var>
         *((19, name, name[1:], None) for name in dotted_builtins), # <var> = builtin:<var>
@@ -1799,13 +1806,13 @@ def yield_handler(module):
 
 
 
-def py_visitor(code, builtins={}):
+def py_visitor(code, builtins={}, *, debug=False):
     ast = parse_it(code)
     module = Module()
 
     module.root_def = visitors(ast, module)
 
-    scope_handler(module, builtins)
+    scope_handler(module, builtins, verbose=debug)
     yield_handler(module)
 
     return module
