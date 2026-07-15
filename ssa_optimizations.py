@@ -605,6 +605,7 @@ def main_loop(module, def_id, builtins, debug=False, is_global=False):
             stringify_cfg(F)
 
     F = module[def_id]
+    assert check_CFG(F)
     IDom, dom_tree, DF, value_host, F = SSA(F, predefined=tuple(builtins))
 
     blocks = F[0]

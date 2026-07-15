@@ -167,10 +167,12 @@ def executor(module, id, builtins, globals, memory=None, defaults=(), closure=()
                 for cell_n in old_cells:
                     new_closure.append(closure[cell_n])
                 return executor(module, def_id, builtins, globals, {}, defaults, new_closure, depth+1)(*args)
-            memory[var] = run_wrapper
+            func = run_wrapper
         else:
             new_closure = [closure[cell_n] for cell_n in old_cells]
-            memory[var] = executor(module, def_id, builtins, globals, {}, defaults, new_closure, depth+1)
+            func = executor(module, def_id, builtins, globals, {}, defaults, new_closure, depth+1)
+        func.__name__ = func.__qualname__ = f"def#{def_id}"
+        memory[var] = func
 
     def code_19(var, name): # <var> = builtin:<var>
         memory[var] = builtins[name]
@@ -195,6 +197,11 @@ def executor(module, id, builtins, globals, memory=None, defaults=(), closure=()
             raise TypeError(f"def#{id}() missing N required positional arguments")
 
     def code_25(args, var, n, default_n, _):  # <var> = ARGS[<n>] or <default_n>   (type: <ann>)
+        if n == -1:
+            # костыль для передачи данных в defaults, не доступных из ARGS
+            # нужно для обрачивания классов генераторов в функции
+            memory[var] = defaults[default_n]
+            return
         try: memory[var] = args[n]
         except IndexError: memory[var] = defaults[default_n]
 
@@ -729,7 +736,7 @@ print("check_it:", check_it())
 """
 
 source15 = """
-def generator():
+def gen():
     for i in range(5):
         yield ("i:", i)
         if i % 2:
@@ -737,20 +744,31 @@ def generator():
                 yield ("j:", j)
                 if j % 3:
                     yield (i, j)
+    yield ("ready", 1)  # пустой state
+    yield ("ready", i)  # одноэлементный state (не нужен кортеж)
 
-for pair in generator():
+def filter(obj):
+    s = str(obj).split()
+    idx = s.index("at")
+    s[idx-1] = "<name>"
+    s[idx+1] = "<addr>"
+    return " ".join(s)
+
+print("gen:", filter(gen))
+print("gen:", filter(gen()))
+for pair in gen():
     print(pair)
 """
 
 source_index = (
     source1, source2, source3, source4, source5,
     source6, source7, source8, source9, source10,
-    source11, source12, source13, source14,
+    source11, source12, source13, source14, source15,
 )
 
 VERBOSE = False
 ONLY_REF = False
-TEST_ALL = True
+TEST_ALL = False
 
 
 
@@ -803,4 +821,4 @@ if __name__ == "__main__":
         for source in source_index:
             main(source)
     else:
-        main(source14)
+        main(source15, debug=True)

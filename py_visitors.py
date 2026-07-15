@@ -48,11 +48,11 @@ class Module:
         self.is_class = []
         self.is_yield = []
 
-    def add(self, F, name):
+    def add(self, F, name, entry):
         def_id = len(self.defs)
         self.defs.append(F)
         self.def_names.append(name)
-        self.entries.append(next(iter(F[0])))
+        self.entries.append(entry)
         self.is_class.append(False)
         self.is_yield.append(False)
         return def_id
@@ -136,19 +136,19 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
     is_trace = False
     deleted_blocks = []
     def new_block():
-        name = deleted_blocks.pop() if deleted_blocks else Label(len(blocks))
-        blocks[name] = []
+        label = deleted_blocks.pop() if deleted_blocks else Label(len(blocks))
+        blocks[label] = []
         # preds и succs заполняются в make_CFG
-        return name
-    def del_block(name):
-        deleted_blocks.append(name)
-        del blocks[name]
-    def on_block(name = None):
+        return label
+    def del_block(label):
+        deleted_blocks.append(label)
+        del blocks[label]
+    def on_block(label = None):
         nonlocal add_inst, current_block, is_trace
         check_terminator()
-        name = name or new_block()
-        add_inst = blocks[name].append
-        current_block = name
+        label = label or new_block()
+        add_inst = blocks[label].append
+        current_block = label
         if is_trace:
             is_trace = False
             trace()
@@ -1462,14 +1462,14 @@ TODO
             add(99, result)  # return <var>
             free_reg(result)
         else: add(99, ".None")  # return <var>
-        result = new_reg()
-        add(19, result, "None")  # <var> = builtin:<var>
 
         module.is_yield[def_id] = True
         label = new_block()
         control(label)  # goto <label>
         on_block(label)
 
+        result = new_reg()
+        add(19, result, "None")  # <var> = builtin:<var>
         return result
 
 
@@ -1483,7 +1483,7 @@ TODO
     # main
 
     F = blocks, preds, succs
-    def_id = module.add(F, def_name)
+    def_id = module.add(F, def_name, current_block)
 
     apply_statement_dict()
     apply_expression_dict()
@@ -1795,14 +1795,273 @@ def outer():
 outer()
 """
 
-def yield_handler(module):
+def args_shift(insts):
+    for i, inst in enumerate(insts):
+        kind = inst[0]
+        if kind in (24, 25, 26):  # <var> = ARGS[<n>...
+            _, var, n, *other = inst
+            insts[i] = kind, var, n+1, *other
+        elif kind == 27:  # if ARGS[<n>:]: raise TypeError(...)
+            _, n, attrs = inst
+            insts[i] = kind, n+1, attrs
+        else: break
+    insts.insert(0, (24, "self", 0, None, None))  # <var> = ARGS[<n>]   (type: <ann>)
+    # self намеренно пишется так, чтобы не смешивать с пользовательским _self
+
+def clone_def(blocks):
+    labels = {bb.n: Label(bb.n) for bb in blocks}
+    new_blocks = {}
+    for bb, insts in blocks.items():
+        new_blocks[labels[bb.n]] = new_insts = deque()
+        add = new_insts.append
+        for inst in insts:
+            attrs = inst[-1]
+            if attrs is not None:
+                new_attrs = attrs.copy()
+                if "exc" in attrs:
+                    new_attrs["exc"] = labels[attrs["exc"].n]
+                add((*inst[:-1], new_attrs))
+            else:
+                add(inst)
+        term_inst = new_insts[-1]
+        kind = term_inst[0]
+        if kind == 3:  # goto <label>
+            _, label, attrs = term_inst
+            new_insts[-1] = 3, labels[label.n], attrs
+        elif kind == 14:  # goto <label> if <var> else <label>
+            _, yeah, var, nop, attrs = term_inst
+            new_insts[-1] = 14, labels[yeah.n], var, labels[nop.n], attrs
+    return new_blocks, labels
+def check_clone_def(F, entry):
+    blocks, labels = clone_def(F[0])
+    new_entry = labels[entry.n]
+    preds, succs = {}, {}
+    make_CFG(blocks, preds, succs)
+    for bb in blocks:
+        bb.n = ~bb.n
+        # Проверка, что изменения здесь не повлиют на оригинальную F
+    print(); stringify_cfg(F)
+    print("entry:", entry)
+    print(); stringify_cfg((blocks, preds, succs))
+    print("entry:", new_entry)
+
+def clean_def(F, entry):
+    blocks, preds, succs = F
+    visited = {entry}
+    def dfs(bb):
+        for succ in sorted(succs[bb]):
+            if succ not in visited:
+                visited.add(succ)
+                dfs(succ)
+    dfs(entry)
+    for bb in (set(blocks) - visited):
+        blocks, preds, succs = F
+        for pred in preds[bb]:
+            succs[pred].remove(bb)
+        for succ in succs[bb]:
+            preds[succ].remove(bb)
+        del blocks[bb], preds[bb], succs[bb]
+
+
+def transform_def_to_class(module, def_id, wrap_def_id=None):
+    module.is_class[def_id] = True
+
+    source_id = module.def_tree[def_id]
+    blocks = module.defs[source_id][0]
+    for bb, insts in blocks.items():
+        new_insts = deque(); add = new_insts.append
+        for inst in insts:
+            add(inst)
+            if inst[0] == 18 and inst[2] == def_id:  # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)
+                name = inst[1]
+                add((6, name, name, (), None))  # <var> = <func>(<var>, ...)
+                if wrap_def_id is not None:
+                    add((7, "id", def_id, None))  # <var> = <const>
+                    add((18, name, wrap_def_id, (name, "id"), 0, (), None)),  # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)
+        blocks[bb] = new_insts
+
+def yielderson(module, def_id, F, *, verbose=False):
+    from utils import get_bits_by_index
+    orig_blocks = blocks = F[0]
+    vars_list, IN, OUT = live_variables(F)
+
+    entry = module.entries[def_id]
+    args_shift(blocks[entry])
+
+    yield_blocks = {}
+    for bb, insts in blocks.items():
+        if len(insts) < 2 or insts[-2][0] != 99:  # yield <var>
+            continue
+        goto = insts.pop()
+        _yield = insts.pop()
+        assert goto[0] == 3 and goto[2] is None  # goto <label>
+
+        out_vars = get_bits_by_index(vars_list, OUT[bb])
+        in_vars = get_bits_by_index(vars_list, IN[goto[1]])
+        if verbose:
+            print()
+            print(bb, "->", goto[1])
+            print("OUT:", ", ".join(out_vars))
+            print("IN: ", ", ".join(in_vars))
+        assert in_vars == out_vars
+
+        yield_blocks[bb] = goto[1], out_vars
+
+        add = insts.append
+        if out_vars:
+            if len(out_vars) == 1:
+                add((13, "self", "state", out_vars[0], None))  # <var>.<attr> = <var>
+            else:
+                add((8, "state", out_vars, None))  # <var> = tuple(<var>, ...)
+                add((13, "self", "state", "state", None))  # <var>.<attr> = <var>
+        add((12, "next_f", "self", f"func_{len(yield_blocks)}", None))  # <var> = <var>.<attr>
+        add((13, "self", "next_f", "next_f", None))  # <var>.<attr> = <var>
+        add((4, _yield[1], _yield[2]))  # return <var>
+    for bb, insts in blocks.items():
+        if insts[-1][0] != 4 or bb in yield_blocks:  # return <var>
+            continue
+        insts.pop()
+        add = insts.append
+        add((12, "next_f", "self", f"func_{len(yield_blocks)+1}", None))  # <var> = <var>.<attr>
+        add((13, "self", "next_f", "next_f", None))  # <var>.<attr> = <var>
+        add((19, "si", "StopIteration", None))  # <var> = builtin:<var>
+        add((17, "si", None))  # raise <var>
+
+    make_CFG(blocks, F[1], F[2])
+    functions = {"func_0": (F, entry)}
+    if verbose:
+        print("\n••• func_0:")
+        stringify_cfg(F)
+
+  # check_clone_def(F, entry)
+    for func_n, (bb, (to_bb, out_vars)) in enumerate(yield_blocks.items(), 1):
+        blocks, labels = clone_def(orig_blocks)
+        del blocks[labels[entry.n]]
+        to_bb = labels[to_bb.n]
+
+        insts = deque((
+            (24, "self", 0, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
+            (27, 1, None),  # if ARGS[<n>:]: raise TypeError(...)
+        ))
+        add = insts.append
+        if out_vars:
+            if len(out_vars) == 1:
+                add((12, out_vars[0], "self", "state", None))  # <var> = <var>.<attr>
+            else:
+                add((12, "state", "self", "state", None))  # <var> = <var>.<attr>
+                for i, var in enumerate(out_vars):
+                    add((7, "i", i, None))  # <var> = <const>
+                    add((10, var, "state", "i", None))  # <var> = <var>[<var>]
+        insts.extend(blocks.pop(to_bb))
+
+        blocks = {to_bb: insts, **blocks}
+
+        preds, succs = {}, {}
+        F = blocks, preds, succs
+        make_CFG(blocks, preds, succs)
+        clean_def(F, to_bb)
+        for n, bb in enumerate(blocks):
+            bb.n = n
+        functions[f"func_{func_n}"] = F, to_bb
+        if verbose:
+            print(f"\n••• func_{func_n}:")
+            stringify_cfg(F)
+
+    def make_F(insts, name):
+        b0 = Label(0)
+        F = {b0: deque(insts)}, {b0: ()}, {b0: set()}
+        functions[name] = F, b0
+        if verbose:
+            print(f"\n••• {name}:")
+            stringify_cfg(F)
+
+    make_F((
+        (27, 0, None),  # if ARGS[<n>:]: raise TypeError(...)
+        (19, "si", "StopIteration", None),  # <var> = builtin:<var>
+        (17, "si", None),  # raise <var>
+    ), f"func_{len(yield_blocks)+1}")
+
+    make_F([
+        (24, "self", 0, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
+        (24, "id", 1, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
+        (27, 2, None),  # if ARGS[<n>:]: raise TypeError(...)
+        (12, "func_0", "self", "func_0", None),  # <var> = <var>.<attr>
+        (13, "self", "next_f", "func_0", None),  # <var>.<attr> = <var>
+        (13, "self", "id", "id", None),  # <var>.<attr> = <var>
+        (19, "r0", "None", None),  # <var> = builtin:<var>
+        (4, "r0", None),  # return <var>
+    ], "__init__")
+
+    make_F((
+        (24, "self", 0, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
+        (27, 1, None),  # if ARGS[<n>:]: raise TypeError(...)
+        (4, "self", None),  # return <var>
+    ), "__iter__")
+
+    make_F((
+        (24, "self", 0, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
+        (27, 1, None),  # if ARGS[<n>:]: raise TypeError(...)
+        (12, "next_f", "self", "next_f", None),  # <var> = <var>.<attr>
+        (6, "result", "next_f", (), None),  # <var> = <func>(<var>, ...)
+        (4, "result", None),  # return <var>
+    ), "__next__")
+
+    make_F((
+        (24, "self", 0, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
+        (27, 1, None),  # if ARGS[<n>:]: raise TypeError(...)
+        (19, "id", "id", None),  # <var> = builtin:<var>
+        (19, "hex", "hex", None),  # <var> = builtin:<var>
+        (19, "str", "str", None),  # <var> = builtin:<var>
+        (7, 'a', "<generator object def#", None),  # <var> = <const>
+        (12, 'b', "self", "id", None),  # <var> = <var>.<attr>
+        (6, 'b', "str", ('b',), None),  # <var> = <func>(<var>, ...)
+        (7, 'c', " at ", None),  # <var> = <const>
+        (6, 'd', "id", ("self",), None),  # <var> = <func>(<var>, ...)
+        (6, 'd', "hex", ('d',), None),  # <var> = <func>(<var>, ...)
+        (7, 'e', '>', None),  # <var> = <const>
+        (28, "result", ('a', 'b', 'c', 'd', 'e'), None),  # <var> = ''.join((<var>, ...))
+        (4, "result", None),  # return <var>
+    ), "__repr__")
+
+    insts = [(27, 0, None)]  # if ARGS[<n>:]: raise TypeError(...)
+    add = insts.append
+    for name, (F, entry) in functions.items():
+        def_id2 = module.add(F, name, entry)
+        module.def_tree[def_id2] = def_id
+        add((18, name, def_id2, (), 0, (), None))  # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)
+
+    names = tuple(functions)
+    add((29, "gen", "generator", (), names, names, None))  # <var> = type(<name>, (<base_reg>, ...), (<local_name>, ...), (<local_reg>, ...))
+    add((4, "gen", None))  # return <var>
+    make_F(insts, "generator")
+
+    make_F([
+        # забавно то, что мы храним оборачиваемый класс в defaults[0],
+        # но при этом не даём к нему доступ через вызов этой функции
+        (27, 0, None),  # if ARGS[<n>:]: raise TypeError(...)
+        (25, "gen", -1, 0, None, None),  # <var> = ARGS[<n>] or <default_n>   (type: <ann>)
+        (25, "id", -1, 1, None, None),  # <var> = ARGS[<n>] or <default_n>   (type: <ann>)
+        (6, "result", "gen", ("id",), None),  # <var> = <func>(<var>, ...)
+        (4, "result", None),  # return <var>
+    ], "wrapper")
+
+    F, entry = functions["wrapper"]
+    wrap_def_id = module.add(F, "wrapper", entry)
+    module.is_class[wrap_def_id] = True
+    module.def_tree[wrap_def_id] = def_id
+
+    module.defs[def_id], module.entries[def_id] = functions["generator"]
+    transform_def_to_class(module, def_id, wrap_def_id)
+  # оказывается, функция генератора НЕ заменяется на класс, а ОБОРАЧИВАЕТ этот самый класс...
+
+    F, entry = functions["func_0"]
+    clean_def(F, entry)
+
+def yield_handler(module, *, verbose=False):
     for def_id, F in enumerate(module):
         if not module.is_yield[def_id]:
             continue
-        blocks, preds, succs = F
-        stringify_cfg(F)
-        live_variables(F, debug=True)
-        exit()
+        yielderson(module, def_id, F, verbose=verbose)
 
 
 

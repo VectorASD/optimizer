@@ -250,7 +250,7 @@ def reaching_definitions(BB_F, unique_defs=True, debug=False):
         entry_bottom=True, # bottom на entry
         debug=(("RD", "R")[unique_defs], definitions) if debug else None
     )
-    return definitions, GEN, KILL, RIN, ROUT
+    return definitions, RIN, ROUT
 
 
 
@@ -339,7 +339,7 @@ def available_expressions(BB_F, debug=False):
         entry_bottom=True, # bottom на entry
         debug=("AV", expressions) if debug else None
     )
-    return expressions, GEN, KILL, AVIN, AVOUT
+    return expressions, AVIN, AVOUT
 
 
 
@@ -377,7 +377,7 @@ def LV_gen_kill_maker(blocks):
         GEN[bb]  = gen_bits
         KILL[bb] = kill_bits
 
-    vars_list = sorted(index)  # сортировка для детерминированности (косметика)
+    vars_list = tuple(index)
     return vars_list, GEN, KILL
 
 def live_variables(BB_F, debug=False):
@@ -424,7 +424,7 @@ def live_variables(BB_F, debug=False):
         meet="or", # LV: join = OR
         debug=("LV", vars_list) if debug else None
     )
-    return vars_list, GEN, KILL, LVIN, LVOUT
+    return vars_list, LVIN, LVOUT
 
 
 
