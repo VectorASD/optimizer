@@ -252,7 +252,7 @@ def executor(id, builtins, globals, memory=None, defaults=(), closure=(), depth=
         dispatch[27] = lambda n: code_27(args, n)
 
         nonlocal cur_idx, exc_items
-        bb = "b0"
+        bb = module.b0
         while True:
             try:
                 exc_items = exc_index[bb]
@@ -403,8 +403,12 @@ assert input() == 7, "input() is corrupted"
 
 # raise AssertionError(10, (7, 9)) # AssertionError: (10, (7, 9))
 # raise AssertionError((10, (7, 9))) # AssertionError: (10, (7, 9))
-raise KeyError("a") from ValueError("b")
-# raise # RuntimeError: No active exception to reraise
+try:
+    raise KeyError("a") from ValueError("b")
+except Exception as e:
+    print("exc:", repr(e), "  cause:", repr(e.__cause__))
+
+# raise  # RuntimeError: No active exception to reraise
 """
 
 source4 = """
@@ -735,7 +739,7 @@ ONLY_REF = False
 
 
 if __name__ == "__main__":
-    source = source15
+    source = source14
 
     with PrintWrap(builtins, print_it=ONLY_REF) as (new_builtins, buffer):
         exec(source, new_builtins)

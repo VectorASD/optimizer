@@ -23,7 +23,24 @@ import_ast()
 
 
 
+class Label:
+    def __init__(self, n):
+        self.n = n
+    def __repr__(self):
+        return f"b{self.n}"
+
+    def __hash__(self):
+        return hash(self.n)
+    def __eq__(self, right):
+        return isinstance(right, Label) and self.n == right.n
+    def __lt__(self, right):  # для сортировки
+        return self.n < right.n
+    def __len__(self):  # для печати
+        return len(repr(self))
+
 class Module:
+    b0 = Label(0)
+
     def __init__(self):
         self.defs = []
         self.def_tree = {}
@@ -119,7 +136,7 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
     is_trace = False
     deleted_blocks = []
     def new_block():
-        name = deleted_blocks.pop() if deleted_blocks else f"b{len(blocks)}"
+        name = deleted_blocks.pop() if deleted_blocks else Label(len(blocks))
         blocks[name] = []
         # preds и succs заполняются в make_CFG
         return name
@@ -1494,7 +1511,7 @@ TODO
     make_CFG(blocks, preds, succs)
 
     # с появлением del_block, ключи теперь могут перемешаться...
-    sorted_blocks = {bb: blocks[bb] for bb in sorted(blocks, key = lambda bb: int(bb[1:]))}
+    sorted_blocks = {bb: blocks[bb] for bb in sorted(blocks, key = lambda bb: bb.n)}
     blocks.clear(); blocks.update(sorted_blocks)
 
     return def_id
@@ -1728,10 +1745,11 @@ def scope_handler(module: Module, builtins):
                     dotted_builtins.add(var)
                     continue
 
-    blocks["b0"] = (
+    b0 = Module.b0
+    blocks[b0] = (
         *((19, name, name[1:], None) for name in used_builtins), # <var> = builtin:<var>
         *((19, name, name[1:], None) for name in dotted_builtins), # <var> = builtin:<var>
-        *blocks["b0"],
+        *blocks[b0],
     )
 
     for bb, insts in blocks.items():
@@ -1777,7 +1795,7 @@ def yield_handler(module):
         blocks, preds, succs = F
         stringify_cfg(F)
         live_variables(F, debug=True)
-    exit()
+        exit()
 
 
 
