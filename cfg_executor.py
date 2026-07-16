@@ -1,5 +1,5 @@
 from py_visitors import py_visitor
-from ssa_optimizations import main_loop
+from ssa_optimizations import PassManager
 from HIR_parser import stringify_cfg, stringify_instr_wrap
 from utils import dashed_separator, bin_ops, unar_ops
 
@@ -304,12 +304,13 @@ def executor(module, id, builtins, globals, memory=None, defaults=(), closure=()
 
 
 
-def run_F(module, id, reference_print, wrapper = None):
+def run_F(module, reference_print, wrapper = None):
     if wrapper is None:
         wrapper = PrintWrap()
 
     print(dashed_separator)
     with wrapper as (new_builtins, buffer):
+        id = module.root_def
         executor(module, id, new_builtins, {})()
         actual_print = buffer.getvalue()
         print("\nCORRECT PRINT:", "❌✅"[actual_print == reference_print])
@@ -781,39 +782,20 @@ def main(source, *, debug = False):
 
     builtins = make_builtins()
     module = py_visitor(source, builtins, debug=debug)
-    def_id = module.root_def
 
     if debug:
         for id, F in enumerate(module):
             print(f"\n••• def#{id}")
             stringify_cfg(F)
 
-    run_F(module, def_id, reference_print)
+    run_F(module, reference_print)
 
     print_wrap = PrintWrap()
-    runners = []
-    cells = tuple({} for i in range(len(module)))
-    is_global = True
-    for id in (def_id, *(i for i in range(len(module)) if i != def_id)):
-        if debug:
-            print(dashed_separator)
-            print(f"    {module.def_names[id]} (def#{id})\n")
-            stringify_cfg(module[id])
-            print()
 
-        if is_global:
-            value_host, F = main_loop(module, id, print_wrap.builtins, debug=debug, is_global=True)
-            applier = value_host.global_to_value
-            is_global = False
-        else:
-            applier(module[id])
-            value_host, F = main_loop(module, id, print_wrap.builtins, debug=debug)
+    pm = PassManager(print_wrap.builtins, debug=debug)
+    pm.run(module)
 
-        if debug:
-            print()
-            stringify_cfg(F)
-
-    run_F(module, def_id, reference_print, print_wrap)
+    run_F(module, reference_print, print_wrap)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,6 @@ import re
 from pprint import pformat
 import sys
 from io import StringIO
-from hashlib import sha256
 from array import array
 
 
@@ -318,17 +317,6 @@ def stringify_cfg(F, file=None):
             write("<empty!>")
             print_preds()
             write("\n")
-
-def ssa_hash(F):
-    hasher = sha256()
-    write = lambda str: hasher.update(str.encode("utf-8"))
-    for bb, ops in F[0].items():
-        i, L = 0, len(ops)
-        write(f"{bb}:")
-        while i < L:
-            i = stringify_instr(ops, i, write)
-            write(";")
-    return hasher.digest()
 
 
 

@@ -272,7 +272,7 @@ def compute_idom_fast(BB_F): # Cooper–Harvey–Kennedy (2001)
 
     # 2. init IDom
     def intersect(b1, b2):
-    # climb up the dominator tree using DFS order
+        # climb up the dominator tree using DFS order
         while b1 != b2:
             while index[b1] > index[b2]:
                 b1 = IDom[b1]

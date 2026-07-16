@@ -1,29 +1,32 @@
 from ssa import SSA, compute_idom_fast
-from HIR_parser import stringify_cfg, HAS_LHS, uses_V_getters, CAN_DCE, CAN_CSE, ssa_hash, Value
+from HIR_parser import stringify_cfg, HAS_LHS, uses_V_getters, CAN_DCE, CAN_CSE, Value
 from py_visitors import check_CFG
-from utils import bin_ops, unar_ops
+from utils import bin_ops, unar_ops, dashed_separator
 from folding import FOLDING_ATTRIBUTE_DICT, FOLDING_SET
 
 from collections import defaultdict, deque
 from pprint import pprint
+from hashlib import sha256
 
 
 
-def copy_propagation(blocks, value_host): # CP
+def copy_propagation(pm):  # CP
+    blocks, value_host = pm.blocks, pm.value_host
+
     size = len(value_host.index)
     graph = [[]] * size
     roots = [True] * size
 
     for insts in blocks.values():
         for inst in insts:
-            if inst[0] == 0: # <var> = <var>
+            if inst[0] == 0:  # <var> = <var>
                 dst, src = inst[1].n, inst[2].n
                 assert dst != src
                 L = graph[src]
                 if L: L.append(dst)
                 else: graph[src] = [dst]
                 roots[dst] = False
-                # print(src, "->", dst)
+              # print(src, "->", dst)
 
     rename = value_host.rename
     for src, dst in enumerate(graph):
@@ -38,12 +41,14 @@ def copy_propagation(blocks, value_host): # CP
 
 
 
-def trivial_copy_elemination(blocks): # TCE
+def trivial_copy_elemination(pm):  # TCE
+    blocks = pm.blocks
+
     for bb, insts in blocks.items():
         blocks[bb] = new_insts = []
         add = new_insts.append
         for inst in insts:
-            if inst[0] == 0 and inst[1].n == inst[2].n: # %5 = %5
+            if inst[0] == 0 and inst[1].n == inst[2].n:  # %5 = %5
                 continue
             add(inst)
 
@@ -51,21 +56,23 @@ def trivial_copy_elemination(blocks): # TCE
 
 class Undef: pass
 
-def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
+def constant_propogation_and_folding(pm):  # ConstProp
+    F, value_host, builtins = pm.F, pm.value_host, pm.builtins
+    blocks = F[0]
+
     size = len(value_host.index)
     idx2users = tuple([] for i in range(size))
     idx2count = [0] * size
     idx2uses = [None] * size
     idx2value = [Undef] * size
 
-    blocks = F[0]
-
     def scope_for_12(attr):
         return lambda obj: getattr(obj, attr)
     def call_folding(func, *attrs):
         is_folding = FOLDING_ATTRIBUTE_DICT.get(func)
-        if is_folding is None: return Undef
-        # print("CALL:", func, attrs, is_folding)
+        if is_folding is None:
+            return Undef
+      # print("CALL:", func, attrs, is_folding)
         return func(*attrs)
 
     queue = []
@@ -94,26 +101,26 @@ def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
 
                 idx = inst[1].n
                 uses = tuple(uses)
-                # print(idx, uses)
+              # print(idx, uses)
                 for use in uses:
                     idx2users[use].append(idx)
                 idx2count[idx] = len(uses)
                 idx2uses[idx] = uses, op
 
-            elif kind == 7: # <var> = <const>
+            elif kind == 7:  # <var> = <const>
                 idx = inst[1].n
                 value = inst[2]
                 idx2value[idx] = value
                 queue_append(idx)
 
-            elif kind == 19: # <var> = builtin:<var>
+            elif kind == 19:  # <var> = builtin:<var>
                 idx = inst[1].n
                 value = builtins[inst[2]]
                 idx2value[idx] = value
                 queue_append(idx)
 
     while queue:
-        # print("•", queue)
+      # print("•", queue)
         new_queue = []
         queue_append = new_queue.append
         for idx in queue:
@@ -122,11 +129,11 @@ def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
                 if not idx2count[user]:
                     uses, op = idx2uses[user]
                     args = tuple(idx2value[use] for use in uses)
-                    value = op(*args) # constant folding
+                    value = op(*args)  # constant folding
                     if value is not Undef:
                         idx2value[user] = value
                         queue_append(user)
-                        # print(f"released: {user:2}     {idx2value[user]}")
+                      # print(f"released: {user:2}     {idx2value[user]}")
         queue = new_queue
 
     for bb, insts in blocks.items():
@@ -136,8 +143,8 @@ def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
                 var = inst[1]
                 value = idx2value[var.n]
                 if value is not Undef:
-                    insts[i] = (7, var, value, inst[-1]) # <var> = <const>
-            elif kind == 9: # check |<var>| == <num>
+                    insts[i] = (7, var, value, inst[-1])  # <var> = <const>
+            elif kind == 9:  # check |<var>| == <num>
                 value = idx2value[inst[1].n]
                 if value is not Undef:
                     try: L = len(value)
@@ -146,29 +153,29 @@ def constant_propogation_and_folding(F, value_host, builtins): # ConstProp
                     expected_L = inst[2]
                     if expected_L < L: raise ValueError(f"too many values to unpack (expected {expected_L}, got {L})")
                     elif expected_L > L: raise ValueError(f"not enough values to unpack (expected {expected_L}, got {L})")
-                    insts[i] = (16,) # nop
-            elif kind == 14: # goto <label> if <var> else <label>
+                    insts[i] = (16,)  # nop
+            elif kind == 14:  # goto <label> if <var> else <label>
                 value = idx2value[inst[2].n]
                 if value is not Undef:
-                    insts[i] = (3, inst[1 if value else 3], inst[-1]) # goto <label>
+                    insts[i] = (3, inst[1 if value else 3], inst[-1])  # goto <label>
                     erased_bb = inst[3 if value else 1]
-                    branch_folding(F, bb, erased_bb) # BF
+                    branch_folding(F, bb, erased_bb)  # BF
 
     for value, const in zip(value_host.index, idx2value):
         value.set_const(const)
 
 
 
-def branch_folding(F, bb, erased_bb, is_UJF = False): # BF
+def branch_folding(F, bb, erased_bb, is_UJF = False):  # BF
     blocks, preds, succs = F
-    # print(bb, "-x->", erased_bb)
+  # print(bb, "-x->", erased_bb)
     idx = preds[erased_bb].index(bb)
     if not is_UJF:
         preds[erased_bb].pop(idx)
         succs[bb].remove(erased_bb)
     insts = blocks[erased_bb]
     for i, inst in enumerate(insts):
-        if inst[0] != 5: break # not phi
+        if inst[0] != 5: break  # not phi
         phi_args = inst[2]
         insts[i] = (5, inst[1], (*phi_args[:idx], *phi_args[idx+1:]), None)
 
@@ -216,8 +223,8 @@ def UJF_change_preds(F, bb, target):
         new_phi = tuple(phi[i] for i in phi_idx)
         insts[i] = 5, var, new_phi, attrs
 
-def unconditional_jump_forwarding(F): # UJF
-    blocks, preds, succs = F
+def unconditional_jump_forwarding(pm):  # UJF
+    blocks, preds, succs = F = pm.F
     queue = tuple(blocks)
 
   # stringify_cfg(F)
@@ -232,28 +239,28 @@ def unconditional_jump_forwarding(F): # UJF
             if len(insts) != 1: continue
             last_inst = insts[0]
             kind = last_inst[0]
-            if kind != 3: continue #3: goto <label>
+            if kind != 3: continue  # goto <label>
 
             target = last_inst[1]
             if blocks[target][0][0] == 5 and set(preds[bb]) & set(preds[target]):
                 continue  # иначе приведён к разрушению ромба в phi
 
-            # Проталкиваем переход через bb к target
           # print("UJF:", bb, "->", target)
+            # Проталкиваем переход через bb к target
             for pred in preds[bb]:
                 p_insts = blocks[pred]
 
                 p_last = p_insts[-1]
                 p_kind = p_last[0]
 
-                if p_kind == 3: # goto <bb> → goto <target>
+                if p_kind == 3:  # goto <bb> → goto <target>
                     filter_exc(p_insts, bb, target)
                     succs[pred].remove(bb)
                     succs[pred].add(target)
 
                     if p_last[1] == bb:
                         p_insts[-1] = (3, target, p_last[2])
-                elif p_kind == 14: # goto <yeah> if <var> else <nop>
+                elif p_kind == 14:  # goto <yeah> if <var> else <nop>
                     filter_exc(p_insts, bb, target)
                     succs[pred].remove(bb)
                     succs[pred].add(target)
@@ -263,20 +270,20 @@ def unconditional_jump_forwarding(F): # UJF
                         yeah2 = target if bb == yeah else yeah
                         nop2 = target if bb == nop else nop
                         if yeah2 == nop2:
-                            p_insts[-1] = (3, yeah2, p_last[4]) # goto <label>
-                            branch_folding(F, bb, nop2, is_UJF = True) # BF
+                            p_insts[-1] = (3, yeah2, p_last[4])  # goto <label>
+                            branch_folding(F, bb, nop2, is_UJF = True)  # BF
                         else:
                             p_insts[-1] = (14, yeah2, cond, nop2, p_last[4])
                 else:
                     continue
                 queue_append(pred)
             UJF_change_preds(F, bb, target)
-            del blocks[bb], preds[bb], succs[bb] # minus node/vertex ;'-}
-            assert check_CFG(F)
+            del blocks[bb], preds[bb], succs[bb]  # minus node/vertex ;'-}
+            pm.check_CFG()
         queue = new_queue
 
-def conditional_jump_forwarding(F): # CJF (under construction)
-    blocks, preds, succs = F
+def conditional_jump_forwarding(pm):  # CJF (under construction)
+    blocks, preds, succs = F = pm.F
     queue = tuple(blocks)
 
     while queue:
@@ -289,7 +296,7 @@ def conditional_jump_forwarding(F): # CJF (under construction)
             if len(insts) != 1: continue
             last_inst = insts[0]
             kind = last_inst[0]
-            if op != 14: continue #14: goto <yeah> if <var> else <nop>
+            if op != 14: continue  # goto <yeah> if <var> else <nop>
 
             yeah, cond, nop = last_inst[1], last_inst[2], last_inst[3]
 
@@ -313,14 +320,14 @@ def conditional_jump_forwarding(F): # CJF (under construction)
                 preds[nop].append(pred)
                 preds[bb].remove(pred)
 
-                assert check_CFG(F)
+                pm.check_CFG()
                 queue_append(pred)
         queue = new_queue
 
 
 
-def branch_elimination(F): # BE
-    blocks, preds, succs = F
+def branch_elimination(pm):  # BE
+    blocks, preds, succs = F = pm.F
     it = iter(preds)
     entry = next(it)
     queue = tuple(bb for bb in it if not preds[bb])
@@ -330,35 +337,35 @@ def branch_elimination(F): # BE
         queue_append = new_queue.append
         for bb in queue:
             for erased_bb in tuple(succs[bb]):
-                branch_folding(F, bb, erased_bb) # BF
+                branch_folding(F, bb, erased_bb)  # BF
                 if not preds[erased_bb]: queue_append(erased_bb)
-            del blocks[bb], preds[bb], succs[bb] # minus node/vertex ;'-}
-            assert check_CFG(F)
+            del blocks[bb], preds[bb], succs[bb]  # minus node/vertex ;'-}
+            pm.check_CFG()
         queue = new_queue
 
-def phi_elimination(blocks): # φE
-    for insts in blocks.values():
+def phi_elimination(pm):  # φE
+    for insts in pm.blocks.values():
         for i, inst in enumerate(insts):
             if inst[0] != 5: break # not phi
             phi_args = inst[2]
             it = iter(phi_args)
             idx = next(it).n
             if all(idx == value.n for value in it):
-                insts[i] = (0, inst[1], phi_args[0], inst[3]) # <var> = <var>
+                insts[i] = (0, inst[1], phi_args[0], inst[3])  # <var> = <var>
 
-def block_merging(F): # BM
-    blocks, preds, succs = F
+def block_merging(pm):  # BM
+    blocks, preds, succs = F = pm.F
     queue = tuple(blocks)
 
     while queue:
-        # print("•", queue)
+      # print("•", queue)
         new_queue = []
         queue_append = new_queue.append
         for bb in queue:
             try: insts = blocks[bb]
             except KeyError: continue
             last_inst = insts[-1]
-            if last_inst[0] == 3: # goto <label>
+            if last_inst[0] == 3:  # goto <label>
                 next_bb = last_inst[1]
                 p = preds[next_bb]
                 if len(p) == 1:
@@ -368,10 +375,13 @@ def block_merging(F): # BM
                     succs[bb].remove(next_bb)  # т.к. здесь могут быть succs ещё и от исключений!
                     succs[bb] |= succs[next_bb]
                     for succ in succs[next_bb]:
-                        preds[succ] = [bb if label == next_bb else label for label in preds[succ]]
-                    del blocks[next_bb], preds[next_bb], succs[next_bb] # minus node/vertex ;'-}
+                        preds[succ] = [
+                            bb if label == next_bb else label
+                            for label in preds[succ]
+                        ]
+                    del blocks[next_bb], preds[next_bb], succs[next_bb]  # minus node/vertex ;'-}
 
-                    assert check_CFG(F)
+                    pm.check_CFG()
                     queue_append(bb)
         queue = new_queue
 
@@ -406,7 +416,9 @@ def has_exc(insts):
     return False
 
 
-def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
+def dead_code_elimination(pm):  # DCE
+    blocks, value_host = pm.blocks, pm.value_host
+
     size = len(value_host.index)
     use_count = [0] * size
     idx2uses = [None] * size
@@ -432,7 +444,7 @@ def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
             queue_append(idx)
 
     while queue:
-        # print("•", queue)
+      # print("•", queue)
         new_queue = []
         queue_append = new_queue.append
         for idx in queue:
@@ -442,27 +454,26 @@ def dead_code_elimination(blocks, value_host, rewrite_bb=True): # DCE
                     queue_append(use_idx)
         queue = new_queue
 
-    new_blocks = blocks if rewrite_bb else {}
     index = value_host.index
     for bb, insts in blocks.items():
-        new_blocks[bb] = new_insts = []
+        blocks[bb] = new_insts = []
         add = new_insts.append
         for inst in insts:
             kind = inst[0]
             if HAS_LHS[kind]:
                 idx = inst[1].n
                 if idx2can_delete[idx] and use_count[idx] == 0:
-                    if rewrite_bb:
-                        index[idx] = None
+                    index[idx] = None
                 else: add(inst)
-            elif kind != 16: add(inst) #16: nop
-    if rewrite_bb:
-        value_host.shift()
-    return new_blocks
+            elif kind != 16: add(inst)  # nop
+    value_host.shift()
 
 
 
-def common_subexpression_elimination(blocks, IDom, intersect): # CSE
+def common_subexpression_elimination(pm):  # CSE
+    blocks = pm.blocks
+    index, index_arr, IDom, intersect = compute_idom_fast(pm.F)
+
     subs = defaultdict(set)
     for bb, insts in blocks.items():
         for i, inst in enumerate(insts):
@@ -494,7 +505,7 @@ def common_subexpression_elimination(blocks, IDom, intersect): # CSE
                 save_i, new_name = min(commons)
                 for i, name in commons:
                     if i != save_i:
-                        root[i] = (0, name, new_name, None) # local CSE
+                        root[i] = (0, name, new_name, None)  # local CSE
             else: new_name = commons[0][1]
         else:
             new_name = min(sub, key=lambda x: x[2])[2]
@@ -505,7 +516,7 @@ def common_subexpression_elimination(blocks, IDom, intersect): # CSE
         for next_bb, i, name in sub:
             if next_bb != bb:
                 if name != new_name:
-                    blocks[next_bb][i] = (0, name, new_name, None) # global CSE
+                    blocks[next_bb][i] = (0, name, new_name, None)  # global CSE
                 else: blocks[next_bb][i] = None
 
     for bb, block in blocks.items():
@@ -513,14 +524,19 @@ def common_subexpression_elimination(blocks, IDom, intersect): # CSE
 
 
 
-def global_elimination(F, value_host): # GlobE
-    blocks = F[0]
+def global_elimination(pm):  # GlobE
+    blocks, value_host = pm.F[0], pm.value_host
+    if pm.global_to_value is not None:
+        applier = pm.global_to_value
+        applier(blocks)
+        return
+
     global_to_value = {}
     can_eliminate = {}
     for bb, insts in blocks.items():
         for inst in insts:
             kind = inst[0]
-            if kind == 21: # glob:<var> = <var>
+            if kind == 21:  # glob:<var> = <var>
                 name, value = inst[1], inst[2]
                 value.label = name
                 try:
@@ -535,28 +551,27 @@ def global_elimination(F, value_host): # GlobE
         add = new_insts.append
         for inst in insts:
             kind = inst[0]
-            if kind == 20: # <var> = glob:<var>
+            if kind == 20:  # <var> = glob:<var>
                 value, name = inst[1], inst[2]
                 value.label = name
                 if can_eliminate[name]:
                     add(0, var, global_to_value[name])  # <var> = <var>
                 else: add(inst)
-            elif kind == 21: # glob:<var> = <var>
+            elif kind == 21:  # glob:<var> = <var>
                 name, value = inst[1], inst[2]
                 if can_eliminate[name]:
                     value.side_effect = True
                 else: add(inst)
             else: add(inst)
 
-    def applier(F):
-        blocks = F[0]
+    def applier(blocks):
         for bb, insts in blocks.items():
             for i, inst in enumerate(insts):
                 kind = inst[0]
-                if kind == 20: # <var> = glob:<var>
+                if kind == 20:  # <var> = glob:<var>
                     value, name = inst[1], inst[2]
                     insts[i] = (kind, value, global_to_value[name], inst[3])
-                elif kind == 21: # glob:<var> = <var>
+                elif kind == 21:  # glob:<var> = <var>
                     name, value = inst[1], inst[2]
                     insts[i] = (kind, global_to_value[name], value, inst[3])
 
@@ -568,92 +583,164 @@ def global_elimination(F, value_host): # GlobE
         if not can:
             global_to_value[name] = name
 
-    applier(F)
-    value_host.global_to_value = applier
+    applier(blocks)
+    pm.global_to_value = applier
 
 
 
-def check_size(passes, blocks, pred_ref):
-    size = sum(map(len, blocks.values()))
-    is_final = passes == "final"
-    if not is_final:
-        pred_ref[1].extend(passes)
-    if size != pred_ref[0]:
-        chain_name = "+".join(pred_ref[1])
-        if pred_ref[2]: chain_name = "+ " + chain_name
-        pred_ref[0] = size
-        pred_ref[1].clear()
-        pred_ref[2].append((chain_name, size))
-    if is_final:
-        pred_ref[2].append((passes, size))
+def ssa_calculation(pm):
+    IDom, dom_tree, DF, value_host, F = SSA(pm.F, predefined=tuple(pm.builtins))
 
-def print_log(pred_ref):
-    logs = pred_ref[2]
-    length = max(len(name) + len(str(size)) for name, size in logs) + 1
-    for name, size in logs:
-        name += ":"
-        print(f"{name:{length - len(str(size))}} {size}")
+    pm.F = F
+    pm.blocks = F[0]
+    pm.value_host = value_host
+    pm.dirty_cfg = False
 
-def main_loop(module, def_id, builtins, debug=False, is_global=False):
-    def after_it(name):
-        return
-        if is_global:
-            print()
-            print("•" * 66)
-            print(name)
-            print()
+
+def init_passes(pm):
+    pm.init(
+        ("SSA", ssa_calculation),
+        ("GlobE", global_elimination),
+        (None, PassLoop, {"count": 7, "passes": (
+            ("CP", copy_propagation),
+            ("TCE", trivial_copy_elemination),
+            ("ConstProp", constant_propogation_and_folding),
+            ("DCE", dead_code_elimination),
+            ("φE", phi_elimination),
+            ("BM", block_merging),
+            ("UJF", unconditional_jump_forwarding),
+            ("BE", branch_elimination),
+            ("CSE", common_subexpression_elimination),
+        )}),
+    )
+
+
+class PassLoop():
+    def __init__(self, pm, passes, count):
+        self.load_pass = pm.load_pass
+        self.run_pass = pm.run_pass
+
+        self.passes = list(map(pm.load_pass, passes))
+        self.count = count
+
+    def add(self, pass_):
+        self.passes.append(self.load_pass(pass_))
+
+    def __call__(self, pm):
+        prev_hash = None
+        for i in range(self.count):
+            for pass_ in self.passes:
+                self.run_pass(pass_)
+            next_hash = pm.ssa_hash()
+            if next_hash == prev_hash:
+                break
+            prev_hash = next_hash
+
+class PassManager:
+    def __init__(self, builtins, *, debug=False):
+        self.passes = []
+        self.builtins = builtins
+        self.debug = debug
+
+        self.F = None
+        self.blocks = None
+        self.value_host = None
+        self.global_to_value = None
+        self.dirty_cfg = None
+
+        init_passes(self)
+
+    def load_pass(self, pass_):
+        assert isinstance(pass_, tuple)
+        if len(pass_) == 2:
+            name, func = pass_
+        else:
+            name, pass_class, attrs = pass_
+            func = pass_class(self, **attrs)
+        dont_del = name is None
+        return (func, name, dont_del)
+
+    def init(self, *passes):
+        self.passes.extend(map(self.load_pass, passes))
+
+    def add(self, pass_):
+        self.passes.append(load_pass(pass_))
+
+
+    def ssa_hash(self):
+        blocks, preds, succs = self.F
+        hasher = sha256()
+        write = hasher.update
+        for bb, insts in blocks.items():
+            write(str(bb).encode("utf-8"))
+            write(b':')
+            for inst in insts:
+                write(str(inst).encode("utf-8"))
+                write(b';')
+        write(str(preds).encode("utf-8"))
+        return hasher.digest()
+
+    def check_size(self, name):
+        size = sum(map(len, self.blocks.values()))
+        pred_ref = self.pred_ref
+        is_final = name == "final"
+        if not is_final:
+            pred_ref[1].append(name)
+        if size != pred_ref[0]:
+            chain_name = "+".join(pred_ref[1])
+            if pred_ref[2]: chain_name = "+ " + chain_name
+            pred_ref[0] = size
+            pred_ref[1].clear()
+            pred_ref[2].append((chain_name, size))
+        if is_final:
+            pred_ref[2].append((name, size))
+
+    def print_log(self):
+        logs = self.pred_ref[2]
+        length = max(len(name) + len(str(size)) for name, size in logs) + 1
+        for name, size in logs:
+            name += ":"
+            print(f"{name:{length - len(str(size))}} {size}")
+
+    def check_CFG(self, *, is_dirty = True):
+        assert check_CFG(self.F)
+        if is_dirty:
+            self.dirty_cfg = True
+
+
+    def run_pass(self, pass_):
+        func, name, dont_del = pass_
+        func(self)
+        if name is not None:
+            self.check_size(name)
+
+    def run_def(self, module, def_id):
+        self.F = F = module[def_id]
+        self.blocks = F[0]
+
+        if self.debug:
+            print(dashed_separator)
+            print(f"    {module.def_names[def_id]} (def#{def_id})\n")
             stringify_cfg(F)
+            print()
 
-    F = module[def_id]
-    assert check_CFG(F)
-    IDom, dom_tree, DF, value_host, F = SSA(F, predefined=tuple(builtins))
+        self.check_CFG(is_dirty = False)
 
-    blocks = F[0]
-    pred_ref = [None, [], []]
-    if debug: check_size(("original",), blocks, pred_ref)
-    after_it("original")
+        self.pred_ref = [None, [], []]
+        self.check_size("original")
 
-    if is_global:
-        global_elimination(F, value_host) # GlobE
-        if debug: check_size(("GlobE",), blocks, pred_ref)
-        after_it("global_elimination")
+        for pass_ in self.passes:
+            self.run_pass(pass_)
 
-    prev_hash = None
-    for i in range(7):
-        copy_propagation(blocks, value_host) # CP
-        trivial_copy_elemination(blocks) # TCE
-        if debug: check_size(("CP", "TCE"), blocks, pred_ref)
-        after_it("copy_propagation")
+        self.check_size("final")
+        if self.debug:
+            self.print_log()
+            print()
+            stringify_cfg(self.F)
 
-        idx2value = constant_propogation_and_folding(F, value_host, builtins) # ConstProp
-        dead_code_elimination(blocks, value_host) # DCE
-        if debug: check_size(("ConstProp", "DCE"), blocks, pred_ref)
-        after_it("ConstProp + DCE")
-
-        phi_elimination(blocks) # φE
-        block_merging(F) # BM
-        if debug: check_size(("φE", "BM"), blocks, pred_ref)
-        after_it("phi_elimination + block_merging")
-
-        unconditional_jump_forwarding(F) # UJF
-        if debug: check_size(("UJF",), blocks, pred_ref)
-        after_it("unconditional_jump_forwarding")
-
-        branch_elimination(F) # BE
-        if debug: check_size(("BE",), blocks, pred_ref)
-        after_it("branch_elimination")
-
-        index, index_arr, IDom, intersect = compute_idom_fast(F)
-
-        common_subexpression_elimination(blocks, IDom, intersect)
-        if debug: check_size(("CSE",), blocks, pred_ref)
-        after_it("CSE")
-
-        next_hash = ssa_hash(F)
-        if next_hash == prev_hash: break
-        prev_hash = next_hash
-
-    if debug:
-        check_size("final", blocks, pred_ref)
-        print_log(pred_ref)
-    return value_host, F
+    def run(self, module):
+        def_id = module.root_def
+        self.run_def(module, def_id)
+        for id in range(len(module)):
+            if id != def_id:
+                self.run_def(module, id)
