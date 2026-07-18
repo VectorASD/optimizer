@@ -451,8 +451,7 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
     for bb in roots:
         rename_phi(bb)
 
-    new_BB_F = blocks, preds, succs
-    return value_host, new_BB_F
+    return value_host
 
 
 
@@ -513,12 +512,12 @@ def SSA(BB_F, debug=False, predefined=(), best=True): # Static Single Assignment
         print(dashed_separator)
         stringify_cfg(BB_F)
 
-    value_host, BB_F = static_renaming(BB_F, all_vars, dom_tree, predefined)
+    value_host = static_renaming(BB_F, all_vars, dom_tree, predefined)
     if debug:
         print(dashed_separator)
         stringify_cfg(BB_F)
 
-    return IDom, dom_tree, DF, value_host, BB_F
+    return IDom, dom_tree, DF, value_host
 
 
 

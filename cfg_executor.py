@@ -36,7 +36,7 @@ class PrintWrap:
         def printer(*a, sep=' ', end='\n', file=None, flush=False):
             file = sys.stdout if file is None else file
             line = sep.join(map(filtered_str, a))
-            if print_it:
+            if self.print_it:
                 file.write(line)
                 file.write(end)
                 if flush:
@@ -45,10 +45,13 @@ class PrintWrap:
             buffer.write(end)
         self.builtins = make_builtins({"print": printer})
         self.buffer = buffer
+        self.print_it = print_it
     def __enter__(self):
-        return self.builtins, self.buffer
+        return self
     def __exit__(self, exc_type, exc_val, exc_tb):
         pass
+    def getvalue(self):
+        return self.buffer.getvalue()
 
 
 
@@ -85,7 +88,8 @@ def misc_loader(F, plug):
 class Cell:
     __slots__ = ("v",)
 
-def executor(module, id, builtins, globals, memory=None, defaults=(), closure=(), depth=0):
+def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()):
+    module = runner.module
     F = module[id]
     if memory is None:
         memory = globals  # locals <-> globals
@@ -166,12 +170,13 @@ def executor(module, id, builtins, globals, memory=None, defaults=(), closure=()
                 new_closure = [Cell() for i in range(new_cells)]
                 for cell_n in old_cells:
                     new_closure.append(closure[cell_n])
-                return executor(module, def_id, builtins, globals, {}, defaults, new_closure, depth+1)(*args)
+                return executor(runner, def_id, builtins, globals, {}, defaults, new_closure)(*args)
             func = run_wrapper
         else:
             new_closure = [closure[cell_n] for cell_n in old_cells]
-            func = executor(module, def_id, builtins, globals, {}, defaults, new_closure, depth+1)
+            func = executor(runner, def_id, builtins, globals, {}, defaults, new_closure)
         func.__name__ = func.__qualname__ = f"def#{def_id}"
+        func.is_executor = True
         memory[var] = func
 
     def code_19(var, name): # <var> = builtin:<var>
@@ -241,11 +246,16 @@ def executor(module, id, builtins, globals, memory=None, defaults=(), closure=()
         nonlocal last_exc
         skips = (Goto, Result)
         block = blocks[bb]
+        print_it = runner.wrapper.print_it
+        print_val = False
         for i, inst in enumerate(block):
-            if VERBOSE:
-                print("  " * depth, id, bb, i, " ", stringify_instr_wrap(orig_blocks[bb], i))
             it = iter(inst)
-            try: dispatch[next(it)](*it)
+            if VERBOSE and print_it:
+                print_val = inst[0] in (0, 4, 5, 8) or inst[0] == 6 and not hasattr(memory[inst[2]], "is_executor")
+                print("  " * runner.depth, id, bb, i, " ", stringify_instr_wrap(orig_blocks[bb], i), end = ("" if print_val else '\n'))
+            try:
+                runner.depth += 1
+                dispatch[next(it)](*it)
             except skips:
                 raise
             except Exception as exc:
@@ -253,11 +263,16 @@ def executor(module, id, builtins, globals, memory=None, defaults=(), closure=()
                 if to_bb is not None:
                     last_exc = exc
                     raise Goto(to_bb)
-                print("• exc:", id, bb, i, " ", stringify_instr_wrap(orig_blocks[bb], i))
+                if print_it and not VERBOSE:
+                    print("• exc:", id, bb, i, " ", stringify_instr_wrap(orig_blocks[bb], i))
                 raise exc from exc.__cause__
+            finally:
+                runner.depth -= 1
+                if print_val:
+                    print(f"   | {inst[1]} = {memory[inst[1]]}")
 
     entry = module.entries[id]
-    def runner(*args):
+    def run_it(*args):
         if preinit is not None:
             preinit()
 
@@ -300,20 +315,28 @@ def executor(module, id, builtins, globals, memory=None, defaults=(), closure=()
         preinit = None
         blocks = F[0]
 
-    return runner
+    return run_it
 
 
 
-def run_F(module, reference_print, wrapper = None):
-    if wrapper is None:
-        wrapper = PrintWrap()
+class Runner:
+    def __init__(self, module, reference_print, wrapper = None):
+        self.module = module
+        self.reference_print = reference_print
+        self.wrapper = wrapper or PrintWrap()
+        self.depth = 0
 
-    print(dashed_separator)
-    with wrapper as (new_builtins, buffer):
-        id = module.root_def
-        executor(module, id, new_builtins, {})()
-        actual_print = buffer.getvalue()
-        print("\nCORRECT PRINT:", "❌✅"[actual_print == reference_print])
+    def run(self):
+        wrapper = self.wrapper
+        if wrapper.print_it:
+            print(dashed_separator)
+        id = self.module.root_def
+        executor(self, id, wrapper.builtins, {})()
+        actual_print = wrapper.getvalue()
+        ok = actual_print == self.reference_print
+        if wrapper.print_it:
+            print("\nCORRECT PRINT:", "❌✅"[ok])
+        return ok
 
 
 
@@ -745,6 +768,7 @@ def gen():
                 yield ("j:", j)
                 if j % 3:
                     yield (i, j)
+        print("last_i:", i)
     yield ("ready", 1)  # пустой state
     yield ("ready", i)  # одноэлементный state (не нужен кортеж)
 
@@ -752,7 +776,7 @@ def filter(obj):
     s = str(obj).split()
     idx = s.index("at")
     s[idx-1] = "<name>"
-    s[idx+1] = "<addr>"
+    s[idx+1] = "<addr>>"
     return " ".join(s)
 
 print("gen:", filter(gen))
@@ -767,16 +791,17 @@ source_index = (
     source11, source12, source13, source14, source15,
 )
 
-VERBOSE = False
+VERBOSE = True
 ONLY_REF = False
 TEST_ALL = False
+CHECK_PASSES = True
 
 
 
 def main(source, *, debug = False):
-    with PrintWrap(print_it=ONLY_REF) as (new_builtins, buffer):
-        exec(source, new_builtins)
-        reference_print = buffer.getvalue()
+    with PrintWrap(print_it=ONLY_REF) as wrapper:
+        exec(source, wrapper.builtins)
+        reference_print = wrapper.getvalue()
     if ONLY_REF:
         exit()
 
@@ -788,14 +813,18 @@ def main(source, *, debug = False):
             print(f"\n••• def#{id}")
             stringify_cfg(F)
 
-    run_F(module, reference_print)
+    Runner(module, reference_print).run()
+    #exit()
 
-    print_wrap = PrintWrap()
+    with PrintWrap(print_it=False) as wrapper:
+        runner = Runner(module, reference_print, wrapper)
 
-    pm = PassManager(print_wrap.builtins, debug=debug)
-    pm.run(module)
+        pm = PassManager(wrapper.builtins, debug=debug)
+        pm.check_runner = runner
+        pm.run(module, check_mode=CHECK_PASSES)
 
-    run_F(module, reference_print, print_wrap)
+        wrapper.print_it = True
+        runner.run()
 
 
 if __name__ == "__main__":

@@ -589,12 +589,10 @@ def global_elimination(pm):  # GlobE
 
 
 def ssa_calculation(pm):
-    IDom, dom_tree, DF, value_host, F = SSA(pm.F, predefined=tuple(pm.builtins))
+    IDom, dom_tree, DF, value_host = SSA(pm.F, predefined=tuple(pm.builtins))
 
-    pm.F = F
-    pm.blocks = F[0]
     pm.value_host = value_host
-    pm.dirty_cfg = False
+    pm.value_hosts[pm.def_id] = value_host
 
 
 def init_passes(pm):
@@ -618,8 +616,6 @@ def init_passes(pm):
 class PassLoop():
     def __init__(self, pm, passes, count):
         self.load_pass = pm.load_pass
-        self.run_pass = pm.run_pass
-
         self.passes = list(map(pm.load_pass, passes))
         self.count = count
 
@@ -630,11 +626,34 @@ class PassLoop():
         prev_hash = None
         for i in range(self.count):
             for pass_ in self.passes:
-                self.run_pass(pass_)
+                pm.run_pass(pass_)
             next_hash = pm.ssa_hash()
             if next_hash == prev_hash:
                 break
             prev_hash = next_hash
+
+    def run_with_check(self, pm, check_it):
+        hashes = [None] * len(pm.module)
+        is_ready = [False] * len(pm.module)
+        for i in range(self.count):
+            for pass_ in self.passes:
+                if hasattr(pass_[0], "run_with_check"):
+                    pass_[0].run_with_check(pm, check_it)
+                    continue
+                for def_id in pm.order:
+                    if not is_ready[def_id]:
+                        pm.init_def(def_id)
+                        pm.run_pass(pass_)
+                check_it(pass_)
+            for def_id in range(len(hashes)):
+                pm.init_def(def_id)
+                next_hash = pm.ssa_hash()
+                if hashes[def_id] == next_hash:
+                    is_ready[def_id] = True
+                else:
+                    hashes[def_id] = next_hash
+            if all(is_ready):
+                break
 
 class PassManager:
     def __init__(self, builtins, *, debug=False):
@@ -644,11 +663,27 @@ class PassManager:
 
         self.F = None
         self.blocks = None
-        self.value_host = None
         self.global_to_value = None
-        self.dirty_cfg = None
+        self.check_runner = None
 
         init_passes(self)
+
+    def preinit(self, module):
+        self.module = module
+        def_id = module.root_def
+        module_R = range(len(module))
+        self.order = (def_id, *(id for id in module_R if id != def_id))
+        self.pred_refs = tuple([None, [], []] for _ in module_R)
+        self.value_hosts = [None] * len(module)
+
+    def init_def(self, def_id):
+        self.def_id = def_id
+        self.F = F = self.module[def_id]
+        self.blocks = F[0]
+
+        self.pred_ref = self.pred_refs[def_id]
+        self.value_host = self.value_hosts[def_id]
+
 
     def load_pass(self, pass_):
         assert isinstance(pass_, tuple)
@@ -704,8 +739,6 @@ class PassManager:
 
     def check_CFG(self, *, is_dirty = True):
         assert check_CFG(self.F)
-        if is_dirty:
-            self.dirty_cfg = True
 
 
     def run_pass(self, pass_):
@@ -714,19 +747,16 @@ class PassManager:
         if name is not None:
             self.check_size(name)
 
-    def run_def(self, module, def_id):
-        self.F = F = module[def_id]
-        self.blocks = F[0]
+    def run_def(self, def_id):
+        self.init_def(def_id)
 
         if self.debug:
             print(dashed_separator)
-            print(f"    {module.def_names[def_id]} (def#{def_id})\n")
-            stringify_cfg(F)
+            print(f"    {self.module.def_names[def_id]} (def#{def_id})\n")
+            stringify_cfg(self.F)
             print()
 
         self.check_CFG(is_dirty = False)
-
-        self.pred_ref = [None, [], []]
         self.check_size("original")
 
         for pass_ in self.passes:
@@ -738,9 +768,46 @@ class PassManager:
             print()
             stringify_cfg(self.F)
 
-    def run(self, module):
-        def_id = module.root_def
-        self.run_def(module, def_id)
-        for id in range(len(module)):
-            if id != def_id:
-                self.run_def(module, id)
+    def run_with_check(self):
+        def check_it(pass_):
+            runner = self.check_runner
+            ok = runner.run()
+            print(f"PASS {pass_[1]!r}:", "❌✅"[ok])
+            if ok:
+                return
+
+            if self.debug:
+                for def_id in self.order:
+                    self.init_def(def_id)
+                    print(dashed_separator)
+                    print(f"    {self.module.def_names[def_id]} (def#{def_id})\n")
+                    stringify_cfg(self.F)
+
+            runner.wrapper.print_it = True
+            runner.run()
+            exit()
+
+        print(dashed_separator)
+        for def_id in self.order:
+            self.init_def(def_id)
+
+            self.check_CFG(is_dirty = False)
+            self.check_size("original")
+
+        for pass_ in self.passes:
+            if hasattr(pass_[0], "run_with_check"):
+                pass_[0].run_with_check(self, check_it)
+                continue
+            for def_id in self.order:
+                self.init_def(def_id)
+                self.run_pass(pass_)
+            check_it(pass_)
+        exit()
+
+    def run(self, module, *, check_mode=False):
+        self.preinit(module)
+        if check_mode:
+            self.run_with_check()
+            return
+        for def_id in self.order:
+            self.run_def(def_id)
