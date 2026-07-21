@@ -1,5 +1,6 @@
 from utils import dashed_separator, bits_by_index
-from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg, insts_renamer, SSA_Error, ValueHost
+from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg, insts_renamer, ValueHost
+from py_visitors import recalc_CFG
 from dataflow_analysis import reaching_definitions
 
 from pprint import pprint
@@ -398,9 +399,11 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
     end_collector = defaultdict(dict)
     stack_push = value_host.stack_push
 
+    recalc_cfg = False
     def rename(bb):
+        nonlocal recalc_cfg
         stack_pop = stack_push()
-        blocks[bb] = insts_renamer(blocks[bb], value_host)
+        recalc_cfg |= insts_renamer(blocks, bb, value_host)
 
         for var, stack in collector.items():
             if stack:
@@ -450,6 +453,11 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
     dead_phis = [False] * value_host.counter
     for bb in roots:
         rename_phi(bb)
+
+    if recalc_cfg:
+        assert len(roots) == 1
+        entry = next(iter(roots))
+        recalc_CFG(BB_F, entry)
 
     return value_host
 
@@ -593,10 +601,4 @@ if __name__ == "__main__":
     # print(dashed_separator * 2)
 
     bb_F  = parse_program(program_2, debug="preds")
-    try:
-        SSA(bb_F, debug=True, predefined=("input", "bar", "baz"))
-    except SSA_Error as e:
-        print("\nSSA_Error:")
-        print("   ", e)
-        # SSA_Error:
-        #     'c' is undefined: 'if (c != 0) goto BB2; else goto BB3'
+    SSA(bb_F, debug=True, predefined=("input", "bar", "baz"))

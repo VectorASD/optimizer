@@ -802,7 +802,6 @@ class PassManager:
                 self.init_def(def_id)
                 self.run_pass(pass_)
             check_it(pass_)
-        exit()
 
     def run(self, module, *, check_mode=False):
         self.preinit(module)

@@ -88,7 +88,7 @@ definitions = (
   # virtual instructions:
     (0, 0, (1,),      0, 0, "#99: yield <var>"),
 )
-dont_catch = {0, 3, 4, 5, 7, 14, 16, 18, 19, 28, 29, 30}
+dont_catch = {3, 4, 5, 7, 14, 16, 18, 19, 28, 29, 30}
 DONT_CATCH = tuple(i in dont_catch for i in range(len(definitions)))
 
 def to_tuple(obj):
@@ -369,7 +369,7 @@ def all_vars_in_cfg(blocks, vars=None):
 
 
 
-class SSA_Error(Exception): pass
+class SSA_NameError(Exception): pass
 
 class Value:
     __slots__ = ("n", "label", "side_effect", "const")
@@ -508,25 +508,48 @@ for kind, _def in enumerate(definitions):
             code.extend((
                 "        attrs = inst[-1]",
                 "        if attrs is not None and 'can_del' in attrs:",
-                "            return (16, None)  # nop",
+                "            insts[i] = (16, None)  # nop",
+                "            return",
             ))
-        code.append("        raise SSA_Error(f'{var!r} is undefined: {stringify_instr_wrap(insts, i)!r}')")
+        code.append("        raise SSA_NameError(var)")
     if _def[0]:
         code.append("    value_host.add(inst)")
 
-    code.append("    return tuple(inst)")
-    if len(code) == 3: code = (code[0] + " return insts[i]",)
-    locs = {"SSA_Error": SSA_Error, "stringify_instr_wrap": stringify_instr_wrap, "Value": Value}
+    code.append("    insts[i] = tuple(inst)")
+    if len(code) == 3:
+        code = (code[0] + " pass",)
+    locs = {"SSA_NameError": SSA_NameError, "Value": Value}
     exec("\n".join(code), locs)
   # if kind == 6:
   #     for line_n, line in enumerate(code, 1):
   #         print(f"{line_n:2}: {line}")
     renamers.append(locs["rename"])
 
-def insts_renamer(insts, value_host):
-    return [
-        renamers[inst[0]](insts, i, value_host)
-        for i, inst in enumerate(insts)]
+def insts_renamer(blocks, bb, value_host):
+    insts = blocks[bb]
+    for i, inst in enumerate(insts):
+        try:
+            renamers[inst[0]](insts, i, value_host)
+        except SSA_NameError as e:
+            exc = e
+            break
+    else:
+        return False  # recalc CFG
+
+    var = exc.args[0]
+    attrs = insts[i][-1]
+    del_count = len(insts) - i
+    for _ in range(del_count):
+        insts.pop()
+    insts.extend((
+        (19, "exc", "NameError", None),  # <var> = builtin:<var>
+        (7, "str", f"name {var!r} is not defined", None),  # <var> = <const>
+        (6, "exc", "exc", ("str",), None),  # <var> = <func>(<var>, ...)
+        (17, "exc", attrs),  # raise <var>
+    ))
+    for i in range(len(insts) - 4, len(insts)):
+        renamers[insts[i][0]](insts, i, value_host)
+    return True  # recalc CFG
 
 
 

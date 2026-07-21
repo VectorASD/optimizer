@@ -52,6 +52,9 @@ class PrintWrap:
         pass
     def getvalue(self):
         return self.buffer.getvalue()
+    def clear(self):
+        self.buffer.seek(0)
+        self.buffer.truncate(0)
 
 
 
@@ -96,14 +99,19 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
 
     def code_0(var, setter, attrs): # <var> = <var>
         try: memory[var] = memory[setter]
-        except KeyError:
-            if attrs is None or "can_del" not in attrs:
-                raise
+        except KeyError as e:
+            if attrs is not None and "can_del" in attrs:
+                return
+            raise NameError(e.args[0]) from None
 
     def code_1(var, left, op, right): # <var> = <var> <+|-|*|/|%|...> <var>
+        try: L, R = memory[left], memory[right]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
         try: func = bin_ops[op]
-        except KeyError: raise RuntimeError(f"bin op {op!r} is not defined!") from None
-        memory[var] = func(memory[left], memory[right])
+        except KeyError:
+            raise RuntimeError(f"bin op {op!r} is not defined!") from None
+        memory[var] = func(L, R)
 
     def code_2(*_): # if (<var|num> <cmp> <var|num>) goto <label>
         raise RuntimeError("py_visitors не может дать HIR-ветвление (if без else)!!!")
@@ -112,14 +120,20 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
         raise Goto(label)
 
     def code_4(var): # return <var> 
-        raise Result(memory[var])
+        try: data = memory[var]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
+        raise Result(data)
 
     def code_5(var, branches): # <var> = phi(<var>, ...)
-        memory[var] = memory[branches[cur_idx]]
+        idx = branches[cur_idx]
+        try: memory[var] = memory[idx]
+        except KeyError: pass
 
     def code_6(var, func, args): # <var> = <func>(<var>, ...)
-        func = memory[func]
-        try: args = [memory[arg] for arg in args]
+        try:
+            func = memory[func]
+            args = [memory[arg] for arg in args]
         except KeyError as e:
             raise NameError(e.args[0]) from None
         memory[var] = func(*args)
@@ -128,41 +142,70 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
         memory[var] = const
 
     def code_8(var, items): # <var> = tuple(<var>, ...)
-        memory[var] = tuple(memory[item] for item in items)
+        try: memory[var] = tuple(memory[item] for item in items)
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
 
     def code_9(var, size): # check |<var>| == <num>
-        real_size = len(memory[var])
+        try: data = memory[var]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
+        real_size = len(data)
         if size < real_size: raise ValueError(f"too many values to unpack (expected {size}, got {real_size})")
         elif size > real_size: raise ValueError(f"not enough values to unpack (expected {size}, got {real_size})")
 
     def code_10(var, arr, idx): # <var> = <var>[<var>]
-        memory[var] = memory[arr][memory[idx]]
+        try: arr, idx = memory[arr], memory[idx]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
+        memory[var] = arr[idx]
 
     def code_11(arr, idx, value): # <var>[<var>] = <var>
-        memory[arr][memory[idx]] = memory[value]
+        try: arr, idx, value = memory[arr], memory[idx], memory[value]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
+        arr[idx] = value
 
     def code_12(var, var2, attr): # <var> = <var>.<attr>
-        memory[var] = getattr(memory[var2], attr)
+        try: var2 = memory[var2]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
+        memory[var] = getattr(var2, attr)
 
-    def code_13(var, attr, value): # <var>.<var> = <var> 
-        setattr(memory[var], attr, memory[value])
+    def code_13(var, attr, value): # <var>.<var> = <var>
+        try: var, value = memory[var], memory[value]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
+        setattr(var, attr, value)
 
     def code_14(yeah, var, nop): # goto <label> if <var> else <label>
-        raise Goto(yeah if memory[var] else nop)
+        try: var = memory[var]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
+        raise Goto(yeah if var else nop)
 
     def code_15(var, op, right): # <var> = <+|-|~|not ><var>
+        try: R = memory[right]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
         try: func = unar_ops[op]
-        except KeyError: raise RuntimeError(f"unar op {op!r} is not defined!") from None
-        memory[var] = func(memory[right])
+        except KeyError:
+            raise RuntimeError(f"unar op {op!r} is not defined!") from None
+        memory[var] = func(R)
 
     def code_16(): # nop
         pass
 
     def code_17(var): # raise <var>
-        raise memory[var]
+        try: var = memory[var]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
+        raise var
 
     def code_18(var, def_id, defaults, new_cells, old_cells): # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)"
-        defaults = [memory[d] for d in defaults]
+        try: defaults = [memory[d] for d in defaults]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
         if new_cells:
             # Это очень показательный пример всех функций, добавляющих новые ячейки!
             # TODO: придумать, как вынести появление new_closure в саму функцию
@@ -186,7 +229,10 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
         memory[var] = globals[name]
 
     def code_21(name, var): # glob:<var> = <var>
-        globals[name] = memory[var]
+        try: var = memory[var]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
+        globals[name] = var
 
     def code_22(var, n): # <var> = cell:#<n>
         try: memory[var] = closure[n].v
@@ -194,7 +240,10 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
             raise NameError(f"cell#<n>") from None
 
     def code_23(n, var): # cell:#<n> = <var>
-        closure[n].v = memory[var]
+        try: var = memory[var]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
+        closure[n].v = var
 
     def code_24(args, var, n, _):  # <var> = ARGS[<n>]   (type: <ann>)
         try: memory[var] = args[n]
@@ -207,8 +256,10 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
             # нужно для обрачивания классов генераторов в функции
             memory[var] = defaults[default_n]
             return
-        try: memory[var] = args[n]
-        except IndexError: memory[var] = defaults[default_n]
+        try:
+            memory[var] = args[n]
+        except IndexError:
+            memory[var] = defaults[default_n]
 
     def code_26(args, var, n, _):  # <var> = ARGS[<n>:]   (type: <ann>)
         memory[var] = args[n:]
@@ -220,11 +271,13 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
 
     def code_28(var, items):  # <var> = ''.join((<var>, ...))
         memory[var] = "".join(memory[reg] for reg in items)
+        # Здесь не может появиться NameError
 
     def code_29(var, name, bases, names, regs):  # <var> = type(<name>, (<base_reg>, ...), (<local_name>, ...), (<local_reg>, ...))
         bases = tuple(memory[base] for base in bases)
         locals = {name: memory[reg] for name, reg in zip(names, regs)}
         memory[var] = type(name, bases, locals)
+        # Здесь не может появиться NameError
 
     def code_30(var):  # <var> = LAST_EXC
         nonlocal last_exc
@@ -269,7 +322,9 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
             finally:
                 runner.depth -= 1
                 if print_val:
-                    print(f"   | {inst[1]} = {memory[inst[1]]}")
+                    try: val = memory[inst[1]]
+                    except KeyError: val = "<Undef>"
+                    print(f"   | {inst[1]} = {val}")
 
     entry = module.entries[id]
     def run_it(*args):
@@ -294,8 +349,6 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
                 cur_idx = preds2idx[bb][pred_bb]
             except Result as res:
                 return res.args[0]
-            except KeyError as e:
-                raise NameError(e.args[0]) from None
 
     preds2idx = make_preds2idx(F[1])
     cur_idx = None
@@ -328,6 +381,7 @@ class Runner:
 
     def run(self):
         wrapper = self.wrapper
+        wrapper.clear()
         if wrapper.print_it:
             print(dashed_separator)
         id = self.module.root_def
@@ -336,6 +390,10 @@ class Runner:
         ok = actual_print == self.reference_print
         if wrapper.print_it:
             print("\nCORRECT PRINT:", "❌✅"[ok])
+          # print(self.reference_print.count("\n"))
+          # print(actual_print.count("\n"))
+          # for i, j in zip(self.reference_print.split("\n"), actual_print.split("\n")):
+          #     print(i == j, i, j)
         return ok
 
 
@@ -783,6 +841,11 @@ print("gen:", filter(gen))
 print("gen:", filter(gen()))
 for pair in gen():
     print(pair)
+
+try:
+    a
+except NameError as e:
+    print("NameError is catched!")
 """
 
 source_index = (
@@ -791,7 +854,7 @@ source_index = (
     source11, source12, source13, source14, source15,
 )
 
-VERBOSE = True
+VERBOSE = False
 ONLY_REF = False
 TEST_ALL = False
 CHECK_PASSES = True
@@ -814,7 +877,6 @@ def main(source, *, debug = False):
             stringify_cfg(F)
 
     Runner(module, reference_print).run()
-    #exit()
 
     with PrintWrap(print_it=False) as wrapper:
         runner = Runner(module, reference_print, wrapper)

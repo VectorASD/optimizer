@@ -207,11 +207,23 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
             has_exc = False
             def _add(*inst):
                 nonlocal has_exc
-                if DONT_CATCH[inst[0]]:
+                kind = inst[0]
+                if DONT_CATCH[kind] or (kind == 0 and inst[2][0] != '_'):
                     add_inst((*inst, None))
+                    return
+                if HAS_LHS[kind]:
+                    var = inst[1]
+                    add_inst((kind, 'r', *inst[2:], exc))
                 else:
+                    var = None
                     add_inst((*inst, exc))
-                    has_exc = True
+                has_exc = True
+                next = new_block()
+                control(next)  # goto <label>
+
+                on_block(next)
+                if var is not None:
+                    add_inst((0, var, 'r', None))  # <var> = <var>
             add = _add
             return lambda: has_exc
         def __exit__(self, exc_type, exc_val, exc_tb):
@@ -367,13 +379,16 @@ TODO
         reg = visit_expression(node.test)
         free_reg(reg)
         control(L, reg, R) # goto <label> if <var> else <label>
+
         on_block(L)
         visit_statements(node.body)
         control(next) # goto <label>
+
         if node.orelse:
             on_block(R)
             visit_statements(node.orelse)
             control(next) # goto <label>
+
         on_block(next)
 
     def visit_For(node):
@@ -386,6 +401,7 @@ TODO
         control(loop) # goto <label>
 
         catcher = iter_catcher(orelse)
+
         on_block(loop)
         reg = new_reg()
         with exceptor(catcher):
@@ -401,10 +417,12 @@ TODO
         control(loop) # goto <label>
 
         free_reg(iter_reg)
+
         if node.orelse:
             on_block(orelse)
             visit_statements(node.orelse)
             control(end) # goto <label>
+
         on_block(end)
 
         assert node.type_comment is None, node.type_comment # TODO
@@ -435,6 +453,7 @@ TODO
         control(test) # goto <label>
 
         free_reg(reg)
+
         if node.orelse:
             on_block(orelse)
             visit_statements(node.orelse)
@@ -637,6 +656,7 @@ TODO
             free_reg(reg)
             nop = new_block()
             control(exc_block, reg, nop)  # goto <label> if <var> else <label>
+
             on_block(nop)
         else:
             if callable(finalbody):
@@ -713,6 +733,7 @@ TODO
             make_catcher(catcher, node.finalbody, node.handlers, end)
 
         apply_finally()
+
         on_block(end)
 
     def visit_With(node):
@@ -803,6 +824,7 @@ TODO
         else:
             del_block(catcher)
         apply_finally()
+
         on_block(end)
         free_regs(*exit_regs)
 
@@ -987,6 +1009,10 @@ TODO
         name = f"_{node.id}"
         ctx = type(node.ctx)
         assert ctx in (ast_Load, ast_Store), ctx
+        if ctx is ast_Load:
+            result = new_reg()
+            add(0, result, name)  # <var> = <var>
+            return result
         return name
 
     def visit_Tuple(node):
@@ -1107,6 +1133,7 @@ TODO
             if many:
                 next_block = block_names[i]
                 control(next_block, acc, block_names[-1]) # goto <label> if <var> else <label>
+
                 on_block(next_block)
         free_reg(left)
         return acc
@@ -1138,6 +1165,7 @@ TODO
                 acc = result
             if is_and: control(next_block, acc, block_names[-1]) # goto <label> if <var> else <label>
             else: control(block_names[-1], acc, next_block) # goto <label> if <var> else <label>
+
             on_block(next_block)
         return acc
 
@@ -1155,14 +1183,17 @@ TODO
         reg = visit_expression(node.test)
         free_reg(reg)
         control(L, reg, R) # goto <label> if <var> else <label>
+
         on_block(L)
         result_L = visit_expression(node.body)
         control(next) # goto <label>
+
         on_block(R)
         result_R = visit_expression(node.orelse)
         add(0, result_L, result_R) # <var> = <var>
         free_reg(result_R)
         control(next) # goto <label>
+
         on_block(next)
         return result_L
 
@@ -1387,6 +1418,7 @@ TODO
             control(loop)  # goto <label>
 
             catcher = iter_catcher(prev_loop)
+
             on_block(loop)
             reg = new_reg()
             with exceptor(catcher):
@@ -1399,6 +1431,7 @@ TODO
                 if_ok = new_block()
                 reg = visit_expression(if_expr)
                 control(if_ok, reg, loop) # goto <label> if <var> else <label>
+
                 on_block(if_ok)
                 free_reg(reg)
 
@@ -1408,6 +1441,7 @@ TODO
         collector()
 
         control(loop)  # goto <label>
+
         on_block(end)
 
         reset_cathed()
@@ -1466,6 +1500,7 @@ TODO
         module.is_yield[def_id] = True
         label = new_block()
         control(label)  # goto <label>
+
         on_block(label)
 
         result = new_reg()
@@ -1508,10 +1543,6 @@ TODO
     assert not control_hooks, "control_hooks is crushed"
 
     make_CFG(blocks, preds, succs)
-
-    # с появлением del_block, ключи теперь могут перемешаться...
-    for n, bb in enumerate(blocks):
-        bb.n = n
 
     return def_id
 
@@ -1862,6 +1893,11 @@ def clean_def(F, entry):
             preds[succ].remove(bb)
         del blocks[bb], preds[bb], succs[bb]
 
+def recalc_CFG(F, entry):
+    blocks, preds, succs = F
+    make_CFG(blocks, preds, succs)
+    clean_def(F, entry)
+
 
 def transform_def_to_class(module, def_id, wrap_def_id=None):
     module.is_class[def_id] = True
@@ -1958,8 +1994,7 @@ def yielderson(module, def_id, F, *, verbose=False):
 
         preds, succs = {}, {}
         F = blocks, preds, succs
-        make_CFG(blocks, preds, succs)
-        clean_def(F, to_bb)
+        recalc_CFG(F, to_bb)
         for n, bb in enumerate(blocks):
             bb.n = n
         functions[f"func_{func_n}"] = F, to_bb
@@ -2065,6 +2100,28 @@ def yield_handler(module, *, verbose=False):
 
 
 
+def sort_blocks(module):
+    def dfs(bb):
+        order.append((bb, blocks[bb]))
+        for succ in sorted(succs[bb]):
+            if succ not in visited:
+                visited.add(succ)
+                dfs(succ)
+
+    for def_id, F in enumerate(module.defs):
+        blocks, preds, succs = F
+        visited = set()
+        order = []
+
+        dfs(module.entries[def_id])
+        blocks.clear()
+        blocks.update(dict(order))
+
+        for n, bb in enumerate(blocks):
+            bb.n = n
+
+
+
 def py_visitor(code, builtins={}, *, debug=False):
     ast = parse_it(code)
     module = Module()
@@ -2073,6 +2130,7 @@ def py_visitor(code, builtins={}, *, debug=False):
 
     scope_handler(module, builtins, verbose=debug)
     yield_handler(module)
+    sort_blocks(module)
 
     return module
 
