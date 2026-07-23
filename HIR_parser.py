@@ -76,14 +76,25 @@ definitions = (
     (1, 0, (),        1, 0, "#22: <var> = cell:#<n>"),
     (0, 0, (2,),      0, 0, "#23: cell:#<n> = <var>"),
 
-    (1, 0, (),        1, 1, "#24: <var> = ARGS[<n>]   (type: <ann>)"),
-    (1, 0, (),        1, 1, "#25: <var> = ARGS[<n>] or <default_n>   (type: <ann>)"),
-    (1, 0, (),        1, 1, "#26: <var> = ARGS[<n>:]   (type: <ann>)"),
-    (0, 0, (),        0, 0, "#27: if ARGS[<n>:]: raise TypeError(...)"),
+    #24
+    #25
+    #26
+    #27
 
     (1, 2, (),        1, 1, "#28: <var> = ''.join((<var>, ...))"),
     (1, (3,5), (),    0, 0, "#29: <var> = type(<name>, (<base_reg>, ...), (<local_name>, ...), (<local_reg>, ...))"),
     (1, 0, (),        1, 0, "#30: <var> = LAST_EXC"),
+
+    (0, 0, (),        0, 0, "#31: if len(ARGS) not in range(<num>, <num>): raise TypeError(...)"),
+    (0, 0, (),        0, 0, "#32: if kwARGS: raise TypeError(...)"),
+    (1, 0, (),        1, 1, "#33: <var> = ARGS[<n>] or DEFAULTS[<n>]   (type: <ann>)"),
+    (1, 0, (),        1, 1, "#34: <var> = DEFAULTS[<n>]   (type: <ann>)"),
+    (1, 0, (),        1, 1, "#35: <var> = kwARGS[<key>] or DEFAULTS[<n>]   (type: <ann>)"),
+    (0, 0, (),        0, 0, "#36: check kwARGS (<key>, ...), posonly_n: <n>, posarg_n: <n>"),
+    (0, 0, (),        0, 0, "#37: if ARGS[:<n>]: raise TypeError(...)"),
+    (1, 0, (),        1, 1, "#38: <var> = ARGS[<n>:]   (type: <ann>)"),
+    (1, 0, (),        1, 1, "#39: <var> = kwARGS   (type: <ann>)"),
+    (1, 0, (),        1, 1, "#40: <var> = ARGS[<n>] or kwARGS[<key>] or DEFAULTS[<n>]   (type: <ann>)"),
 
   # virtual instructions:
     (0, 0, (1,),      0, 0, "#99: yield <var>"),
@@ -264,25 +275,51 @@ def stringify_instr(ops, i, write):
         case 22: write(f"{op[1]} = cell:#{op[2]}")
         case 23: write(f"cell:#{op[1]} = {op[2]}")
 
-        case 24:
-            write(f"{op[1]} = ARGS[{op[2]}]")
-            if op[3] is not None:
-                write(f"   (type: {op[3]})")
-        case 25:
-            write(f"{op[1]} = ARGS[{op[2]}] or DEFAULTS[{op[3]}]")
-            if op[3] is not None:
-                write(f"   (type: {op[4]})")
-        case 26:
-            write(f"{op[1]} = ARGS[{op[2]}:]")
-            if op[3] is not None:
-                write(f"   (type: {op[3]})")
-        case 27: write(f"if ARGS[{op[1]}:]: raise TypeError(...)")
+      # case 24: ...
+      # case 25: ...
+      # case 26: ...
+      # case 27: ...
 
         case 28: write(f"{op[1]} = ''.join(({', '.join(map(str, op[2]))}))")
         case 29:
             locals = dict(zip(op[4], op[5]))
             write(f"{op[1]} = type({op[2]}, ({', '.join(map(str, op[3]))}), {locals})")
         case 30: write(f"{op[1]} = LAST_EXC")
+
+        case 31: write(f"if len(ARGS) not in range({op[1]}, {op[2]}): raise TypeError(...)"),
+        case 32: write("if kwARGS: raise TypeError(...)"),
+        case 33:
+            write(f"{op[1]} = ARGS[{op[2]}]")
+            if op[3] != -1:
+                write(f" or DEFAULTS[{op[3]}]")
+            if op[4] is not None:
+                write(f"   (type: {op[4]})")
+        case 34:
+            write(f"{op[1]} = DEFAULTS[{op[2]}]")
+            if op[3] is not None:
+                write(f"   (type: {op[3]})")
+        case 35:
+            write(f"{op[1]} = kwARGS[{op[2]}]")
+            if op[3] != -1:
+                write(f" or DEFAULTS[{op[3]}]")
+            if op[4] is not None:
+                write(f"   (type: {op[4]})")
+        case 36: write(f"check kwARGS ({', '.join(map(str, op[1]))}), posonly_n: {op[2]}, posarg_n: {op[3]}")
+        case 37: write(f"if ARGS[:{op[1]}]: raise TypeError(...)")
+        case 38:
+            write(f"{op[1]} = ARGS[{op[2]}:]")
+            if op[3] is not None:
+                write(f"   (type: {op[3]})")
+        case 39:
+            write(f"{op[1]} = kwARGS")
+            if op[2] is not None:
+                write(f"   (type: {op[2]})")
+        case 40:
+            write(f"{op[1]} = ARGS[{op[2]}] or kwARGS[{op[3]}]")
+            if op[4] != -1:
+                write(f" or DEFAULTS[{op[4]}]")
+            if op[5] is not None:
+                write(f"   (type: {op[5]})")
 
         case 99: write(f"yield {op[1]}")
         case _: write(f"{op} ???")

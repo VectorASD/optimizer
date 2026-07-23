@@ -515,19 +515,23 @@ TODO
         def visit_arguments(node, _add):
             default_edge = -len(node.defaults)
             args_n = len(node.args)
+            if node.vararg is None:
+                _add((31, args_n - len(node.defaults), args_n, None))  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
+            else:
+                _add((37, args_n - len(node.defaults), None))  # if ARGS[:<n>]: raise TypeError(...)
+
             for arg_i, arg in enumerate(node.args):
                 name, annotation = visit_arg(arg)
                 idx = arg_i - args_n
                 if idx < default_edge:
-                    _add((24, name, arg_i, annotation))  # <var> = ARGS[<n>]   (type: <ann>)
+                    _add((33, name, arg_i, -1, annotation, None))  # <var> = ARGS[<n>]   (type: <ann>)
                 else:
-                    _add((25, name, arg_i, idx, annotation))  # <var> = ARGS[<n>] or <default_n>   (type: <ann>)
+                    _add((33, name, arg_i, idx, annotation, None))  # <var> = ARGS[<n>] or <default_n>   (type: <ann>)
 
             if node.vararg is not None:
                 name, annotation = visit_arg(node.vararg)
-                _add((26, name, args_n, annotation))  # <var> = ARGS[<n>:]   (type: <ann>)
-            else:
-                _add((27, args_n))  # if ARGS[<n>:]: raise TypeError(...)
+                _add((38, name, args_n, annotation, None))  # <var> = ARGS[<n>:]   (type: <ann>)
+            _add((32, None))  # if kwARGS: raise TypeError(...)
 
           # explore_node(node)
             assert node.kwarg is None, node.kwarg  # TODO
@@ -1524,7 +1528,7 @@ TODO
     apply_expression_dict()
 
     for inst in preinit:
-        add(*inst)
+        add_inst(inst)
 
     if def_id: visit_statements(ast)
     else:
@@ -1829,14 +1833,17 @@ outer()
 def args_shift(insts):
     for i, inst in enumerate(insts):
         kind = inst[0]
-        if kind in (24, 25, 26):  # <var> = ARGS[<n>...
+        if kind in (33, 38):  # <var> = ARGS[<n>...
             _, var, n, *other = inst
             insts[i] = kind, var, n+1, *other
-        elif kind == 27:  # if ARGS[<n>:]: raise TypeError(...)
-            _, n, attrs = inst
-            insts[i] = kind, n+1, attrs
+        elif kind == 31:  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
+            _, mi, ma, attrs = inst
+            insts[i] = kind, mi+1, ma+1, attrs
+        elif kind == 37:  # if ARGS[:<n>]: raise TypeError(...)
+            _, mi, attrs = inst
+            insts[i] = kind, mi+1, attrs
         else: break
-    insts.insert(0, (24, "self", 0, None, None))  # <var> = ARGS[<n>]   (type: <ann>)
+    insts.insert(0, (33, "self", 0, -1, None, None))  # <var> = ARGS[<n>]   (type: <ann>)
     # self намеренно пишется так, чтобы не смешивать с пользовательским _self
 
 def clone_def(blocks):
@@ -1976,8 +1983,9 @@ def yielderson(module, def_id, F, *, verbose=False):
         to_bb = labels[to_bb.n]
 
         insts = deque((
-            (24, "self", 0, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
-            (27, 1, None),  # if ARGS[<n>:]: raise TypeError(...)
+            (31, 1, 1, None),  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
+            (32, None),  # if kwARGS: raise TypeError(...)
+            (33, "self", 0, -1, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
         ))
         add = insts.append
         if out_vars:
@@ -2011,15 +2019,17 @@ def yielderson(module, def_id, F, *, verbose=False):
             stringify_cfg(F)
 
     make_F((
-        (27, 0, None),  # if ARGS[<n>:]: raise TypeError(...)
+        (31, 0, 0, None),  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
+        (32, None),  # if kwARGS: raise TypeError(...)
         (19, "si", "StopIteration", None),  # <var> = builtin:<var>
         (17, "si", None),  # raise <var>
     ), f"func_{len(yield_blocks)+1}")
 
     make_F([
-        (24, "self", 0, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
-        (24, "id", 1, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
-        (27, 2, None),  # if ARGS[<n>:]: raise TypeError(...)
+        (31, 2, 2, None),  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
+        (32, None),  # if kwARGS: raise TypeError(...)
+        (33, "self", 0, -1, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
+        (33, "id", 1, -1, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
         (12, "func_0", "self", "func_0", None),  # <var> = <var>.<attr>
         (13, "self", "next_f", "func_0", None),  # <var>.<attr> = <var>
         (13, "self", "id", "id", None),  # <var>.<attr> = <var>
@@ -2028,22 +2038,25 @@ def yielderson(module, def_id, F, *, verbose=False):
     ], "__init__")
 
     make_F((
-        (24, "self", 0, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
-        (27, 1, None),  # if ARGS[<n>:]: raise TypeError(...)
+        (31, 1, 1, None),  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
+        (32, None),  # if kwARGS: raise TypeError(...)
+        (33, "self", 0, -1, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
         (4, "self", None),  # return <var>
     ), "__iter__")
 
     make_F((
-        (24, "self", 0, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
-        (27, 1, None),  # if ARGS[<n>:]: raise TypeError(...)
+        (31, 1, 1, None),  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
+        (32, None),  # if kwARGS: raise TypeError(...)
+        (33, "self", 0, -1, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
         (12, "next_f", "self", "next_f", None),  # <var> = <var>.<attr>
         (6, "result", "next_f", (), None),  # <var> = <func>(<var>, ...)
         (4, "result", None),  # return <var>
     ), "__next__")
 
     make_F((
-        (24, "self", 0, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
-        (27, 1, None),  # if ARGS[<n>:]: raise TypeError(...)
+        (31, 1, 1, None),  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
+        (32, None),  # if kwARGS: raise TypeError(...)
+        (33, "self", 0, -1, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
         (19, "id", "id", None),  # <var> = builtin:<var>
         (19, "hex", "hex", None),  # <var> = builtin:<var>
         (19, "str", "str", None),  # <var> = builtin:<var>
@@ -2058,7 +2071,11 @@ def yielderson(module, def_id, F, *, verbose=False):
         (4, "result", None),  # return <var>
     ), "__repr__")
 
-    insts = [(27, 0, None)]  # if ARGS[<n>:]: raise TypeError(...)
+    # TODO: сделать проталкивание args и kwargs в func_0
+    insts = [
+        (31, 0, 0, None),  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
+        (32, None),  # if kwARGS: raise TypeError(...)
+    ]
     add = insts.append
     for name, (F, entry) in functions.items():
         def_id2 = module.add(F, name, entry)
@@ -2071,11 +2088,12 @@ def yielderson(module, def_id, F, *, verbose=False):
     make_F(insts, "generator")
 
     make_F([
-        # забавно то, что мы храним оборачиваемый класс в defaults[0],
-        # но при этом не даём к нему доступ через вызов этой функции
-        (27, 0, None),  # if ARGS[<n>:]: raise TypeError(...)
-        (25, "gen", -1, 0, None, None),  # <var> = ARGS[<n>] or <default_n>   (type: <ann>)
-        (25, "id", -1, 1, None, None),  # <var> = ARGS[<n>] or <default_n>   (type: <ann>)
+        # забавно то, что мы храним оборачиваемый класс в defaults[0] и id в defaults[1],
+        # но при этом не даём к ним доступ через вызов этой функции
+        (31, 0, 0, None),  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
+        (32, None),  # if kwARGS: raise TypeError(...)
+        (34, "gen", 0, None, None),  # <var> = DEFAULTS[<n>]   (type: <ann>)
+        (34, "id", 1, None, None),  # <var> = DEFAULTS[<n>]   (type: <ann>)
         (6, "result", "gen", ("id",), None),  # <var> = <func>(<var>, ...)
         (4, "result", None),  # return <var>
     ], "wrapper")

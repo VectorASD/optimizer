@@ -245,29 +245,17 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
             raise NameError(e.args[0]) from None
         closure[n].v = var
 
-    def code_24(args, var, n, _):  # <var> = ARGS[<n>]   (type: <ann>)
-        try: memory[var] = args[n]
-        except IndexError:
-            raise TypeError(f"def#{id}() missing N required positional arguments")
+    def code_24(*a):  # ???
+        raise RuntimeError("unused code_24")
 
-    def code_25(args, var, n, default_n, _):  # <var> = ARGS[<n>] or <default_n>   (type: <ann>)
-        if n == -1:
-            # костыль для передачи данных в defaults, не доступных из ARGS
-            # нужно для обрачивания классов генераторов в функции
-            memory[var] = defaults[default_n]
-            return
-        try:
-            memory[var] = args[n]
-        except IndexError:
-            memory[var] = defaults[default_n]
+    def code_25(*a):  # ???
+        raise RuntimeError("unused code_25")
 
-    def code_26(args, var, n, _):  # <var> = ARGS[<n>:]   (type: <ann>)
-        memory[var] = args[n:]
+    def code_26(*a):  # ???
+        raise RuntimeError("unused code_26")
 
-    def code_27(args, n):  # if ARGS[<n>:]: raise TypeError(...)
-        vararg_size = len(args) - n
-        if vararg_size > 0:
-            raise TypeError(f"def#{id}() takes {n} positional arguments but {len(args)} were given")
+    def code_27(n):  # ???
+        raise RuntimeError("unused code_27")
 
     def code_28(var, items):  # <var> = ''.join((<var>, ...))
         memory[var] = "".join(memory[reg] for reg in items)
@@ -285,15 +273,94 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
         memory[var] = last_exc
         last_exc = None
 
-    dispatch = [
+    def code_31(min, max):  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
+        L = len(args)
+        if L < min:
+            n = min - L
+            raise TypeError(f"def#{id}() missing {n} required positional argument{'' if n == 1 else 's'}: ...")
+        if L > max:
+            if min == max:
+                raise TypeError(f"def#{id}() takes {max} positional argument{'' if max == 1 else 's'} but {L} {'was' if L == 1 else 'were'} given")
+            raise TypeError(f"def#{id}() takes from {min} to {max} positional arguments but {L} were given")
+
+    def code_32():  # if kwARGS: raise TypeError(...)
+        if kwargs:
+            name = next(iter(kwargs))
+            raise TypeError(f"def#{id}() got an unexpected keyword argument {name!r}")
+
+    def code_33(var, n, default_n, _):  # <var> = ARGS[<n>] or <default_n>   (type: <ann>)
+        try: memory[var] = args[n]
+        except IndexError as e:
+            if default_n == -1:
+                raise RuntimeError(f"Недостижимая ошибка при правильной растановке инструкций code_31: {e!r}")
+            memory[var] = defaults[default_n]
+
+    def code_34(var, n, _):  # <var> = DEFAULTS[<n>]   (type: <ann>)
+        try: memory[var] = defaults[n]
+        except IndexError as e:
+            raise RuntimeError(f"Недостижимая ошибка при правильном DEFAULTS инструкции code_18: {e!r}")
+
+    def code_35(var, key, default_n, _):  # <var> = kwARGS[<key>] or <default_n>   (type: <ann>)
+        try: memory[var] = kwargs.pop(key)
+        except KeyError as e:
+            if default_n == -1:
+                raise RuntimeError(f"Недостижимая ошибка при правильной растановке инструкций code_36: {e!r}")
+            memory[var] = defaults[default_n]
+
+    def code_36(keys, posonly_n, posarg_n):  # check kwARGS (<key>, ...), posonly_n: <n>, posarg_n: <n>
+        def raise_it(missing, Type):
+            L = len(missing)
+            match L:
+                case 1: keys = repr(missing[0])
+                case 2: keys = f"{missing[0]!r} and {missing[1]!r}"
+                case _: keys = f"{', '.join(map(repr, missing[:-1]))}, and {missing[-1]}"
+            raise TypeError(f"def#{id}() missing {L} required {Type} argument{'' if L == 1 else 's'}: {keys}")
+
+        L = len(args)-posonly_n  # число ключей, уже покрытых позиционными аргументами
+        missing = [key for key in keys[L:posarg_n] if key not in kwargs]
+        if missing:
+            raise_it(missing, "positional")
+        missing = [key for key in keys[posarg_n:] if key not in kwargs]
+        if missing:
+            raise_it(missing, "keyword-only")
+
+    def code_37(min):  # if ARGS[:<n>]: raise TypeError(...)
+        L = len(args)
+        if L < min:
+            n = min - L
+            raise TypeError(f"def#{id}() missing {n} required positional argument{'' if n == 1 else 's'}: ...")
+
+    def code_38(var, n, _):  # <var> = ARGS[<n>:]   (type: <ann>)
+        memory[var] = args[n:]
+
+    def code_39(var, n, _):  # <var> = kwARGS   (type: <ann>)
+        memory[var] = kwARGS
+
+    def code_40(var, n, key, default_n, _):  # <var> = ARGS[<n>] or kwARGS[<key>] or <default_n>   (type: <ann>)
+        try:
+            memory[var] = args[n]
+            if key in kwargs:
+                raise TypeError(f"def#{id}() got multiple values for argument {key!r}")
+        except IndexError as e:
+            try:
+                memory[var] = kwargs.pop(key)
+            except KeyError:
+                if default_n == -1:
+                    raise RuntimeError(f"Недостижимая ошибка при правильной растановке инструкций code_36: {e!r}")
+                memory[var] = defaults[default_n]
+
+    dispatch = (
         code_0, code_1, code_2, code_3, code_4,
         code_5, code_6, code_7, code_8, code_9,
         code_10, code_11, code_12, code_13, code_14,
         code_15, code_16, code_17, code_18, code_19,
         code_20, code_21, code_22, code_23, code_24,
         code_25, code_26, code_27, code_28, code_29,
-        code_30,
-    ]
+        code_30, code_31, code_32, code_33, code_34,
+        code_35, code_36, code_37, code_38, code_39,
+        code_40,
+    )
+    args = kwargs = None
 
     def run_block(bb):
         nonlocal last_exc
@@ -327,14 +394,13 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
                     print(f"   | {inst[1]} = {val}")
 
     entry = module.entries[id]
-    def run_it(*args):
+    def run_it(*_args, **_kwargs):
+        nonlocal args, kwargs
+        args = _args
+        kwargs = _kwargs
+
         if preinit is not None:
             preinit()
-
-        dispatch[24] = lambda *a: code_24(args, *a)
-        dispatch[25] = lambda *a: code_25(args, *a)
-        dispatch[26] = lambda *a: code_26(args, *a)
-        dispatch[27] = lambda n: code_27(args, n)
 
         nonlocal cur_idx, exc_items
         bb = entry
@@ -848,6 +914,22 @@ except NameError as e:
     print("NameError is catched!")
 """
 
+source16 = """
+def check(func):
+    try: func()
+    except Exception as e:
+        print(repr(e))
+
+def func(a, b, c = 10):
+    print("ok:", a, b, c)
+
+check(lambda: func())
+check(lambda: func(1))
+check(lambda: func(1, 2))
+check(lambda: func(1, 2, 3))
+check(lambda: func(1, 2, 3, 4))
+"""
+
 source_index = (
     source1, source2, source3, source4, source5,
     source6, source7, source8, source9, source10,
@@ -855,18 +937,17 @@ source_index = (
 )
 
 VERBOSE = False
-ONLY_REF = False
+PRINT_REF = 1
 TEST_ALL = False
 CHECK_PASSES = True
 
 
 
 def main(source, *, debug = False):
-    with PrintWrap(print_it=ONLY_REF) as wrapper:
+    with PrintWrap(print_it=PRINT_REF) as wrapper:
         exec(source, wrapper.builtins)
         reference_print = wrapper.getvalue()
-    if ONLY_REF:
-        exit()
+        print(dashed_separator)
 
     builtins = make_builtins()
     module = py_visitor(source, builtins, debug=debug)
