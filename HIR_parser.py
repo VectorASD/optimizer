@@ -299,12 +299,12 @@ def stringify_instr(ops, i, write):
             if op[3] is not None:
                 write(f"   (type: {op[3]})")
         case 35:
-            write(f"{op[1]} = kwARGS[{op[2]}]")
+            write(f"{op[1]} = kwARGS[{op[2]!r}]")
             if op[3] != -1:
                 write(f" or DEFAULTS[{op[3]}]")
             if op[4] is not None:
                 write(f"   (type: {op[4]})")
-        case 36: write(f"check kwARGS ({', '.join(map(str, op[1]))}), posonly_n: {op[2]}, posarg_n: {op[3]}")
+        case 36: write(f"check kwARGS ({', '.join(map(repr, op[1]))}), posonly_n: {op[2]}, posarg_n: {op[3]}")
         case 37: write(f"if ARGS[:{op[1]}]: raise TypeError(...)")
         case 38:
             write(f"{op[1]} = ARGS[{op[2]}:]")
@@ -315,7 +315,7 @@ def stringify_instr(ops, i, write):
             if op[2] is not None:
                 write(f"   (type: {op[2]})")
         case 40:
-            write(f"{op[1]} = ARGS[{op[2]}] or kwARGS[{op[3]}]")
+            write(f"{op[1]} = ARGS[{op[2]}] or kwARGS[{op[3]!r}]")
             if op[4] != -1:
                 write(f" or DEFAULTS[{op[4]}]")
             if op[5] is not None:

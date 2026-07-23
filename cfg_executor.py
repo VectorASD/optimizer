@@ -915,9 +915,25 @@ except NameError as e:
 """
 
 source16 = """
+print("0123456789"[:])
+print("0123456789"[:3])
+print("0123456789"[3:])
+print("0123456789"[3:8])
+print("0123456789"[::2])
+print("0123456789"[:5:2])
+print("0123456789"[5::2])
+print("0123456789"[3:8:2])
+
+def filter(exc):
+    msg = exc.args[0]
+    idx = msg.find("() ")
+    msg = f"<name>() {msg[idx+len('() '):]}"
+    exc.args = (msg,)
+
 def check(func):
     try: func()
     except Exception as e:
+        filter(e)
         print(repr(e))
 
 def func(a, b, c = 10):
@@ -975,4 +991,4 @@ if __name__ == "__main__":
         for source in source_index:
             main(source)
     else:
-        main(source15, debug=True)
+        main(source16, debug=True)

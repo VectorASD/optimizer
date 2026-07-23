@@ -769,6 +769,14 @@ class PassManager:
             stringify_cfg(self.F)
 
     def run_with_check(self):
+        def print_defs():
+            if self.debug:
+                for def_id in self.order:
+                    self.init_def(def_id)
+                    print(dashed_separator)
+                    print(f"    {self.module.def_names[def_id]} (def#{def_id})\n")
+                    stringify_cfg(self.F)
+
         def check_it(pass_):
             runner = self.check_runner
             ok = runner.run()
@@ -776,12 +784,7 @@ class PassManager:
             if ok:
                 return
 
-            if self.debug:
-                for def_id in self.order:
-                    self.init_def(def_id)
-                    print(dashed_separator)
-                    print(f"    {self.module.def_names[def_id]} (def#{def_id})\n")
-                    stringify_cfg(self.F)
+            print_defs()
 
             runner.wrapper.print_it = True
             runner.run()
@@ -802,6 +805,8 @@ class PassManager:
                 self.init_def(def_id)
                 self.run_pass(pass_)
             check_it(pass_)
+
+        print_defs()
 
     def run(self, module, *, check_mode=False):
         self.preinit(module)

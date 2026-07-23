@@ -510,36 +510,58 @@ TODO
                 annotation = ann.id
             else:
                 annotation = None
-            return f"_{node.arg}", annotation
+            return node.arg, annotation
 
         def visit_arguments(node, _add):
-            default_edge = -len(node.defaults)
+            posonly_n = len(node.posonlyargs)
             args_n = len(node.args)
-            if node.vararg is None:
-                _add((31, args_n - len(node.defaults), args_n, None))  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
-            else:
-                _add((37, args_n - len(node.defaults), None))  # if ARGS[:<n>]: raise TypeError(...)
+            kwonly_n = len(node.kwonlyargs)
+            defaults_n = len(node.defaults)
+            kw_defaults_n = len(node.kw_defaults)
 
-            for arg_i, arg in enumerate(node.args):
+            keys = (
+                *(arg.arg for arg in node.args[:args_n - defaults_n]),
+                *(arg.arg for arg in node.kwonlyargs[:kwonly_n - kw_defaults_n]),
+            )
+            if keys:
+                _add((36, keys, posonly_n, args_n, None))  # check kwARGS (<key>, ...), posonly_n: <n>, posarg_n: <n>
+
+            pos_args = posonly_n + args_n
+            without_default = pos_args - defaults_n
+            if node.vararg is None:
+                _add((31, without_default, pos_args, None))  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
+            else:
+                _add((37, without_default, None))  # if ARGS[:<n>]: raise TypeError(...)
+
+            for arg_i, arg in enumerate(node.posonlyargs):
                 name, annotation = visit_arg(arg)
-                idx = arg_i - args_n
-                if idx < default_edge:
-                    _add((33, name, arg_i, -1, annotation, None))  # <var> = ARGS[<n>]   (type: <ann>)
-                else:
-                    _add((33, name, arg_i, idx, annotation, None))  # <var> = ARGS[<n>] or <default_n>   (type: <ann>)
+                idx = -1 if arg_i < without_default else arg_i - without_default
+                _add((33, f"_{name}", arg_i, idx, annotation, None))  # <var> = ARGS[<n>] (or <default_n>)   (type: <ann>)
+
+            for arg_i, arg in enumerate(node.args, start=posonly_n):
+                name, annotation = visit_arg(arg)
+                idx = -1 if arg_i < without_default else arg_i - without_default
+                _add((40, f"_{name}", arg_i, name, idx, annotation, None))  # <var> = ARGS[<n>] or kwARGS[<key>] (or <default_n>)   (type: <ann>)
+
+            without_default = kwonly_n - kw_defaults_n
+            for arg_i, arg in enumerate(node.kwonlyargs):
+                name, annotation = visit_arg(arg)
+                idx = -1 if arg_i < without_default else arg_i - without_default + defaults_n
+                _add((35, f"_{name}", name, idx, annotation, None))  # <var> = kwARGS[<key>] (or DEFAULTS[<n>])   (type: <ann>)
 
             if node.vararg is not None:
                 name, annotation = visit_arg(node.vararg)
-                _add((38, name, args_n, annotation, None))  # <var> = ARGS[<n>:]   (type: <ann>)
-            _add((32, None))  # if kwARGS: raise TypeError(...)
+                _add((38, f"_{name}", pos_args, annotation, None))  # <var> = ARGS[<n>:]   (type: <ann>)
+            if node.kwarg is not None:
+                name, annotation = visit_arg(node.kwarg)
+                _add((39, f"_{name}", annotation, None))  # <var> = kwARGS   (type: <ann>)
+            else:
+                _add((32, None))  # if kwARGS: raise TypeError(...)
 
-          # explore_node(node)
-            assert node.kwarg is None, node.kwarg  # TODO
-            assert not node.posonlyargs, node.posonlyargs  # TODO
-            assert not node.kwonlyargs, node.kwonlyargs  # TODO
-            assert not node.kw_defaults, node.kw_defaults  # TODO
-
-            return tuple(map(visit_expression, node.defaults))
+            return (
+                *map(visit_expression, node.defaults),
+                *map(visit_expression, node.kw_defaults),
+            )
 
       # explore_node(node)
         assert not node.type_comment, node.type_comment  # TODO
@@ -871,6 +893,7 @@ EXPR_NAME_MAPPING = {
     ast.IfExp: "conditional expression", ✅
     ast.NamedExpr: "named expression", ❌
 }
+ast.Slice: ✅
 TODO
 """
 
@@ -900,6 +923,7 @@ TODO
             "DictComp": visit_DictComp,
             "SetComp": visit_SetComp,
             "Yield": visit_Yield,  # так, стоп... А в смысле это expression, а не statement?!
+            "Slice": visit_Slice,
         }
         assign_expression_dict = {
             **expression_dict,
@@ -1511,6 +1535,26 @@ TODO
         add(19, result, "None")  # <var> = builtin:<var>
         return result
 
+    def visit_Slice(node):
+        lower = None if node.lower is None else visit_expression(node.lower)
+        upper = None if node.upper is None else visit_expression(node.upper)
+        step = None if node.step is None else visit_expression(node.step)
+        for reg in (lower, upper, step):
+            if reg is not None:
+                free_reg(reg)
+
+        if step is None:
+            if lower is None:
+                args = (".None" if upper is None else upper,)
+            else:
+                args = (lower, ".None" if upper is None else upper)
+        else:
+            args = (".None" if lower is None else lower, ".None" if upper is None else upper, step)
+
+        slice = new_reg()
+        add(6, slice, ".slice", args)  # <var> = <func>(<var>, ...)
+        return slice
+
 
 
     def visit_(node):
@@ -1833,7 +1877,7 @@ outer()
 def args_shift(insts):
     for i, inst in enumerate(insts):
         kind = inst[0]
-        if kind in (33, 38):  # <var> = ARGS[<n>...
+        if kind in (33, 38, 40):  # <var> = ARGS[<n>...
             _, var, n, *other = inst
             insts[i] = kind, var, n+1, *other
         elif kind == 31:  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
