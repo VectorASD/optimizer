@@ -1198,12 +1198,36 @@ TODO
         return acc
 
     def visit_Call(node):
-        args = tuple(map(visit_expression, node.args))
+        is_starred = any(isinstance(arg, ast_Starred) for arg in node.args)
+        if not is_starred and not node.keywords:
+            func = visit_expression(node.func)
+            args = tuple(map(visit_expression, node.args))
+            free_regs(func, *args)
+            result = new_reg()
+            add(6, result, func, args)  # <var> = <func>(<var>, ...)
+            return result
+
+        if is_starred:
+            args_reg = visit_starred_expr_list(node.args)
+            add(6, args_reg, ".tuple", (args_reg,))  # <var> = <func>(<var>, ...)
+        else:
+            args = tuple(map(visit_expression, node.args))
+            free_regs(*args)
+            args_reg = new_reg()
+            add(8, args_reg, args)  # <var> = tuple(<var>, ...)
+
+        if node.keywords:
+            keys = [(None if keyword.arg is None else ast_Constant(value=keyword.arg)) for keyword in node.keywords]
+            values = [keyword.value for keyword in node.keywords]
+            kwargs_reg = visit_keywords(keys, values)
+        else:
+            kwargs_reg = new_reg()
+            add(6, kwargs_reg, ".dict", ())  # <var> = <func>(<var>, ...)
+
         func = visit_expression(node.func)
-        assert not node.keywords # TODO
-        free_regs(func, *args)
+        free_regs(func, args_reg, kwargs_reg)
         result = new_reg()
-        add(6, result, func, args) # <var> = <func>(<var>, ...)
+        add(24, result, func, args_reg, kwargs_reg)  # <var> = <func>(*<var>, **<var>)
         return result
 
     def visit_IfExp(node):
@@ -1251,9 +1275,7 @@ TODO
         free_regs(format_reg)
         return reg
 
-    def visit_List(node):
-        assert isinstance(node.ctx, ast_Load), node
-        elts = node.elts
+    def visit_starred_expr_list(elts):
         result = new_reg()
         add(19, result, "list")  # <var> = builtin:<var>
         count = 0
@@ -1297,7 +1319,7 @@ TODO
             free_regs(extend, append, null)
         return result
 
-    def visit_Dict(node):
+    def visit_keywords(keys, values):
         zip, zipped = new_reg(), new_reg()
         add(19, zip, "zip")  # <var> = builtin:<var>
 
@@ -1315,12 +1337,18 @@ TODO
             add(6, zipped, zip, (kreg, vreg))  # <var> = <func>(<var>, ...)
             free_regs(kreg, vreg)
 
-        keys, values = node.keys, node.values
         count = 0
         while count < len(keys) and keys[count] is not None:
             count += 1
 
-        if count:
+        if count == 1:
+            result = new_reg()
+            add(6, result, ".dict", ())  # <var> = <func>(<var>, ...)
+            kreg = visit_expression(keys[0])
+            vreg = visit_expression(values[0])
+            free_regs(kreg, vreg)
+            add(11, result, kreg, vreg) # <var>[<var>] = <var>
+        elif count:
             zip_it(keys[:count], values[:count])
             result = new_reg()
             add(6, result, ".dict", (zipped,))  # <var> = <func>(<var>, ...)
@@ -1355,6 +1383,13 @@ TODO
 
         free_regs(zip, zipped)
         return result
+
+    def visit_List(node):
+        assert isinstance(node.ctx, ast_Load), node
+        return visit_starred_expr_list(node.elts)
+
+    def visit_Dict(node):
+        return visit_keywords(node.keys, node.values)
 
     def visit_Set(node):
         assert node.elts, node

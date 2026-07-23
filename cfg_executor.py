@@ -245,8 +245,11 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
             raise NameError(e.args[0]) from None
         closure[n].v = var
 
-    def code_24(*a):  # ???
-        raise RuntimeError("unused code_24")
+    def code_24(var, func, args, kwargs):  # <var> = <func>(*<var>, **<var>)
+        try: func, args, kwargs = memory[func], memory[args], memory[kwargs]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
+        memory[var] = func(*args, **kwargs)
 
     def code_25(*a):  # ???
         raise RuntimeError("unused code_25")
@@ -275,9 +278,10 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
 
     def code_31(min, max):  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
         L = len(args)
-        if L < min:
-            n = min - L
-            raise TypeError(f"def#{id}() missing {n} required positional argument{'' if n == 1 else 's'}: ...")
+      # if L < min:
+      #     n = min - L
+      #     raise TypeError(f"def#{id}() missing {n} required positional argument{'' if n == 1 else 's'}: ...")
+      # не проверяет min, т.к. в случае наличия kwargs, это тут же сломается
         if L > max:
             if min == max:
                 raise TypeError(f"def#{id}() takes {max} positional argument{'' if max == 1 else 's'} but {L} {'was' if L == 1 else 'were'} given")
@@ -292,7 +296,8 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
         try: memory[var] = args[n]
         except IndexError as e:
             if default_n == -1:
-                raise RuntimeError(f"Недостижимая ошибка при правильной растановке инструкций code_31: {e!r}")
+              # n = min - len(args)
+                raise TypeError(f"def#{id}() missing N required positional arguments: ...")
             memory[var] = defaults[default_n]
 
     def code_34(var, n, _):  # <var> = DEFAULTS[<n>]   (type: <ann>)
@@ -923,7 +928,9 @@ print("0123456789"[::2])
 print("0123456789"[:5:2])
 print("0123456789"[5::2])
 print("0123456789"[3:8:2])
+"""
 
+source17 = """
 def filter(exc):
     msg = exc.args[0]
     idx = msg.find("() ")
@@ -944,18 +951,24 @@ check(lambda: func(1))
 check(lambda: func(1, 2))
 check(lambda: func(1, 2, 3))
 check(lambda: func(1, 2, 3, 4))
+data = (16, 17)
+check(lambda: func(15, *data))
+check(lambda: func(7, b=8))
+check(lambda: func(*data, b=8))
+check(lambda: func(*data, c=8))
 """
 
 source_index = (
     source1, source2, source3, source4, source5,
     source6, source7, source8, source9, source10,
     source11, source12, source13, source14, source15,
+    source16,
 )
 
-VERBOSE = False
+VERBOSE = 0
 PRINT_REF = 1
-TEST_ALL = False
-CHECK_PASSES = True
+TEST_ALL = 0
+CHECK_PASSES = 1
 
 
 
@@ -991,4 +1004,4 @@ if __name__ == "__main__":
         for source in source_index:
             main(source)
     else:
-        main(source16, debug=True)
+        main(source17, debug=True)
