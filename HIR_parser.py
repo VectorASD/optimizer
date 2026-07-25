@@ -78,7 +78,7 @@ definitions = (
 
     (1, 0, (2, 3, 4), 0, 0, "#24: <var> = <func>(*<var>, **<var>)"),
     (0, 0, (1,),      0, 0, "#25: LOAD_ARGS(<var>)"),
-    #26
+    (0, 0, (1,),      0, 0, "#26: _ = <var>"),
     #27
 
     (1, 2, (),        1, 1, "#28: <var> = ''.join((<var>, ...))"),
@@ -277,7 +277,7 @@ def stringify_instr(ops, i, write):
 
         case 24: write(f"{op[1]} = {op[2]}(*{op[3]}, **{op[4]})")
         case 25: write(f"LOAD_ARGS({op[1]})")
-      # case 26: ...
+        case 26: write(f"_ = {op[1]}")
       # case 27: ...
 
         case 28: write(f"{op[1]} = ''.join(({', '.join(map(str, op[2]))}))")
@@ -424,6 +424,12 @@ class Value:
         return self.n > right.n
     def __hash__(self):
         return self.n
+    def set_const(self, const):
+        self.const = const
+
+class VoidValue:
+    def __repr__(self):
+        return "%_"
     def set_const(self, const):
         self.const = const
 

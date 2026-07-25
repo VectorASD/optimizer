@@ -7,6 +7,35 @@ from folding import FOLDING_ATTRIBUTE_DICT, FOLDING_SET
 from collections import defaultdict, deque
 from pprint import pprint
 from hashlib import sha256
+from io import StringIO
+
+
+
+def debug_def(func=None, /, *, def_id=None):
+    def decorator(func):
+        def wrapper(pm):
+            debug = def_id is None or pm.def_id == def_id
+            buffer = StringIO()
+            stringify_cfg(pm.F, file=buffer)
+            runned = not debug
+            if runned:
+                try: func(pm)
+                except AssertionError as e:
+                    print("ERROR:", e)
+                    debug = True
+            if debug:
+                print(buffer.getvalue())
+                if not runned:
+                    try: func(pm)
+                    except AssertionError as e:
+                        print("ERROR:", e)
+                print(dashed_separator)
+                stringify_cfg(pm.F)
+                exit()
+        return wrapper
+    return decorator(func) if callable(func) else decorator
+
+debug_assert = debug_def(def_id=-1)
 
 
 
@@ -48,9 +77,13 @@ def trivial_copy_elemination(pm):  # TCE
         blocks[bb] = new_insts = []
         add = new_insts.append
         for inst in insts:
-            if inst[0] == 0 and inst[1].n == inst[2].n:  # %5 = %5
+            if inst[0] != 0 or inst[1].n != inst[2].n:
+                add(inst)
                 continue
-            add(inst)
+            # %5 = %5
+            attrs = inst[-1]
+            if attrs is not None and "exc" in attrs:
+                add((26, inst[2], inst[3]))  # _ = <var>
 
 
 
@@ -153,7 +186,7 @@ def constant_propogation_and_folding(pm):  # ConstProp
                     expected_L = inst[2]
                     if expected_L < L: raise ValueError(f"too many values to unpack (expected {expected_L}, got {L})")
                     elif expected_L > L: raise ValueError(f"not enough values to unpack (expected {expected_L}, got {L})")
-                    insts[i] = (16,)  # nop
+                    insts[i] = (16, None)  # nop
             elif kind == 14:  # goto <label> if <var> else <label>
                 value = idx2value[inst[2].n]
                 if value is not Undef:
@@ -227,8 +260,6 @@ def unconditional_jump_forwarding(pm):  # UJF
     blocks, preds, succs = F = pm.F
     queue = tuple(blocks)
 
-  # stringify_cfg(F)
-
     while queue:
         new_queue = []
         queue_append = new_queue.append
@@ -279,7 +310,7 @@ def unconditional_jump_forwarding(pm):  # UJF
                 queue_append(pred)
             UJF_change_preds(F, bb, target)
             del blocks[bb], preds[bb], succs[bb]  # minus node/vertex ;'-}
-            pm.check_CFG()
+            pm.check_CFG("unconditional_jump_forwarding")
         queue = new_queue
 
 def conditional_jump_forwarding(pm):  # CJF (under construction)
@@ -320,7 +351,7 @@ def conditional_jump_forwarding(pm):  # CJF (under construction)
                 preds[nop].append(pred)
                 preds[bb].remove(pred)
 
-                pm.check_CFG()
+                pm.check_CFG("conditional_jump_forwarding")
                 queue_append(pred)
         queue = new_queue
 
@@ -340,13 +371,14 @@ def branch_elimination(pm):  # BE
                 branch_folding(F, bb, erased_bb)  # BF
                 if not preds[erased_bb]: queue_append(erased_bb)
             del blocks[bb], preds[bb], succs[bb]  # minus node/vertex ;'-}
-            pm.check_CFG()
+            pm.check_CFG("branch_elimination")
         queue = new_queue
 
 def phi_elimination(pm):  # φE
     for insts in pm.blocks.values():
         for i, inst in enumerate(insts):
-            if inst[0] != 5: break # not phi
+            if inst[0] != 5:
+                break  # not phi
             phi_args = inst[2]
             it = iter(phi_args)
             idx = next(it).n
@@ -363,7 +395,8 @@ def block_merging(pm):  # BM
         queue_append = new_queue.append
         for bb in queue:
             try: insts = blocks[bb]
-            except KeyError: continue
+            except KeyError:
+                continue
             last_inst = insts[-1]
             if last_inst[0] == 3:  # goto <label>
                 next_bb = last_inst[1]
@@ -381,7 +414,7 @@ def block_merging(pm):  # BM
                         ]
                     del blocks[next_bb], preds[next_bb], succs[next_bb]  # minus node/vertex ;'-}
 
-                    pm.check_CFG()
+                    pm.check_CFG("block_merging")
                     queue_append(bb)
         queue = new_queue
 
@@ -389,9 +422,17 @@ def block_merging(pm):  # BM
 
 def can_DCE(inst):
     kind = inst[0]
-    if kind == 6: # <var> = <func>(<var>, ...)
-        return inst[2].const in FOLDING_SET
-    if HAS_LHS[kind] and inst[1].side_effect:
+    if kind == 6:  # <var> = <func>(<var>, ...)
+        func_value = inst[2].const
+        if func_value is Undef or func_value not in FOLDING_SET:
+            return False
+        for arg in inst[3]:
+            # например: tuple(gen(0))
+            # сам по себе tuple безвреден, но вот gen - это генератор,
+            # что валится на NameError при аргументе <= 0
+            if arg.const is Undef:
+                return False
+    if inst[1].side_effect:  # HAS_LHS[kind] уже проверен перед вызовом can_DCE
         return False
     attrs = inst[-1]
     if attrs is not None and "exc" in attrs:
@@ -465,7 +506,8 @@ def dead_code_elimination(pm):  # DCE
                 if idx2can_delete[idx] and use_count[idx] == 0:
                     index[idx] = None
                 else: add(inst)
-            elif kind != 16: add(inst)  # nop
+            elif kind != 16:
+                add(inst)  # nop
     value_host.shift()
 
 
@@ -737,13 +779,14 @@ class PassManager:
             name += ":"
             print(f"{name:{length - len(str(size))}} {size}")
 
-    def check_CFG(self, *, is_dirty = True):
-        assert check_CFG(self.F)
+    def check_CFG(self, pass_name):
+        assert check_CFG(self.F), f"Corrupted def_id={self.def_id} in pass: {pass_name}"
 
 
     def run_pass(self, pass_):
         func, name, dont_del = pass_
         func(self)
+        self.check_CFG(f"end of {name}")
         if name is not None:
             self.check_size(name)
 
@@ -756,7 +799,7 @@ class PassManager:
             stringify_cfg(self.F)
             print()
 
-        self.check_CFG(is_dirty = False)
+        self.check_CFG("original")
         self.check_size("original")
 
         for pass_ in self.passes:
@@ -794,7 +837,7 @@ class PassManager:
         for def_id in self.order:
             self.init_def(def_id)
 
-            self.check_CFG(is_dirty = False)
+            self.check_CFG("original")
             self.check_size("original")
 
         for pass_ in self.passes:

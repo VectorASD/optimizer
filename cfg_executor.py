@@ -259,8 +259,9 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
         nonlocal args, kwargs
         args, kwargs = _args
 
-    def code_26(*a):  # ???
-        raise RuntimeError("unused code_26")
+    def code_26(var):  # _ = <var>
+        if var not in memory:
+            raise NameError(var) from None
 
     def code_27(n):  # ???
         raise RuntimeError("unused code_27")
@@ -485,9 +486,14 @@ class Runner:
         if wrapper.print_it:
             print(dashed_separator)
         id = self.module.root_def
-        executor(self, id, wrapper.builtins, {})()
-        actual_print = wrapper.getvalue()
-        ok = actual_print == self.reference_print
+        try:
+            executor(self, id, wrapper.builtins, {})()
+            actual_print = wrapper.getvalue()
+            ok = actual_print == self.reference_print
+        except BaseException as e:
+            wrapper.builtins["print"](f"ERROR: {e!r}")
+            actual_print = wrapper.getvalue()
+            ok = False
         if wrapper.print_it:
             print("\nCORRECT PRINT:", "❌✅"[ok])
             if not ok:
@@ -958,21 +964,21 @@ def check_it():
     try: tuple(gen(0))
     except NameError:
         print("NameError is catched")
-# check_it() TODO: какие наполадки в DCE и φE
+check_it()
 
 def gen2():
     for i in range(5):
-        print((yield i))
+        print("yield output:", (yield i))
 
 def check_it():
     print()
-    # print(tuple(gen2()))  # снова эти DCE и φE
+    print(tuple(gen2()))
     g = gen2()
     for data in g:
         print(data)
-        if data == 2:
-            print("after send:", g.send(42))
-# check_it()  TODO: пока не поддерживается send
+        # if data == 2:
+        #     print("after send:", g.send(42))
+check_it()  # TODO: пока не поддерживается send
 # Теперь понятно, почему yield - это не statement, а expression
 # Корутины от генераторов уж совсем ничем не отличаются
 # под капотом, кроме того, что их вызывает не сам код
@@ -1030,13 +1036,14 @@ check(lambda: func(*data, c=8))
 source_index = (
     source1, source2, source3, source4, source5,
     source6, source7, source8, source9, source10,
-    source11, source12, source13, source14, source15,
-    source16,
+    source11, source12, source14, source15,
+    source16, source17,
 )
+# source13: UNDER CONSTRUCTION
 
 VERBOSE = 0
 PRINT_REF = 1
-TEST_ALL = 0
+TEST_ALL = 1
 CHECK_PASSES = 1
 
 

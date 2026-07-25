@@ -121,15 +121,19 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
     terminator_pos = None
     def check_terminator():
         nonlocal terminator_pos
-        if terminator_pos is not None:
+        if current_block is not None:
             insts = blocks[current_block]
-            dead_code_size = len(insts) - terminator_pos
-            for i in range(dead_code_size): insts.pop()
-            terminator_pos = None
+            if terminator_pos is not None:
+                dead_code_size = len(insts) - terminator_pos
+                for i in range(dead_code_size):
+                    insts.pop()
+                terminator_pos = None
+            assert insts, f"Void block: {current_block}"
     def apply_terminator():
         nonlocal terminator_pos
         if terminator_pos is None:
             terminator_pos = len(blocks[current_block])
+            assert terminator_pos > 0
 
     add_inst = None
     current_block = None
@@ -217,13 +221,15 @@ def visitors(ast, module: Module, def_name: str = "<root>", preinit=(), postinit
                 else:
                     var = None
                     add_inst((*inst, exc))
-                has_exc = True
-                next = new_block()
-                control(next)  # goto <label>
 
-                on_block(next)
-                if var is not None:
-                    add_inst((0, var, 'r', None))  # <var> = <var>
+                has_exc = True
+                if kind not in (3, 4, 14, 17):  # goto, return, goto, raise
+                    next = new_block()
+                    control(next)  # goto <label>
+
+                    on_block(next)
+                    if var is not None:
+                        add_inst((0, var, 'r', None))  # <var> = <var>
             add = _add
             return lambda: has_exc
         def __exit__(self, exc_type, exc_val, exc_tb):
@@ -468,7 +474,7 @@ TODO
         yeah, nop = new_block(), new_block()
         reg = visit_expression(node.test)
         free_reg(reg)
-        control(yeah, reg, nop) # goto <label> if <var> else <label>
+        control(yeah, reg, nop)  # goto <label> if <var> else <label>
 
         on_block(nop)
         if node.msg is not None:
@@ -478,8 +484,8 @@ TODO
         else: args = ()
         free_regs(*args)
         reg = new_reg()
-        add(6, reg, ".AssertionError", args) # <var> = <func>(<var>, ...)
-        add(17, reg) # raise <var>
+        add(6, reg, ".AssertionError", args)  # <var> = <func>(<var>, ...)
+        add(17, reg)  # raise <var>
         apply_terminator()
 
         free_reg(reg)
@@ -496,8 +502,8 @@ TODO
         else: cause = cause_stack and cause_stack[-1]
         if node.exc: free_reg(exc)
 
-        if cause: add(13, exc, "__cause__", cause) # <var>.<attr> = <var>
-        add(17, exc) # raise <var>
+        if cause: add(13, exc, "__cause__", cause)  # <var>.<attr> = <var>
+        add(17, exc)  # raise <var>
         apply_terminator()
 
     def visit_FunctionDef(node):
@@ -596,7 +602,7 @@ TODO
         class_name = node.name
         class_var = f"_{class_name}"
 
-        def postinit(add, visit_expression, blocks, apply_terminator):
+        def postinit(add, visit_expression, blocks, apply_terminator, free_regs):
             vars = {}
             for insts in blocks.values():
                 for inst in insts:
@@ -611,6 +617,7 @@ TODO
             add(29, class_var, class_name, bases, names, locals)  # <var> = type(<name>, (<base_reg>, ...), (<local_name>, ...), (<local_reg>, ...))
             add(4, class_var)  # return <var>
             apply_terminator()
+            free_regs(*bases)
 
         def_id2 = visitors(node.body, module, class_name, (), postinit)
         module.def_tree[def_id2] = def_id
@@ -828,8 +835,8 @@ TODO
             on_block(raise_block)
             if exc_is_none:
                 add(17, exc_reg)  # raise <var>
-                free_reg(exc_reg)
                 apply_terminator()
+                free_reg(exc_reg)
 
                 on_block(end_final)
 
@@ -1615,7 +1622,7 @@ TODO
         visit_Module(ast)
 
     if postinit is not None:
-        postinit(add, visit_expression, blocks, apply_terminator)
+        postinit(add, visit_expression, blocks, apply_terminator, free_regs)
 
     add(4, ".None") # return <var>
     check_terminator()
@@ -1626,6 +1633,7 @@ TODO
     assert not control_hooks, "control_hooks is crushed"
 
     make_CFG(blocks, preds, succs)
+    clean_def(F, next(iter(blocks)))
 
     return def_id
 
@@ -2212,13 +2220,15 @@ def sort_blocks(module):
 
     for def_id, F in enumerate(module.defs):
         blocks, preds, succs = F
-        visited = set()
+        entry = module.entries[def_id]
+        visited = {entry}
         order = []
 
-        dfs(module.entries[def_id])
+        dfs(entry)
+        assert set(blocks) == visited
+
         blocks.clear()
         blocks.update(dict(order))
-
         for n, bb in enumerate(blocks):
             bb.n = n
 
