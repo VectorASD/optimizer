@@ -1909,22 +1909,6 @@ def outer():
 outer()
 """
 
-def args_shift(insts):
-    for i, inst in enumerate(insts):
-        kind = inst[0]
-        if kind in (33, 38, 40):  # <var> = ARGS[<n>...
-            _, var, n, *other = inst
-            insts[i] = kind, var, n+1, *other
-        elif kind == 31:  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
-            _, mi, ma, attrs = inst
-            insts[i] = kind, mi+1, ma+1, attrs
-        elif kind == 37:  # if ARGS[:<n>]: raise TypeError(...)
-            _, mi, attrs = inst
-            insts[i] = kind, mi+1, attrs
-        else: break
-    insts.insert(0, (33, "self", 0, -1, None, None))  # <var> = ARGS[<n>]   (type: <ann>)
-    # self намеренно пишется так, чтобы не смешивать с пользовательским _self
-
 def clone_def(blocks):
     labels = {bb.n: Label(bb.n) for bb in blocks}
     new_blocks = {}
@@ -1985,6 +1969,15 @@ def recalc_CFG(F, entry):
     clean_def(F, entry)
 
 
+def get_defaults(module, def_id):
+    source_id = module.def_tree[def_id]
+    blocks = module.defs[source_id][0]
+    for insts in blocks.values():
+        for inst in insts:
+            if inst[0] == 18 and inst[2] == def_id:  # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)
+                return inst[3]
+    assert False, "incorrect module.def_tree?"
+
 def transform_def_to_class(module, def_id, wrap_def_id=None):
     module.is_class[def_id] = True
 
@@ -2008,7 +2001,14 @@ def yielderson(module, def_id, F, *, verbose=False):
     vars_list, IN, OUT = live_variables(F)
 
     entry = module.entries[def_id]
-    args_shift(blocks[entry])
+    blocks[entry] = [
+        (31, 1, 1, None),  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
+        (32, None),  # if kwARGS: raise TypeError(...)
+        (33, "self", 0, -1, None, None),  # <var> = ARGS[<n>]   (type: <ann>)
+        (12, "args", "self", "args", None),  # <var> = <var>.<attr>
+        (25, "args", None),  # LOAD_ARGS(<var>)
+        *blocks[entry],
+    ]
 
     yield_blocks = {}
     for bb, insts in blocks.items():
@@ -2150,16 +2150,19 @@ def yielderson(module, def_id, F, *, verbose=False):
         (4, "result", None),  # return <var>
     ), "__repr__")
 
-    # TODO: сделать проталкивание args и kwargs в func_0
     insts = [
         (31, 0, 0, None),  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
         (32, None),  # if kwARGS: raise TypeError(...)
     ]
     add = insts.append
+    defaults = get_defaults(module, def_id)
+    for i, default in enumerate(defaults):
+        add((34, default, i, None, None))  # <var> = DEFAULTS[<n>]   (type: <ann>)
     for name, (F, entry) in functions.items():
         def_id2 = module.add(F, name, entry)
         module.def_tree[def_id2] = def_id
-        add((18, name, def_id2, (), 0, (), None))  # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)
+        _defaults = defaults if name == "func_0" else ()
+        add((18, name, def_id2, _defaults, 0, (), None))  # <var> = <def>, defaults:(<var>, ...), cells:(<size>, <var>, ...)
 
     names = tuple(functions)
     add((29, "gen", "generator", (), names, names, None))  # <var> = type(<name>, (<base_reg>, ...), (<local_name>, ...), (<local_reg>, ...))
@@ -2169,11 +2172,13 @@ def yielderson(module, def_id, F, *, verbose=False):
     make_F([
         # забавно то, что мы храним оборачиваемый класс в defaults[0] и id в defaults[1],
         # но при этом не даём к ним доступ через вызов этой функции
-        (31, 0, 0, None),  # if len(ARGS) not in range(<num>, <num>): raise TypeError(...)
-        (32, None),  # if kwARGS: raise TypeError(...)
+        (38, "args", 0, None, None),  # <var> = ARGS[<n>:]   (type: <ann>)
+        (39, "kwargs", None, None),  # <var> = kwARGS   (type: <ann>)
+        (8, "args", ("args", "kwargs"), None),  # <var> = tuple(<var>, ...)
         (34, "gen", 0, None, None),  # <var> = DEFAULTS[<n>]   (type: <ann>)
         (34, "id", 1, None, None),  # <var> = DEFAULTS[<n>]   (type: <ann>)
         (6, "result", "gen", ("id",), None),  # <var> = <func>(<var>, ...)
+        (13, "result", "args", "args", None),  # <var>.<attr> = <var>
         (4, "result", None),  # return <var>
     ], "wrapper")
 

@@ -77,7 +77,7 @@ definitions = (
     (0, 0, (2,),      0, 0, "#23: cell:#<n> = <var>"),
 
     (1, 0, (2, 3, 4), 0, 0, "#24: <var> = <func>(*<var>, **<var>)"),
-    #25
+    (0, 0, (1,),      0, 0, "#25: LOAD_ARGS(<var>)"),
     #26
     #27
 
@@ -276,7 +276,7 @@ def stringify_instr(ops, i, write):
         case 23: write(f"cell:#{op[1]} = {op[2]}")
 
         case 24: write(f"{op[1]} = {op[2]}(*{op[3]}, **{op[4]})")
-      # case 25: ...
+        case 25: write(f"LOAD_ARGS({op[1]})")
       # case 26: ...
       # case 27: ...
 

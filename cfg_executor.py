@@ -251,8 +251,13 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
             raise NameError(e.args[0]) from None
         memory[var] = func(*args, **kwargs)
 
-    def code_25(*a):  # ???
-        raise RuntimeError("unused code_25")
+    def code_25(var):  # LOAD_ARGS(<var>)
+        try: _args = memory[var]
+        except KeyError as e:
+            raise NameError(e.args[0]) from None
+        assert isinstance(_args, tuple) and len(_args) == 2
+        nonlocal args, kwargs
+        args, kwargs = _args
 
     def code_26(*a):  # ???
         raise RuntimeError("unused code_26")
@@ -338,8 +343,8 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
     def code_38(var, n, _):  # <var> = ARGS[<n>:]   (type: <ann>)
         memory[var] = args[n:]
 
-    def code_39(var, n, _):  # <var> = kwARGS   (type: <ann>)
-        memory[var] = kwARGS
+    def code_39(var, _):  # <var> = kwARGS   (type: <ann>)
+        memory[var] = kwargs
 
     def code_40(var, n, key, default_n, _):  # <var> = ARGS[<n>] or kwARGS[<key>] or <default_n>   (type: <ann>)
         try:
@@ -400,6 +405,8 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
 
     entry = module.entries[id]
     def run_it(*_args, **_kwargs):
+        memory.clear()
+
         nonlocal args, kwargs
         args = _args
         kwargs = _kwargs
@@ -443,6 +450,28 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
 
 
 
+def compare_lines(reference_print, actual_print, padding=2):
+    reference_lines = reference_print.split('\n')
+    actual_lines = actual_print.split('\n')
+    count = max(len(reference_lines), len(actual_lines))
+    reference_lines.extend(("<eol>",) * (count - len(reference_lines)))
+    actual_lines.extend(("<eol>",) * (count - len(actual_lines)))
+
+    print_line = [False] * (padding + count + padding)  # это прямо как padding тензора в свёрточных ядрах...
+    view = padding + 1 + padding
+    for line_n, (i, j) in enumerate(zip(reference_lines, actual_lines)):
+        if i != j:
+            for n in range(line_n, line_n+view):
+                print_line[n] = True
+
+    for line_n, (i, j) in enumerate(zip(reference_lines, actual_lines), start=padding):
+        if print_line[line_n]:
+            if i == j:
+                print("✅", i)
+            else:
+                print("❌", i)
+                print("  ", j)
+
 class Runner:
     def __init__(self, module, reference_print, wrapper = None):
         self.module = module
@@ -461,10 +490,8 @@ class Runner:
         ok = actual_print == self.reference_print
         if wrapper.print_it:
             print("\nCORRECT PRINT:", "❌✅"[ok])
-          # print(self.reference_print.count("\n"))
-          # print(actual_print.count("\n"))
-          # for i, j in zip(self.reference_print.split("\n"), actual_print.split("\n")):
-          #     print(i == j, i, j)
+            if not ok:
+                compare_lines(self.reference_print, actual_print)
         return ok
 
 
@@ -889,11 +916,12 @@ print("check_it:", check_it())
 """
 
 source15 = """
-def gen():
-    for i in range(5):
+def gen(i_n=5, j_n=7):
+    print("• runned:", i_n, j_n)
+    for i in range(i_n):
         yield ("i:", i)
         if i % 2:
-            for j in range(7):
+            for j in range(j_n):
                 yield ("j:", j)
                 if j % 3:
                     yield (i, j)
@@ -909,17 +937,58 @@ def filter(obj):
     return " ".join(s)
 
 print("gen:", filter(gen))
-print("gen:", filter(gen()))
+g = gen()
+print("gen:", filter(g))
+g = iter(g)
+print("iter:", filter(g))
+print("next:", next(g))
 for pair in gen():
     print(pair)
 
+print()
+for pair in gen(1):
+    print(pair)
+
+print()
+for pair in gen(j_n=1):
+    print(pair)
+
+def check_it():
+    print()
+    try: tuple(gen(0))
+    except NameError:
+        print("NameError is catched")
+# check_it() TODO: какие наполадки в DCE и φE
+
+def gen2():
+    for i in range(5):
+        print((yield i))
+
+def check_it():
+    print()
+    # print(tuple(gen2()))  # снова эти DCE и φE
+    g = gen2()
+    for data in g:
+        print(data)
+        if data == 2:
+            print("after send:", g.send(42))
+# check_it()  TODO: пока не поддерживается send
+# Теперь понятно, почему yield - это не statement, а expression
+# Корутины от генераторов уж совсем ничем не отличаются
+# под капотом, кроме того, что их вызывает не сам код
+# (__next__ внутри for или мы через send) а планировщик задач!
+
+# Ещё и нужно поддержать throw, close и GeneratorExit
+# + про finally не забыть, что yield может сгенерировать это исключение,
+# которое должно корректно попасть в catcher-блок, созданный finally
+"""
+
+source16 = """
 try:
     a
 except NameError as e:
     print("NameError is catched!")
-"""
 
-source16 = """
 print("0123456789"[:])
 print("0123456789"[:3])
 print("0123456789"[3:])
@@ -1004,4 +1073,4 @@ if __name__ == "__main__":
         for source in source_index:
             main(source)
     else:
-        main(source17, debug=True)
+        main(source15, debug=True)
