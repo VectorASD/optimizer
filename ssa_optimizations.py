@@ -380,12 +380,16 @@ def phi_elimination(pm):  # φE
             if inst[0] != 5:
                 break  # not phi
             phi_args = inst[2]
-            if '?' in phi_args:
-                continue
-            it = iter(phi_args)
+            phi_args2 = [value for value in phi_args if value != '?']
+            assert phi_args2, "Пока не встречал такую ситуацию, когда все ветки phi - вопросы"
+            it = iter(phi_args2)
             idx = next(it).n
             if all(idx == value.n for value in it):
-                insts[i] = (0, inst[1], phi_args[0], inst[3])  # <var> = <var>
+                attrs = inst[3]
+                if len(phi_args) != len(phi_args2):
+                    if attrs is None: attrs = {}
+                    attrs["can_del"] = 1
+                insts[i] = (0, inst[1], phi_args2[0], attrs)  # <var> = <var>
 
 def block_merging(pm):  # BM
     blocks, preds, succs = F = pm.F
