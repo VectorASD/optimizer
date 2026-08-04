@@ -1,5 +1,5 @@
 from utils import dashed_separator, bits_by_index
-from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg, insts_renamer, ValueHost
+from HIR_parser import parse_program, stringify_cfg, defined_vars_in_block, all_vars_in_cfg, insts_renamer, ValueHost, NameError_gen
 from py_visitors import recalc_CFG
 from dataflow_analysis import reaching_definitions
 
@@ -371,7 +371,7 @@ def static_insertion(BB_F, all_vars, DF, index_arr, debug=False): # Algorithm SI
 
                 # preds_y = preds.get(y, ())
                 # phi_args = (var, len(preds_y))
-                phi_instr = (5, var, (var,))
+                phi_instr = (5, var, (var, "..."))
                 blocks[y].appendleft(phi_instr)
 
                 if y not in defined_in_block[var]:
@@ -415,29 +415,51 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
         stack_pop()
 
     def rename_phi(bb):
-        insts = blocks[bb]
-        preds_bb = tuple(preds[bb])
-        removes = False
+      # nonlocal recalc_cfg
+        insts, preds_bb = blocks[bb], preds[bb]
         for i, inst in enumerate(insts):
             if inst[0] != 5:
                 break
             var = inst[2][0]
-            names = end_collector[var]
-            try:
-                new_phis = tuple(names[pred_bb] for pred_bb in preds_bb)
-                for value in new_phis:
-                    if dead_phis[value.n]:
-                        raise KeyError
-                insts[i] = (5, inst[1], new_phis, None)
-            except KeyError:
-                insts[i] = None
-                removes = True
-                dead_phis[inst[1].n] = True
-        if removes:
-            list_shift(insts)
+            names_get = end_collector[var].get
 
-        for next_bb in dom_tree[bb]:
-            rename_phi(next_bb)
+            new_phis = tuple(names_get(pred_bb, '?') for pred_bb in preds_bb)
+            insts[i] = (5, inst[1], new_phis, None)
+            for i, phi in enumerate(new_phis):
+                if phi == '?':
+                    pred_bb = preds_bb[i]
+                    insts2 = blocks[pred_bb]
+                    """
+                    if len(insts2) >= 4 and insts2[-4][0] == 19 and insts2[-4][2] == "NameError":  # <var> = builtin:NameError
+                        continue
+                    term_inst = insts2[-1]
+                    if term_inst[0] != 3:
+                        stringify_cfg(BB_F)
+                        raise RuntimeError("Пока вставка NameError в 'рваный'-phi рассчитана только для goto <label>")
+                    NameError_gen(insts2, len(insts2)-1, var, value_host)
+                    recalc_cfg = True
+                    """
+  # Даже если появится инструкция вида %15 = PHI(?, %228),
+  # и мы придём по ответвлению, соответствующему '?',
+  # то не факт, что %15 вообще где-то используется при хорошем коде!!!
+  # Т.е. судить об NameError здесь - полная шляпа :)
+
+    """
+    def recalc_phi(bb):
+        insts, preds_bb = blocks[bb], preds[bb]
+        indexes = []; add = indexes.append
+        for pred_bb in old_preds[bb]:
+            try: add(preds_bb.index(pred_bb))
+            except ValueError: pass
+
+        insts, preds_bb = blocks[bb], preds[bb]
+        for i, inst in enumerate(insts):
+            if inst[0] != 5:
+                break
+            old_phis = inst[2]
+            new_phis = tuple(old_phis[idx] for idx in indexes)
+            insts[i] = (5, inst[1], new_phis, None)
+    """
 
     dom_used = set()
     dom_update = dom_used.update
@@ -450,14 +472,16 @@ def static_renaming(BB_F, all_vars, dom_tree, predefined=()): # Algorithm SR
     for bb in roots:
         rename(bb)
 
-    dead_phis = [False] * value_host.counter
-    for bb in roots:
+    for bb in blocks:
         rename_phi(bb)
 
     if recalc_cfg:
         assert len(roots) == 1
         entry = next(iter(roots))
+        old_preds = preds.copy()
         recalc_CFG(BB_F, entry)
+      # for bb in blocks:
+      #     recalc_phi(bb)
 
     return value_host
 

@@ -127,8 +127,9 @@ def executor(runner, id, builtins, globals, memory=None, defaults=(), closure=()
 
     def code_5(var, branches): # <var> = phi(<var>, ...)
         idx = branches[cur_idx]
-        try: memory[var] = memory[idx]
-        except KeyError: pass
+        if idx != '?':
+            try: memory[var] = memory[idx]
+            except KeyError: pass
 
     def code_6(var, func, args): # <var> = <func>(<var>, ...)
         try:
@@ -990,11 +991,6 @@ check_it()  # TODO: пока не поддерживается send
 """
 
 source16 = """
-try:
-    a
-except NameError as e:
-    print("NameError is catched!")
-
 print("0123456789"[:])
 print("0123456789"[:3])
 print("0123456789"[3:])
@@ -1003,6 +999,20 @@ print("0123456789"[::2])
 print("0123456789"[:5:2])
 print("0123456789"[5::2])
 print("0123456789"[3:8:2])
+
+try:
+    a
+except NameError:
+    print("NameError is catched!")
+
+def check(num):
+    if num:
+        var = "LOL"
+    print("var:", var)
+check(5)
+try:
+    check(0)
+except NameError: print("ok")
 """
 
 source17 = """
@@ -1036,10 +1046,9 @@ check(lambda: func(*data, c=8))
 source_index = (
     source1, source2, source3, source4, source5,
     source6, source7, source8, source9, source10,
-    source11, source12, source14, source15,
+    source11, source12, source13, source14, source15,
     source16, source17,
 )
-# source13: UNDER CONSTRUCTION
 
 VERBOSE = 0
 PRINT_REF = 1
@@ -1080,4 +1089,4 @@ if __name__ == "__main__":
         for source in source_index:
             main(source)
     else:
-        main(source15, debug=True)
+        main(source13, debug=True)

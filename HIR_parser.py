@@ -419,7 +419,7 @@ class Value:
         n, label = self.n, self.label
         return f"%{n}" if label is None else f"%{n}→{label}"
     def __eq__(self, right):
-        return self.n == right.n
+        return isinstance(right, Value) and self.n == right.n
     def __gt__(self, right):
         return self.n > right.n
     def __hash__(self):
@@ -568,18 +568,7 @@ for kind, _def in enumerate(definitions):
   #         print(f"{line_n:2}: {line}")
     renamers.append(locs["rename"])
 
-def insts_renamer(blocks, bb, value_host):
-    insts = blocks[bb]
-    for i, inst in enumerate(insts):
-        try:
-            renamers[inst[0]](insts, i, value_host)
-        except SSA_NameError as e:
-            exc = e
-            break
-    else:
-        return False  # recalc CFG
-
-    var = exc.args[0]
+def NameError_gen(insts, i, var, value_host):
     attrs = insts[i][-1]
     del_count = len(insts) - i
     for _ in range(del_count):
@@ -592,7 +581,16 @@ def insts_renamer(blocks, bb, value_host):
     ))
     for i in range(len(insts) - 4, len(insts)):
         renamers[insts[i][0]](insts, i, value_host)
-    return True  # recalc CFG
+
+def insts_renamer(blocks, bb, value_host):
+    insts = blocks[bb]
+    for i, inst in enumerate(insts):
+        try:
+            renamers[inst[0]](insts, i, value_host)
+        except SSA_NameError as e:
+            NameError_gen(insts, i, e.args[0], value_host)
+            return True  # recalc CFG
+    return False  # recalc CFG
 
 
 

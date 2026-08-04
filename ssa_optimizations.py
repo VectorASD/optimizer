@@ -380,6 +380,8 @@ def phi_elimination(pm):  # φE
             if inst[0] != 5:
                 break  # not phi
             phi_args = inst[2]
+            if '?' in phi_args:
+                continue
             it = iter(phi_args)
             idx = next(it).n
             if all(idx == value.n for value in it):
