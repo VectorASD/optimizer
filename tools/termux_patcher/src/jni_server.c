@@ -48,6 +48,17 @@ int read_sleb128(int fd, bool *eos) {
     int number = read_uleb128(fd, eos);
     return (number >> 1) ^ (number & 1 ? -1 : 0);  // zigzag
 }
+char* read_str(int fd, bool *eos, char* buffer) {
+    int size = read_uleb128(fd, eos);
+    if (*eos)
+        return NULL;
+    if (read(fd, buffer, size) <= 0) {
+        *eos = true;
+        return NULL;
+    }
+    buffer[size] = 0;
+    return buffer + (size + 1);  // next buffer
+}
 
 void write_byte(int fd, uint8_t val) {
     write(fd, &val, 1);
@@ -72,6 +83,11 @@ void write_sleb128(int fd, int val) {
     int u = (val << 1) ^ -(val < 0);
     write_uleb128(fd, u);
 }
+void write_str(int fd, const char* str) {
+    size_t size = strlen(str);
+    write_uleb128(fd, size);
+    write(fd, str, size);
+}
 
 
 typedef struct ClientCtx {
@@ -81,7 +97,49 @@ typedef struct ClientCtx {
     int vm_count;
     JavaVMInitArgs* args;
     bool own_vm;
+    char *buffer;
 } ClientCtx;
+
+
+bool check_exception(int fd, JNIEnv* env) {
+    jthrowable exc = (*env)->ExceptionOccurred(env);
+    if (exc == NULL) {
+        write_uleb128(fd, 0);  // empty exception string
+        return false;
+    }
+
+    jclass excClass = (*env)->GetObjectClass(env, exc);
+    const char* fallback = NULL;
+    jstring msg = NULL;
+    const char* utf = NULL;
+
+    if (excClass) {
+        jmethodID toString = (*env)->GetMethodID(env, excClass, "toString", "()Ljava/lang/String;");
+        if (toString) {
+            msg = (jstring)(*env)->CallObjectMethod(env, exc, toString);
+            if (msg) {
+                utf = (*env)->GetStringUTFChars(env, msg, NULL);
+                fallback = utf ? utf : "Exception occurred, but cannot get UTF-8 string";
+            } else
+                fallback = "Exception occurred, but toString() returned NULL (or raised exception)";
+        } else
+            fallback = "Exception occurred, but toString() not found";
+        (*env)->DeleteLocalRef(env, excClass);
+    } else
+        fallback = "Exception occurred, but cannot retrieve details";
+    (*env)->DeleteLocalRef(env, exc);
+
+    write_str(fd, fallback);
+
+    if (msg) {
+        if (utf)
+            (*env)->ReleaseStringUTFChars(env, msg, utf);
+        (*env)->DeleteLocalRef(env, msg);
+    }
+
+    (*env)->ExceptionClear(env);
+    return true;
+}
 
 bool handle_command(int fd, ClientCtx *ctx) {
     bool eos = false;
@@ -89,7 +147,12 @@ bool handle_command(int fd, ClientCtx *ctx) {
     uint8_t kind = read_byte(fd, &eos);
     if (eos)
         return eos;
-    printf("kind: %d\n", kind);
+    printf("(S) kind: %d\n", kind);
+
+    JNIEnv *env = ctx->env;
+    char *buffer = ctx->buffer;
+    jclass class;
+
     switch (kind) {
         case 0: {
             if (!ctx->vm) {
@@ -131,6 +194,24 @@ bool handle_command(int fd, ClientCtx *ctx) {
             }
             write_sleb128(fd, error);
             break;
+
+        case 5: {
+            jint version = (*env)->GetVersion(env);
+            short major = version >> 16;
+            short minor = version & 0xffff;
+            write_uleb128(fd, major);
+            write_uleb128(fd, minor);
+            break; }
+
+     // case 6: DefineClass...
+        case 7:
+            read_str(fd, &eos, buffer);
+            if (eos)
+                return eos;
+            class = (*env)->FindClass(env, buffer);
+            if (!check_exception(fd, env))
+                write_ptr(fd, class);
+            break;
     }
     return eos;
 }
@@ -148,9 +229,11 @@ void* handle_client_thread(void* arg) {
         .options = &option,
         .ignoreUnrecognized = JNI_TRUE,
     };
+    char buffer[65536];  // 64 КБ
     ClientCtx ctx = {
         .vm = NULL, .env = NULL, .vm_count = 0,
-        .args = &args, .own_vm = false
+        .args = &args, .own_vm = false,
+        .buffer = buffer,
     };
 
     while (1)

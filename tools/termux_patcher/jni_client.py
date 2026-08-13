@@ -3,19 +3,27 @@ from struct import pack, unpack, calcsize
 
 
 def read_byte(read) -> int:
-    return read(1)[0]
+    try: return read(1)[0]
+    except Exception:
+        raise EOFError("Unexpected end of stream") from None
 
 def read_int(read) -> int:
-    return unpack("=i", read(4))[0]
+    try: return unpack("=i", read(4))[0]
+    except Exception:
+        raise EOFError("Unexpected end of stream") from None
 
 ptr_size = calcsize('P')
 def read_ptr(read) -> int:
-    return unpack("=P", read(ptr_size))[0]
+    try: return unpack('P', read(ptr_size))[0]
+    except Exception as e:
+        raise EOFError("Unexpected end of stream") from None
 
 def read_uleb128(read) -> int:
     result = shift = 0
     while True:
-        byte = read(1)[0]
+        try: byte = read(1)[0]
+        except Exception:
+            raise EOFError("Unexpected end of stream") from None
         result |= (byte & 0x7f) << shift
         if not (byte & 0x80):
             break
@@ -25,6 +33,13 @@ def read_uleb128(read) -> int:
 def read_sleb128(read) -> int:
     u = read_uleb128(read)
     return (u >> 1) ^ -(u & 1)
+
+def read_str(read) -> str:
+    size = read_uleb128(read)
+    data = read(size)
+    if len(data) != size:
+        raise EOFError("Unexpected end of stream") from None
+    return data.decode("utf-8")
 
 
 int2byte = tuple(bytes((i,)) for i in range(256))
@@ -51,6 +66,11 @@ def write_sleb128(write, val: int) -> None:
     u = (val << 1) ^ (val >> 31) & 0xffffffff
     write_uleb128(write, u)
 
+def write_str(write, val: str) -> None:
+    data = val.encode("utf-8")
+    write_uleb128(write, len(data))
+    write(data)
+
 
 class JNIError(Exception):
     _descriptions = (
@@ -72,6 +92,9 @@ class JNIError(Exception):
             return f"unknown: {self.code}"
         return self._descriptions[code]
 
+class JavaError(Exception):
+    pass
+
 
 class JNIClient:
     def __init__(self):
@@ -89,13 +112,16 @@ class JNIClient:
         self.sock.close()
 
     def check_error(self):
-        try:
-            error = read_sleb128(self.read)
-        except Exception:
-            raise EOFError("Unexpected end of stream") from None
-
+        error = read_sleb128(self.read)
         if error:
             raise JNIError(error)
+
+    def check_exception(self):
+        message = read_str(self.read)
+        if message:
+            raise JavaError(message)
+
+    # VM methods
 
     def CreateJavaVM(self) -> None:
         write_byte(self.write, 0)
@@ -107,11 +133,7 @@ class JNIClient:
         self.flush()
         self.check_error()
 
-        try:
-            vm_count = read_uleb128(self.read)
-        except Exception:
-            raise EOFError("Unexpected end of stream") from None
-
+        vm_count = read_uleb128(self.read)
         return vm_count
 
     def SelectVM(self, index: int) -> None:
@@ -130,6 +152,8 @@ class JNIClient:
         self.flush()
         self.check_error()
 
+    # VM helper
+
     def CreateOrReuseVM(self) -> None:
         vm_count = jni.GetCreatedJavaVMs()
         print("vm count:", vm_count)
@@ -139,7 +163,34 @@ class JNIClient:
             self.SelectVM(vm_count - 1)  # last VM in list
             self.AttachCurrentThread()
 
+    # native methods
+
+    def GetVersion(self) -> tuple[int, int]:
+        write_byte(self.write, 5)
+        self.flush()
+
+        read = self.read
+        major = read_uleb128(read)
+        minor = read_uleb128(read)
+        return major, minor
+
+    # TODO: DefineClass (kind=6)
+
+    def FindClass(self, class_name: str) -> int:
+        write = self.write
+        write_byte(write, 7)
+        write_str(write, class_name)
+        self.flush()
+
+        self.check_exception()
+        jclass = read_ptr(self.read)
+        return jclass
+
 
 if __name__ == "__main__":
     jni = JNIClient()
     jni.CreateOrReuseVM()
+    print("version:", ".".join(map(str, jni.GetVersion())))
+    bigint = jni.FindClass("java/math/BigInteger")
+    # JavaError: java.lang.NoClassDefFoundError: java/math/BigIntegerr  (РАБОТАЕТ!!!)
+    print("bigint:", hex(bigint))
