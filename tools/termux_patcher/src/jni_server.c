@@ -73,26 +73,92 @@ void write_sleb128(int fd, int val) {
     write_uleb128(fd, u);
 }
 
-bool handle_command(int fd) {
+
+typedef struct ClientCtx {
+    JavaVM* vm;
+    JNIEnv* env;
+    JavaVM* vm_arr[16];
+    int vm_count;
+    JavaVMInitArgs* args;
+    bool own_vm;
+} ClientCtx;
+
+bool handle_command(int fd, ClientCtx *ctx) {
     bool eos = false;
+    jint error = JNI_EINVAL;  /* invalid arguments */
     uint8_t kind = read_byte(fd, &eos);
     if (eos)
         return eos;
     printf("kind: %d\n", kind);
-    /* switch (kind) {
-        case 0:
-            jint err = JNI_CreateJavaVM(&vm, (void **) &env, &args);
+    switch (kind) {
+        case 0: {
+            if (!ctx->vm) {
+                error = JNI_CreateJavaVM(&ctx->vm, (void **) &ctx->env, ctx->args);
+                ctx->own_vm = (error == JNI_OK && ctx->vm);
+            }
+            write_sleb128(fd, error);
+            break; }
+        case 1:
+            error = JNI_GetCreatedJavaVMs(ctx->vm_arr, 16, &ctx->vm_count);
+            write_sleb128(fd, error);
+            write_uleb128(fd, ctx->vm_count);
             break;
-    }*/
+        case 2: {
+            uint8_t index = read_byte(fd, &eos);
+            if (eos)
+                return eos;
+            if (!ctx->vm && index < 16 && index < ctx->vm_count) {
+                ctx->vm = ctx->vm_arr[index];
+                ctx->own_vm = false;
+                error = JNI_OK;
+            }
+            write_sleb128(fd, error);
+            break; }
+        case 3: {
+            JavaVMAttachArgs* args = NULL;
+            if (ctx->vm)
+                error = (*ctx->vm)->AttachCurrentThread(ctx->vm, (void **) &ctx->env, args);
+            write_sleb128(fd, error);
+            break; }
+        case 4:
+            if (ctx->vm) {
+                error = (*ctx->vm)->DetachCurrentThread(ctx->vm);
+                if (ctx->own_vm)
+                    (*ctx->vm)->DestroyJavaVM(ctx->vm);
+                ctx->vm = NULL;
+                ctx->own_vm = false;
+            }
+            write_sleb128(fd, error);
+            break;
+    }
     return eos;
 }
 
 void* handle_client_thread(void* arg) {
     int client_fd = (int)(intptr_t) arg;
 
+    JavaVMOption option = {
+        .optionString = "-Djava.class.path=.",
+        .extraInfo = NULL,
+    };
+    JavaVMInitArgs args = {
+        .version = JNI_VERSION_1_6,
+        .nOptions = 1,
+        .options = &option,
+        .ignoreUnrecognized = JNI_TRUE,
+    };
+    ClientCtx ctx = {
+        .vm = NULL, .env = NULL, .vm_count = 0,
+        .args = &args, .own_vm = false
+    };
+
     while (1)
-        if (handle_command(client_fd))
+        if (handle_command(client_fd, &ctx))
             break;
+
+    JavaVM* vm = ctx.vm;
+    if (vm && ctx.own_vm)
+        (*vm)->DestroyJavaVM(vm);
 
     close(client_fd);
     return NULL;
