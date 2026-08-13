@@ -217,146 +217,146 @@ struct JNINativeInterface_ {
     void *reserved2;
 
     void *reserved3;
-    jint (JNICALL *GetVersion)(JNIEnv *env);
+    jint (JNICALL *GetVersion)(JNIEnv *env);  // kind=5
 
-    jclass (JNICALL *DefineClass)
+    jclass (JNICALL *DefineClass)  // kind=6
       (JNIEnv *env, const char *name, jobject loader, const jbyte *buf,
        jsize len);
-    jclass (JNICALL *FindClass)
+    jclass (JNICALL *FindClass)  // kind=7
       (JNIEnv *env, const char *name);
 
-    jmethodID (JNICALL *FromReflectedMethod)
+    jmethodID (JNICALL *FromReflectedMethod)  // kind=8
       (JNIEnv *env, jobject method);
-    jfieldID (JNICALL *FromReflectedField)
+    jfieldID (JNICALL *FromReflectedField)  // kind=9
       (JNIEnv *env, jobject field);
 
-    jobject (JNICALL *ToReflectedMethod)
+    jobject (JNICALL *ToReflectedMethod)  // kind=10
       (JNIEnv *env, jclass cls, jmethodID methodID, jboolean isStatic);
 
-    jclass (JNICALL *GetSuperclass)
+    jclass (JNICALL *GetSuperclass)  // kind=11
       (JNIEnv *env, jclass sub);
-    jboolean (JNICALL *IsAssignableFrom)
+    jboolean (JNICALL *IsAssignableFrom)  // kind=12
       (JNIEnv *env, jclass sub, jclass sup);
 
-    jobject (JNICALL *ToReflectedField)
+    jobject (JNICALL *ToReflectedField)  // kind=13
       (JNIEnv *env, jclass cls, jfieldID fieldID, jboolean isStatic);
 
-    jint (JNICALL *Throw)
+    jint (JNICALL *Throw)  // kind=14
       (JNIEnv *env, jthrowable obj);
-    jint (JNICALL *ThrowNew)
+    jint (JNICALL *ThrowNew)  // kind=15
       (JNIEnv *env, jclass clazz, const char *msg);
-    jthrowable (JNICALL *ExceptionOccurred)
+    jthrowable (JNICALL *ExceptionOccurred)  // kind=16
       (JNIEnv *env);
-    void (JNICALL *ExceptionDescribe)
+    void (JNICALL *ExceptionDescribe)  // kind=17
       (JNIEnv *env);
-    void (JNICALL *ExceptionClear)
+    void (JNICALL *ExceptionClear)  // kind=18
       (JNIEnv *env);
-    void (JNICALL *FatalError)
+    void (JNICALL *FatalError)  // kind=19
       (JNIEnv *env, const char *msg);
 
-    jint (JNICALL *PushLocalFrame)
+    jint (JNICALL *PushLocalFrame)  // kind=20
       (JNIEnv *env, jint capacity);
-    jobject (JNICALL *PopLocalFrame)
+    jobject (JNICALL *PopLocalFrame)  // kind=21
       (JNIEnv *env, jobject result);
 
-    jobject (JNICALL *NewGlobalRef)
+    jobject (JNICALL *NewGlobalRef)  // kind=22
       (JNIEnv *env, jobject lobj);
-    void (JNICALL *DeleteGlobalRef)
+    void (JNICALL *DeleteGlobalRef)  // kind=23
       (JNIEnv *env, jobject gref);
-    void (JNICALL *DeleteLocalRef)
+    void (JNICALL *DeleteLocalRef)  // kind=24
       (JNIEnv *env, jobject obj);
-    jboolean (JNICALL *IsSameObject)
+    jboolean (JNICALL *IsSameObject)  // kind=25
       (JNIEnv *env, jobject obj1, jobject obj2);
-    jobject (JNICALL *NewLocalRef)
+    jobject (JNICALL *NewLocalRef)  // kind=26
       (JNIEnv *env, jobject ref);
-    jint (JNICALL *EnsureLocalCapacity)
+    jint (JNICALL *EnsureLocalCapacity)  // kind=27
       (JNIEnv *env, jint capacity);
 
-    jobject (JNICALL *AllocObject)
+    jobject (JNICALL *AllocObject)  // kind=28
       (JNIEnv *env, jclass clazz);
     jobject (JNICALL *NewObject)
       (JNIEnv *env, jclass clazz, jmethodID methodID, ...);
     jobject (JNICALL *NewObjectV)
       (JNIEnv *env, jclass clazz, jmethodID methodID, va_list args);
-    jobject (JNICALL *NewObjectA)
+    jobject (JNICALL *NewObjectA)  // kind=29
       (JNIEnv *env, jclass clazz, jmethodID methodID, const jvalue *args);
 
-    jclass (JNICALL *GetObjectClass)
+    jclass (JNICALL *GetObjectClass)  // kind=30
       (JNIEnv *env, jobject obj);
-    jboolean (JNICALL *IsInstanceOf)
+    jboolean (JNICALL *IsInstanceOf)  // kind=31
       (JNIEnv *env, jobject obj, jclass clazz);
 
-    jmethodID (JNICALL *GetMethodID)
+    jmethodID (JNICALL *GetMethodID)  // kind=32
       (JNIEnv *env, jclass clazz, const char *name, const char *sig);
 
     jobject (JNICALL *CallObjectMethod)
       (JNIEnv *env, jobject obj, jmethodID methodID, ...);
     jobject (JNICALL *CallObjectMethodV)
       (JNIEnv *env, jobject obj, jmethodID methodID, va_list args);
-    jobject (JNICALL *CallObjectMethodA)
+    jobject (JNICALL *CallObjectMethodA)  // kind=33
       (JNIEnv *env, jobject obj, jmethodID methodID, const jvalue * args);
 
     jboolean (JNICALL *CallBooleanMethod)
       (JNIEnv *env, jobject obj, jmethodID methodID, ...);
     jboolean (JNICALL *CallBooleanMethodV)
       (JNIEnv *env, jobject obj, jmethodID methodID, va_list args);
-    jboolean (JNICALL *CallBooleanMethodA)
+    jboolean (JNICALL *CallBooleanMethodA)  // kind=34
       (JNIEnv *env, jobject obj, jmethodID methodID, const jvalue * args);
 
     jbyte (JNICALL *CallByteMethod)
       (JNIEnv *env, jobject obj, jmethodID methodID, ...);
     jbyte (JNICALL *CallByteMethodV)
       (JNIEnv *env, jobject obj, jmethodID methodID, va_list args);
-    jbyte (JNICALL *CallByteMethodA)
+    jbyte (JNICALL *CallByteMethodA)  // kind=35
       (JNIEnv *env, jobject obj, jmethodID methodID, const jvalue *args);
 
     jchar (JNICALL *CallCharMethod)
       (JNIEnv *env, jobject obj, jmethodID methodID, ...);
     jchar (JNICALL *CallCharMethodV)
       (JNIEnv *env, jobject obj, jmethodID methodID, va_list args);
-    jchar (JNICALL *CallCharMethodA)
+    jchar (JNICALL *CallCharMethodA)  // kind=36
       (JNIEnv *env, jobject obj, jmethodID methodID, const jvalue *args);
 
     jshort (JNICALL *CallShortMethod)
       (JNIEnv *env, jobject obj, jmethodID methodID, ...);
     jshort (JNICALL *CallShortMethodV)
       (JNIEnv *env, jobject obj, jmethodID methodID, va_list args);
-    jshort (JNICALL *CallShortMethodA)
+    jshort (JNICALL *CallShortMethodA)  // kind=37
       (JNIEnv *env, jobject obj, jmethodID methodID, const jvalue *args);
 
     jint (JNICALL *CallIntMethod)
       (JNIEnv *env, jobject obj, jmethodID methodID, ...);
     jint (JNICALL *CallIntMethodV)
       (JNIEnv *env, jobject obj, jmethodID methodID, va_list args);
-    jint (JNICALL *CallIntMethodA)
+    jint (JNICALL *CallIntMethodA)  // kind=38
       (JNIEnv *env, jobject obj, jmethodID methodID, const jvalue *args);
 
     jlong (JNICALL *CallLongMethod)
       (JNIEnv *env, jobject obj, jmethodID methodID, ...);
     jlong (JNICALL *CallLongMethodV)
       (JNIEnv *env, jobject obj, jmethodID methodID, va_list args);
-    jlong (JNICALL *CallLongMethodA)
+    jlong (JNICALL *CallLongMethodA)  // kind=39
       (JNIEnv *env, jobject obj, jmethodID methodID, const jvalue *args);
 
     jfloat (JNICALL *CallFloatMethod)
       (JNIEnv *env, jobject obj, jmethodID methodID, ...);
     jfloat (JNICALL *CallFloatMethodV)
       (JNIEnv *env, jobject obj, jmethodID methodID, va_list args);
-    jfloat (JNICALL *CallFloatMethodA)
+    jfloat (JNICALL *CallFloatMethodA)  // kind=40
       (JNIEnv *env, jobject obj, jmethodID methodID, const jvalue *args);
 
     jdouble (JNICALL *CallDoubleMethod)
       (JNIEnv *env, jobject obj, jmethodID methodID, ...);
     jdouble (JNICALL *CallDoubleMethodV)
       (JNIEnv *env, jobject obj, jmethodID methodID, va_list args);
-    jdouble (JNICALL *CallDoubleMethodA)
+    jdouble (JNICALL *CallDoubleMethodA)  // kind=41
       (JNIEnv *env, jobject obj, jmethodID methodID, const jvalue *args);
 
     void (JNICALL *CallVoidMethod)
       (JNIEnv *env, jobject obj, jmethodID methodID, ...);
     void (JNICALL *CallVoidMethodV)
       (JNIEnv *env, jobject obj, jmethodID methodID, va_list args);
-    void (JNICALL *CallVoidMethodA)
+    void (JNICALL *CallVoidMethodA)  // kind=42
       (JNIEnv *env, jobject obj, jmethodID methodID, const jvalue * args);
 
     jobject (JNICALL *CallNonvirtualObjectMethod)
@@ -364,7 +364,7 @@ struct JNINativeInterface_ {
     jobject (JNICALL *CallNonvirtualObjectMethodV)
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        va_list args);
-    jobject (JNICALL *CallNonvirtualObjectMethodA)
+    jobject (JNICALL *CallNonvirtualObjectMethodA)  // kind=43
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        const jvalue * args);
 
@@ -373,7 +373,7 @@ struct JNINativeInterface_ {
     jboolean (JNICALL *CallNonvirtualBooleanMethodV)
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        va_list args);
-    jboolean (JNICALL *CallNonvirtualBooleanMethodA)
+    jboolean (JNICALL *CallNonvirtualBooleanMethodA)  // kind=44
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        const jvalue * args);
 
@@ -382,7 +382,7 @@ struct JNINativeInterface_ {
     jbyte (JNICALL *CallNonvirtualByteMethodV)
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        va_list args);
-    jbyte (JNICALL *CallNonvirtualByteMethodA)
+    jbyte (JNICALL *CallNonvirtualByteMethodA)  // kind=45
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        const jvalue *args);
 
@@ -391,7 +391,7 @@ struct JNINativeInterface_ {
     jchar (JNICALL *CallNonvirtualCharMethodV)
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        va_list args);
-    jchar (JNICALL *CallNonvirtualCharMethodA)
+    jchar (JNICALL *CallNonvirtualCharMethodA)  // kind=46
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        const jvalue *args);
 
@@ -400,7 +400,7 @@ struct JNINativeInterface_ {
     jshort (JNICALL *CallNonvirtualShortMethodV)
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        va_list args);
-    jshort (JNICALL *CallNonvirtualShortMethodA)
+    jshort (JNICALL *CallNonvirtualShortMethodA)  // kind=47
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        const jvalue *args);
 
@@ -409,7 +409,7 @@ struct JNINativeInterface_ {
     jint (JNICALL *CallNonvirtualIntMethodV)
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        va_list args);
-    jint (JNICALL *CallNonvirtualIntMethodA)
+    jint (JNICALL *CallNonvirtualIntMethodA)  // kind=48
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        const jvalue *args);
 
@@ -418,7 +418,7 @@ struct JNINativeInterface_ {
     jlong (JNICALL *CallNonvirtualLongMethodV)
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        va_list args);
-    jlong (JNICALL *CallNonvirtualLongMethodA)
+    jlong (JNICALL *CallNonvirtualLongMethodA)  // kind=49
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        const jvalue *args);
 
@@ -427,7 +427,7 @@ struct JNINativeInterface_ {
     jfloat (JNICALL *CallNonvirtualFloatMethodV)
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        va_list args);
-    jfloat (JNICALL *CallNonvirtualFloatMethodA)
+    jfloat (JNICALL *CallNonvirtualFloatMethodA)  // kind=50
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        const jvalue *args);
 
@@ -436,7 +436,7 @@ struct JNINativeInterface_ {
     jdouble (JNICALL *CallNonvirtualDoubleMethodV)
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        va_list args);
-    jdouble (JNICALL *CallNonvirtualDoubleMethodA)
+    jdouble (JNICALL *CallNonvirtualDoubleMethodA)  // kind=51
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        const jvalue *args);
 
@@ -445,335 +445,335 @@ struct JNINativeInterface_ {
     void (JNICALL *CallNonvirtualVoidMethodV)
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        va_list args);
-    void (JNICALL *CallNonvirtualVoidMethodA)
+    void (JNICALL *CallNonvirtualVoidMethodA)  // kind=52
       (JNIEnv *env, jobject obj, jclass clazz, jmethodID methodID,
        const jvalue * args);
 
-    jfieldID (JNICALL *GetFieldID)
+    jfieldID (JNICALL *GetFieldID)  // kind=53
       (JNIEnv *env, jclass clazz, const char *name, const char *sig);
 
-    jobject (JNICALL *GetObjectField)
+    jobject (JNICALL *GetObjectField)  // kind=54
       (JNIEnv *env, jobject obj, jfieldID fieldID);
-    jboolean (JNICALL *GetBooleanField)
+    jboolean (JNICALL *GetBooleanField)  // kind=55
       (JNIEnv *env, jobject obj, jfieldID fieldID);
-    jbyte (JNICALL *GetByteField)
+    jbyte (JNICALL *GetByteField)  // kind=56
       (JNIEnv *env, jobject obj, jfieldID fieldID);
-    jchar (JNICALL *GetCharField)
+    jchar (JNICALL *GetCharField)  // kind=57
       (JNIEnv *env, jobject obj, jfieldID fieldID);
-    jshort (JNICALL *GetShortField)
+    jshort (JNICALL *GetShortField)  // kind=58
       (JNIEnv *env, jobject obj, jfieldID fieldID);
-    jint (JNICALL *GetIntField)
+    jint (JNICALL *GetIntField)  // kind=59
       (JNIEnv *env, jobject obj, jfieldID fieldID);
-    jlong (JNICALL *GetLongField)
+    jlong (JNICALL *GetLongField)  // kind=60
       (JNIEnv *env, jobject obj, jfieldID fieldID);
-    jfloat (JNICALL *GetFloatField)
+    jfloat (JNICALL *GetFloatField)  // kind=61
       (JNIEnv *env, jobject obj, jfieldID fieldID);
-    jdouble (JNICALL *GetDoubleField)
+    jdouble (JNICALL *GetDoubleField)  // kind=62
       (JNIEnv *env, jobject obj, jfieldID fieldID);
 
-    void (JNICALL *SetObjectField)
+    void (JNICALL *SetObjectField)  // kind=63
       (JNIEnv *env, jobject obj, jfieldID fieldID, jobject val);
-    void (JNICALL *SetBooleanField)
+    void (JNICALL *SetBooleanField)  // kind=64
       (JNIEnv *env, jobject obj, jfieldID fieldID, jboolean val);
-    void (JNICALL *SetByteField)
+    void (JNICALL *SetByteField)  // kind=65
       (JNIEnv *env, jobject obj, jfieldID fieldID, jbyte val);
-    void (JNICALL *SetCharField)
+    void (JNICALL *SetCharField)  // kind=66
       (JNIEnv *env, jobject obj, jfieldID fieldID, jchar val);
-    void (JNICALL *SetShortField)
+    void (JNICALL *SetShortField)  // kind=67
       (JNIEnv *env, jobject obj, jfieldID fieldID, jshort val);
-    void (JNICALL *SetIntField)
+    void (JNICALL *SetIntField)  // kind=68
       (JNIEnv *env, jobject obj, jfieldID fieldID, jint val);
-    void (JNICALL *SetLongField)
+    void (JNICALL *SetLongField)  // kind=69
       (JNIEnv *env, jobject obj, jfieldID fieldID, jlong val);
-    void (JNICALL *SetFloatField)
+    void (JNICALL *SetFloatField)  // kind=70
       (JNIEnv *env, jobject obj, jfieldID fieldID, jfloat val);
-    void (JNICALL *SetDoubleField)
+    void (JNICALL *SetDoubleField)  // kind=71
       (JNIEnv *env, jobject obj, jfieldID fieldID, jdouble val);
 
-    jmethodID (JNICALL *GetStaticMethodID)
+    jmethodID (JNICALL *GetStaticMethodID)  // kind=72
       (JNIEnv *env, jclass clazz, const char *name, const char *sig);
 
     jobject (JNICALL *CallStaticObjectMethod)
       (JNIEnv *env, jclass clazz, jmethodID methodID, ...);
     jobject (JNICALL *CallStaticObjectMethodV)
       (JNIEnv *env, jclass clazz, jmethodID methodID, va_list args);
-    jobject (JNICALL *CallStaticObjectMethodA)
+    jobject (JNICALL *CallStaticObjectMethodA)  // kind=73
       (JNIEnv *env, jclass clazz, jmethodID methodID, const jvalue *args);
 
     jboolean (JNICALL *CallStaticBooleanMethod)
       (JNIEnv *env, jclass clazz, jmethodID methodID, ...);
     jboolean (JNICALL *CallStaticBooleanMethodV)
       (JNIEnv *env, jclass clazz, jmethodID methodID, va_list args);
-    jboolean (JNICALL *CallStaticBooleanMethodA)
+    jboolean (JNICALL *CallStaticBooleanMethodA)  // kind=74
       (JNIEnv *env, jclass clazz, jmethodID methodID, const jvalue *args);
 
     jbyte (JNICALL *CallStaticByteMethod)
       (JNIEnv *env, jclass clazz, jmethodID methodID, ...);
     jbyte (JNICALL *CallStaticByteMethodV)
       (JNIEnv *env, jclass clazz, jmethodID methodID, va_list args);
-    jbyte (JNICALL *CallStaticByteMethodA)
+    jbyte (JNICALL *CallStaticByteMethodA)  // kind=75
       (JNIEnv *env, jclass clazz, jmethodID methodID, const jvalue *args);
 
     jchar (JNICALL *CallStaticCharMethod)
       (JNIEnv *env, jclass clazz, jmethodID methodID, ...);
     jchar (JNICALL *CallStaticCharMethodV)
       (JNIEnv *env, jclass clazz, jmethodID methodID, va_list args);
-    jchar (JNICALL *CallStaticCharMethodA)
+    jchar (JNICALL *CallStaticCharMethodA)  // kind=76
       (JNIEnv *env, jclass clazz, jmethodID methodID, const jvalue *args);
 
     jshort (JNICALL *CallStaticShortMethod)
       (JNIEnv *env, jclass clazz, jmethodID methodID, ...);
     jshort (JNICALL *CallStaticShortMethodV)
       (JNIEnv *env, jclass clazz, jmethodID methodID, va_list args);
-    jshort (JNICALL *CallStaticShortMethodA)
+    jshort (JNICALL *CallStaticShortMethodA)  // kind=77
       (JNIEnv *env, jclass clazz, jmethodID methodID, const jvalue *args);
 
     jint (JNICALL *CallStaticIntMethod)
       (JNIEnv *env, jclass clazz, jmethodID methodID, ...);
     jint (JNICALL *CallStaticIntMethodV)
       (JNIEnv *env, jclass clazz, jmethodID methodID, va_list args);
-    jint (JNICALL *CallStaticIntMethodA)
+    jint (JNICALL *CallStaticIntMethodA)  // kind=78
       (JNIEnv *env, jclass clazz, jmethodID methodID, const jvalue *args);
 
     jlong (JNICALL *CallStaticLongMethod)
       (JNIEnv *env, jclass clazz, jmethodID methodID, ...);
     jlong (JNICALL *CallStaticLongMethodV)
       (JNIEnv *env, jclass clazz, jmethodID methodID, va_list args);
-    jlong (JNICALL *CallStaticLongMethodA)
+    jlong (JNICALL *CallStaticLongMethodA)  // kind=79
       (JNIEnv *env, jclass clazz, jmethodID methodID, const jvalue *args);
 
     jfloat (JNICALL *CallStaticFloatMethod)
       (JNIEnv *env, jclass clazz, jmethodID methodID, ...);
     jfloat (JNICALL *CallStaticFloatMethodV)
       (JNIEnv *env, jclass clazz, jmethodID methodID, va_list args);
-    jfloat (JNICALL *CallStaticFloatMethodA)
+    jfloat (JNICALL *CallStaticFloatMethodA)  // kind=80
       (JNIEnv *env, jclass clazz, jmethodID methodID, const jvalue *args);
 
     jdouble (JNICALL *CallStaticDoubleMethod)
       (JNIEnv *env, jclass clazz, jmethodID methodID, ...);
     jdouble (JNICALL *CallStaticDoubleMethodV)
       (JNIEnv *env, jclass clazz, jmethodID methodID, va_list args);
-    jdouble (JNICALL *CallStaticDoubleMethodA)
+    jdouble (JNICALL *CallStaticDoubleMethodA)  // kind=81
       (JNIEnv *env, jclass clazz, jmethodID methodID, const jvalue *args);
 
     void (JNICALL *CallStaticVoidMethod)
       (JNIEnv *env, jclass cls, jmethodID methodID, ...);
     void (JNICALL *CallStaticVoidMethodV)
       (JNIEnv *env, jclass cls, jmethodID methodID, va_list args);
-    void (JNICALL *CallStaticVoidMethodA)
+    void (JNICALL *CallStaticVoidMethodA)  // kind=82
       (JNIEnv *env, jclass cls, jmethodID methodID, const jvalue * args);
 
-    jfieldID (JNICALL *GetStaticFieldID)
+    jfieldID (JNICALL *GetStaticFieldID)  // kind=83
       (JNIEnv *env, jclass clazz, const char *name, const char *sig);
-    jobject (JNICALL *GetStaticObjectField)
+    jobject (JNICALL *GetStaticObjectField)  // kind=84
       (JNIEnv *env, jclass clazz, jfieldID fieldID);
-    jboolean (JNICALL *GetStaticBooleanField)
+    jboolean (JNICALL *GetStaticBooleanField)  // kind=85
       (JNIEnv *env, jclass clazz, jfieldID fieldID);
-    jbyte (JNICALL *GetStaticByteField)
+    jbyte (JNICALL *GetStaticByteField)  // kind=86
       (JNIEnv *env, jclass clazz, jfieldID fieldID);
-    jchar (JNICALL *GetStaticCharField)
+    jchar (JNICALL *GetStaticCharField)  // kind=87
       (JNIEnv *env, jclass clazz, jfieldID fieldID);
-    jshort (JNICALL *GetStaticShortField)
+    jshort (JNICALL *GetStaticShortField)  // kind=88
       (JNIEnv *env, jclass clazz, jfieldID fieldID);
-    jint (JNICALL *GetStaticIntField)
+    jint (JNICALL *GetStaticIntField)  // kind=89
       (JNIEnv *env, jclass clazz, jfieldID fieldID);
-    jlong (JNICALL *GetStaticLongField)
+    jlong (JNICALL *GetStaticLongField)  // kind=90
       (JNIEnv *env, jclass clazz, jfieldID fieldID);
-    jfloat (JNICALL *GetStaticFloatField)
+    jfloat (JNICALL *GetStaticFloatField)  // kind=91
       (JNIEnv *env, jclass clazz, jfieldID fieldID);
-    jdouble (JNICALL *GetStaticDoubleField)
+    jdouble (JNICALL *GetStaticDoubleField)  // kind=92
       (JNIEnv *env, jclass clazz, jfieldID fieldID);
 
-    void (JNICALL *SetStaticObjectField)
+    void (JNICALL *SetStaticObjectField)  // kind=93
       (JNIEnv *env, jclass clazz, jfieldID fieldID, jobject value);
-    void (JNICALL *SetStaticBooleanField)
+    void (JNICALL *SetStaticBooleanField)  // kind=94
       (JNIEnv *env, jclass clazz, jfieldID fieldID, jboolean value);
-    void (JNICALL *SetStaticByteField)
+    void (JNICALL *SetStaticByteField)  // kind=95
       (JNIEnv *env, jclass clazz, jfieldID fieldID, jbyte value);
-    void (JNICALL *SetStaticCharField)
+    void (JNICALL *SetStaticCharField)  // kind=96
       (JNIEnv *env, jclass clazz, jfieldID fieldID, jchar value);
-    void (JNICALL *SetStaticShortField)
+    void (JNICALL *SetStaticShortField)  // kind=97
       (JNIEnv *env, jclass clazz, jfieldID fieldID, jshort value);
-    void (JNICALL *SetStaticIntField)
+    void (JNICALL *SetStaticIntField)  // kind=98
       (JNIEnv *env, jclass clazz, jfieldID fieldID, jint value);
-    void (JNICALL *SetStaticLongField)
+    void (JNICALL *SetStaticLongField)  // kind=99
       (JNIEnv *env, jclass clazz, jfieldID fieldID, jlong value);
-    void (JNICALL *SetStaticFloatField)
+    void (JNICALL *SetStaticFloatField)  // kind=100
       (JNIEnv *env, jclass clazz, jfieldID fieldID, jfloat value);
-    void (JNICALL *SetStaticDoubleField)
+    void (JNICALL *SetStaticDoubleField)  // kind=101
       (JNIEnv *env, jclass clazz, jfieldID fieldID, jdouble value);
 
-    jstring (JNICALL *NewString)
+    jstring (JNICALL *NewString)  // kind=102
       (JNIEnv *env, const jchar *unicode, jsize len);
-    jsize (JNICALL *GetStringLength)
+    jsize (JNICALL *GetStringLength)  // kind=103
       (JNIEnv *env, jstring str);
-    const jchar *(JNICALL *GetStringChars)
+    const jchar *(JNICALL *GetStringChars)  // kind=104
       (JNIEnv *env, jstring str, jboolean *isCopy);
-    void (JNICALL *ReleaseStringChars)
+    void (JNICALL *ReleaseStringChars)  // kind=105
       (JNIEnv *env, jstring str, const jchar *chars);
 
-    jstring (JNICALL *NewStringUTF)
+    jstring (JNICALL *NewStringUTF)  // kind=106
       (JNIEnv *env, const char *utf);
-    jsize (JNICALL *GetStringUTFLength)
+    jsize (JNICALL *GetStringUTFLength)  // kind=107
       (JNIEnv *env, jstring str);
-    const char* (JNICALL *GetStringUTFChars)
+    const char* (JNICALL *GetStringUTFChars)  // kind=108
       (JNIEnv *env, jstring str, jboolean *isCopy);
-    void (JNICALL *ReleaseStringUTFChars)
+    void (JNICALL *ReleaseStringUTFChars)  // kind=109
       (JNIEnv *env, jstring str, const char* chars);
 
 
-    jsize (JNICALL *GetArrayLength)
+    jsize (JNICALL *GetArrayLength)  // kind=110
       (JNIEnv *env, jarray array);
 
-    jobjectArray (JNICALL *NewObjectArray)
+    jobjectArray (JNICALL *NewObjectArray)  // kind=111
       (JNIEnv *env, jsize len, jclass clazz, jobject init);
-    jobject (JNICALL *GetObjectArrayElement)
+    jobject (JNICALL *GetObjectArrayElement)  // kind=112
       (JNIEnv *env, jobjectArray array, jsize index);
-    void (JNICALL *SetObjectArrayElement)
+    void (JNICALL *SetObjectArrayElement)  // kind=113
       (JNIEnv *env, jobjectArray array, jsize index, jobject val);
 
-    jbooleanArray (JNICALL *NewBooleanArray)
+    jbooleanArray (JNICALL *NewBooleanArray)  // kind=114
       (JNIEnv *env, jsize len);
-    jbyteArray (JNICALL *NewByteArray)
+    jbyteArray (JNICALL *NewByteArray)  // kind=115
       (JNIEnv *env, jsize len);
-    jcharArray (JNICALL *NewCharArray)
+    jcharArray (JNICALL *NewCharArray)  // kind=116
       (JNIEnv *env, jsize len);
-    jshortArray (JNICALL *NewShortArray)
+    jshortArray (JNICALL *NewShortArray)  // kind=117
       (JNIEnv *env, jsize len);
-    jintArray (JNICALL *NewIntArray)
+    jintArray (JNICALL *NewIntArray)  // kind=118
       (JNIEnv *env, jsize len);
-    jlongArray (JNICALL *NewLongArray)
+    jlongArray (JNICALL *NewLongArray)  // kind=119
       (JNIEnv *env, jsize len);
-    jfloatArray (JNICALL *NewFloatArray)
+    jfloatArray (JNICALL *NewFloatArray)  // kind=120
       (JNIEnv *env, jsize len);
-    jdoubleArray (JNICALL *NewDoubleArray)
+    jdoubleArray (JNICALL *NewDoubleArray)  // kind=121
       (JNIEnv *env, jsize len);
 
-    jboolean * (JNICALL *GetBooleanArrayElements)
+    jboolean * (JNICALL *GetBooleanArrayElements)  // kind=122
       (JNIEnv *env, jbooleanArray array, jboolean *isCopy);
-    jbyte * (JNICALL *GetByteArrayElements)
+    jbyte * (JNICALL *GetByteArrayElements)  // kind=123
       (JNIEnv *env, jbyteArray array, jboolean *isCopy);
-    jchar * (JNICALL *GetCharArrayElements)
+    jchar * (JNICALL *GetCharArrayElements)  // kind=124
       (JNIEnv *env, jcharArray array, jboolean *isCopy);
-    jshort * (JNICALL *GetShortArrayElements)
+    jshort * (JNICALL *GetShortArrayElements)  // kind=125
       (JNIEnv *env, jshortArray array, jboolean *isCopy);
-    jint * (JNICALL *GetIntArrayElements)
+    jint * (JNICALL *GetIntArrayElements)  // kind=126
       (JNIEnv *env, jintArray array, jboolean *isCopy);
-    jlong * (JNICALL *GetLongArrayElements)
+    jlong * (JNICALL *GetLongArrayElements)  // kind=127
       (JNIEnv *env, jlongArray array, jboolean *isCopy);
-    jfloat * (JNICALL *GetFloatArrayElements)
+    jfloat * (JNICALL *GetFloatArrayElements)  // kind=128
       (JNIEnv *env, jfloatArray array, jboolean *isCopy);
-    jdouble * (JNICALL *GetDoubleArrayElements)
+    jdouble * (JNICALL *GetDoubleArrayElements)  // kind=129
       (JNIEnv *env, jdoubleArray array, jboolean *isCopy);
 
-    void (JNICALL *ReleaseBooleanArrayElements)
+    void (JNICALL *ReleaseBooleanArrayElements)  // kind=130
       (JNIEnv *env, jbooleanArray array, jboolean *elems, jint mode);
-    void (JNICALL *ReleaseByteArrayElements)
+    void (JNICALL *ReleaseByteArrayElements)  // kind=131
       (JNIEnv *env, jbyteArray array, jbyte *elems, jint mode);
-    void (JNICALL *ReleaseCharArrayElements)
+    void (JNICALL *ReleaseCharArrayElements)  // kind=132
       (JNIEnv *env, jcharArray array, jchar *elems, jint mode);
-    void (JNICALL *ReleaseShortArrayElements)
+    void (JNICALL *ReleaseShortArrayElements)  // kind=133
       (JNIEnv *env, jshortArray array, jshort *elems, jint mode);
-    void (JNICALL *ReleaseIntArrayElements)
+    void (JNICALL *ReleaseIntArrayElements)  // kind=134
       (JNIEnv *env, jintArray array, jint *elems, jint mode);
-    void (JNICALL *ReleaseLongArrayElements)
+    void (JNICALL *ReleaseLongArrayElements)  // kind=135
       (JNIEnv *env, jlongArray array, jlong *elems, jint mode);
-    void (JNICALL *ReleaseFloatArrayElements)
+    void (JNICALL *ReleaseFloatArrayElements)  // kind=136
       (JNIEnv *env, jfloatArray array, jfloat *elems, jint mode);
-    void (JNICALL *ReleaseDoubleArrayElements)
+    void (JNICALL *ReleaseDoubleArrayElements)  // kind=137
       (JNIEnv *env, jdoubleArray array, jdouble *elems, jint mode);
 
-    void (JNICALL *GetBooleanArrayRegion)
+    void (JNICALL *GetBooleanArrayRegion)  // kind=138
       (JNIEnv *env, jbooleanArray array, jsize start, jsize l, jboolean *buf);
-    void (JNICALL *GetByteArrayRegion)
+    void (JNICALL *GetByteArrayRegion)  // kind=139
       (JNIEnv *env, jbyteArray array, jsize start, jsize len, jbyte *buf);
-    void (JNICALL *GetCharArrayRegion)
+    void (JNICALL *GetCharArrayRegion)  // kind=140
       (JNIEnv *env, jcharArray array, jsize start, jsize len, jchar *buf);
-    void (JNICALL *GetShortArrayRegion)
+    void (JNICALL *GetShortArrayRegion)  // kind=141
       (JNIEnv *env, jshortArray array, jsize start, jsize len, jshort *buf);
-    void (JNICALL *GetIntArrayRegion)
+    void (JNICALL *GetIntArrayRegion)  // kind=142
       (JNIEnv *env, jintArray array, jsize start, jsize len, jint *buf);
-    void (JNICALL *GetLongArrayRegion)
+    void (JNICALL *GetLongArrayRegion)  // kind=143
       (JNIEnv *env, jlongArray array, jsize start, jsize len, jlong *buf);
-    void (JNICALL *GetFloatArrayRegion)
+    void (JNICALL *GetFloatArrayRegion)  // kind=144
       (JNIEnv *env, jfloatArray array, jsize start, jsize len, jfloat *buf);
-    void (JNICALL *GetDoubleArrayRegion)
+    void (JNICALL *GetDoubleArrayRegion)  // kind=145
       (JNIEnv *env, jdoubleArray array, jsize start, jsize len, jdouble *buf);
 
-    void (JNICALL *SetBooleanArrayRegion)
+    void (JNICALL *SetBooleanArrayRegion)  // kind=146
       (JNIEnv *env, jbooleanArray array, jsize start, jsize l, const jboolean *buf);
-    void (JNICALL *SetByteArrayRegion)
+    void (JNICALL *SetByteArrayRegion)  // kind=147
       (JNIEnv *env, jbyteArray array, jsize start, jsize len, const jbyte *buf);
-    void (JNICALL *SetCharArrayRegion)
+    void (JNICALL *SetCharArrayRegion)  // kind=148
       (JNIEnv *env, jcharArray array, jsize start, jsize len, const jchar *buf);
-    void (JNICALL *SetShortArrayRegion)
+    void (JNICALL *SetShortArrayRegion)  // kind=149
       (JNIEnv *env, jshortArray array, jsize start, jsize len, const jshort *buf);
-    void (JNICALL *SetIntArrayRegion)
+    void (JNICALL *SetIntArrayRegion)  // kind=150
       (JNIEnv *env, jintArray array, jsize start, jsize len, const jint *buf);
-    void (JNICALL *SetLongArrayRegion)
+    void (JNICALL *SetLongArrayRegion)  // kind=151
       (JNIEnv *env, jlongArray array, jsize start, jsize len, const jlong *buf);
-    void (JNICALL *SetFloatArrayRegion)
+    void (JNICALL *SetFloatArrayRegion)  // kind=152
       (JNIEnv *env, jfloatArray array, jsize start, jsize len, const jfloat *buf);
-    void (JNICALL *SetDoubleArrayRegion)
+    void (JNICALL *SetDoubleArrayRegion)  // kind=153
       (JNIEnv *env, jdoubleArray array, jsize start, jsize len, const jdouble *buf);
 
-    jint (JNICALL *RegisterNatives)
+    jint (JNICALL *RegisterNatives)  // kind=154
       (JNIEnv *env, jclass clazz, const JNINativeMethod *methods,
        jint nMethods);
-    jint (JNICALL *UnregisterNatives)
+    jint (JNICALL *UnregisterNatives)  // kind=155
       (JNIEnv *env, jclass clazz);
 
-    jint (JNICALL *MonitorEnter)
+    jint (JNICALL *MonitorEnter)  // kind=156
       (JNIEnv *env, jobject obj);
-    jint (JNICALL *MonitorExit)
+    jint (JNICALL *MonitorExit)  // kind=157
       (JNIEnv *env, jobject obj);
 
-    jint (JNICALL *GetJavaVM)
+    jint (JNICALL *GetJavaVM)  // kind=158
       (JNIEnv *env, JavaVM **vm);
 
-    void (JNICALL *GetStringRegion)
+    void (JNICALL *GetStringRegion)  // kind=159
       (JNIEnv *env, jstring str, jsize start, jsize len, jchar *buf);
-    void (JNICALL *GetStringUTFRegion)
+    void (JNICALL *GetStringUTFRegion)  // kind=160
       (JNIEnv *env, jstring str, jsize start, jsize len, char *buf);
 
-    void * (JNICALL *GetPrimitiveArrayCritical)
+    void * (JNICALL *GetPrimitiveArrayCritical)  // kind=161
       (JNIEnv *env, jarray array, jboolean *isCopy);
-    void (JNICALL *ReleasePrimitiveArrayCritical)
+    void (JNICALL *ReleasePrimitiveArrayCritical)  // kind=162
       (JNIEnv *env, jarray array, void *carray, jint mode);
 
-    const jchar * (JNICALL *GetStringCritical)
+    const jchar * (JNICALL *GetStringCritical)  // kind=163
       (JNIEnv *env, jstring string, jboolean *isCopy);
-    void (JNICALL *ReleaseStringCritical)
+    void (JNICALL *ReleaseStringCritical)  // kind=164
       (JNIEnv *env, jstring string, const jchar *cstring);
 
-    jweak (JNICALL *NewWeakGlobalRef)
+    jweak (JNICALL *NewWeakGlobalRef)  // kind=165
        (JNIEnv *env, jobject obj);
-    void (JNICALL *DeleteWeakGlobalRef)
+    void (JNICALL *DeleteWeakGlobalRef)  // kind=166
        (JNIEnv *env, jweak ref);
 
-    jboolean (JNICALL *ExceptionCheck)
+    jboolean (JNICALL *ExceptionCheck)  // kind=167
        (JNIEnv *env);
 
-    jobject (JNICALL *NewDirectByteBuffer)
+    jobject (JNICALL *NewDirectByteBuffer)  // kind=168
        (JNIEnv* env, void* address, jlong capacity);
-    void* (JNICALL *GetDirectBufferAddress)
+    void* (JNICALL *GetDirectBufferAddress)  // kind=169
        (JNIEnv* env, jobject buf);
-    jlong (JNICALL *GetDirectBufferCapacity)
+    jlong (JNICALL *GetDirectBufferCapacity)  // kind=170
        (JNIEnv* env, jobject buf);
 
     /* New JNI 1.6 Features */
 
-    jobjectRefType (JNICALL *GetObjectRefType)
+    jobjectRefType (JNICALL *GetObjectRefType)  // kind=171
         (JNIEnv* env, jobject obj);
 
     /* Module Features */
 
-    jobject (JNICALL *GetModule)
+    jobject (JNICALL *GetModule)  // kind=172
        (JNIEnv* env, jclass clazz);
 
     /* Virtual threads */
 
-    jboolean (JNICALL *IsVirtualThread)
+    jboolean (JNICALL *IsVirtualThread)  // kind=173
        (JNIEnv* env, jobject obj);
 };
 
