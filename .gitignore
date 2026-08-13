@@ -3,4 +3,7 @@ generated
 
 *.exe
 *.dll
+
+*.so
 *.o
+*.o.d

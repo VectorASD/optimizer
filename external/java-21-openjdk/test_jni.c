@@ -103,8 +103,16 @@ destroy:
 }
 
 /*
-DVM: clang -I./include -o test_jni test_jni.c /system/lib64/libandroid_runtime.so
-JVM: clang -I./include -o test_jni test_jni.c $JAVA_HOME/lib/server/libjvm.so -Wl,-rpath,$JAVA_HOME/lib/server
+DVM (ART):
+    clang -I./include -o test_jni test_jni.c /system/lib64/libandroid_runtime.so
+    Но termux использует в "termux.c" технику fork+exec, что и теряет Android-контекст
+JVM:
+    pkg install openjdk-21 -y
+    exit  # Переменная JAVA_HOME сама применится в новой интерактивной сессии
+    clang -I./include -o test_jni test_jni.c $JAVA_HOME/lib/server/libjvm.so -Wl,-rpath,$JAVA_HOME/lib/server
+NDK:
+    pkg install ndk-multilib  # видимо здесь ставится clang?
+    ndk-build  # в нужной директории, где есть поддиректория "jni"
 */
 
 // for lib in /system/lib64/*.so /system/lib/*.so; do     readelf -Ws "$lib" 2>/dev/null | grep -E "JNI_GetCreatedJavaVMs" && echo "  $lib"; done
@@ -121,9 +129,4 @@ JVM: clang -I./include -o test_jni test_jni.c $JAVA_HOME/lib/server/libjvm.so -W
 Вывод:
 точка входа в DVM - это /system/lib64/libandroid_runtime.so
 а 32-ух битная версия только на случай отсутствия lib64.
-
-Вывод2:
-эта штука полностью неиспользуемая в termux :/
-зато тот же функционал полностью работает из libjvm.so
-установленного из termux-пакета java-21-openjdk
 */

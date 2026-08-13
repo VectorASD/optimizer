@@ -1,0 +1,9 @@
+pkg update && pkg upgrade
+pkg install ndk-multilib
+
+pkg list-installed
+clang --version  # 21.1.8
+ndk-build --version  # GNU Make 4.3.90
+cat $PREFIX/opt/android-ndk/source.properties | grep "Pkg.Revision"  # Pkg.Revision = 27.1.12297006
+
+ndk-build  # in current dir
