@@ -101,7 +101,8 @@ bool handle_command(int fd, ClientCtx *ctx) {
         case 1:
             error = JNI_GetCreatedJavaVMs(ctx->vm_arr, 16, &ctx->vm_count);
             write_sleb128(fd, error);
-            write_uleb128(fd, ctx->vm_count);
+            if (error == JNI_OK)
+                write_uleb128(fd, ctx->vm_count);
             break;
         case 2: {
             uint8_t index = read_byte(fd, &eos);
@@ -123,8 +124,8 @@ bool handle_command(int fd, ClientCtx *ctx) {
         case 4:
             if (ctx->vm) {
                 error = (*ctx->vm)->DetachCurrentThread(ctx->vm);
-                if (ctx->own_vm)
-                    (*ctx->vm)->DestroyJavaVM(ctx->vm);
+                // if (ctx->own_vm)
+                //     (*ctx->vm)->DestroyJavaVM(ctx->vm);
                 ctx->vm = NULL;
                 ctx->own_vm = false;
             }
@@ -157,8 +158,17 @@ void* handle_client_thread(void* arg) {
             break;
 
     JavaVM* vm = ctx.vm;
-    if (vm && ctx.own_vm)
-        (*vm)->DestroyJavaVM(vm);
+    if (vm) {
+        jint err = (*vm)->DetachCurrentThread(vm);
+        printf("detach error code: %d\n", err);
+        /*if (ctx.own_vm) {
+            err = (*vm)->DestroyJavaVM(vm);
+            printf("destroy error code: %d\n", err);
+        }*/
+        // БАГ openjdk: нельзя создать вторую VM, даже если первая была разнесена в щепки!
+        // Зато это фиксит противоречение, что и создать VM нельзя, и список VM пустой!
+        // Т.е. получаем при создании VM ошибку "VM уже создана", а список VM говорит совершенно противоположное!
+    }
 
     close(client_fd);
     return NULL;
