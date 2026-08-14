@@ -12,6 +12,38 @@ typedef int bool;
 #define true 1
 #define false 0
 
+size_t to_shorty(const char *src, char *dst) {
+    size_t src_pos = 0, dst_pos = 0;
+    bool is_arr = false;
+    while (true) {
+        const char letter = src[src_pos++];
+        switch (letter) {
+        case 0: case ')':
+            dst[dst_pos++] = 0;
+            return dst_pos;
+        case '[':
+            is_arr = true;
+            break;
+        case 'L':
+            while (src[src_pos] != ';' && src[src_pos] != 0 && src[src_pos] != ')')
+                src_pos++;
+            if (src[src_pos] == ';')
+                src_pos++;
+            dst[dst_pos++] = 'L';
+            is_arr = false;
+            break;
+        case 'Z': case 'B': case 'C': case 'S':
+        case 'I': case 'J': case 'F': case 'D':
+            if (is_arr) {
+                dst[dst_pos++] = 'L';
+                is_arr = false;
+            } else
+                dst[dst_pos++] = letter;
+            break;
+        }
+    }
+}
+
 
 uint8_t read_byte(int fd, bool *eos) {
     uint8_t byte;
@@ -91,42 +123,42 @@ void read_args(int fd, bool *eos, const char *sig, jvalue *result) {
         switch (letter) {
         case 0:
             return;
-        case 'z':
+        case 'Z':
             if (read(fd, &byte, 1) <= 0) { *eos = true; return; }
             result[pos] = (jvalue)(jboolean) (byte != 0);
             break;
-        case 'b':
+        case 'B':
             if (read(fd, &byte, 1) <= 0) { *eos = true; return; }
             result[pos] = (jvalue)(jbyte) byte;
             break;
-        case 'c':
+        case 'C':
             if (read(fd, &byte, 1) <= 0) { *eos = true; return; }
             result[pos] = (jvalue)(jchar) byte;
             break;
-        case 's':
+        case 'S':
             number = read_sleb128(fd, eos);
             if (*eos) return;
             result[pos] = (jvalue)(jshort) number;
             break;
-        case 'i':
+        case 'I':
             number = read_sleb128(fd, eos);
             if (*eos) return;
             result[pos] = (jvalue)(jint) number;
             break;
-        case 'j':
+        case 'J':
             long_v = read_sleb128L(fd, eos);
             if (*eos) return;
             result[pos] = (jvalue) long_v;
             break;
-        case 'f':
+        case 'F':
             if (read(fd, &float_v, 4) <= 0) { *eos = true; return; }
             result[pos] = (jvalue) float_v;
             break;
-        case 'd':
+        case 'D':
             if (read(fd, &double_v, 8) <= 0) { *eos = true; return; }
             result[pos] = (jvalue) double_v;
             break;
-        case 'l':
+        case 'L':
             object_v = (jobject) read_ptr(fd, eos);
             if (*eos) return;
             result[pos] = (jvalue) object_v;
@@ -176,6 +208,22 @@ typedef struct ClientCtx {
     char *buffer;
     jvalue *args_buffer;
 } ClientCtx;
+
+typedef struct jmethod {
+    jmethodID ID;
+    char shorty[];  // flexible array member
+} jmethod;
+
+jmethod* jmethod_init(jmethodID id, const char *shorty, size_t shorty_size, bool *eos) {
+    jmethod *method = (jmethod*) malloc(sizeof(jmethod) + shorty_size);
+    if (method == NULL) {
+        perror("jmethod malloc");
+        *eos = true; return NULL;
+    }
+    method->ID = id;
+    memcpy(method->shorty, shorty, shorty_size);
+    return method;
+}
 
 
 bool check_exception(int fd, JNIEnv* env) {
@@ -231,7 +279,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
     jvalue *args_buffer = ctx->args_buffer;
 
     jclass class;
-    jmethodID method;
+    jmethod *method;
     jobject object;
 
     switch (kind) {
@@ -299,32 +347,34 @@ bool handle_command(int fd, ClientCtx *ctx) {
         case 29:
             class = (jclass) read_ptr(fd, &eos);
             if (eos) return eos;
-            method = (jmethodID) read_ptr(fd, &eos);
+            method = (jmethod*) read_ptr(fd, &eos);
             if (eos) return eos;
-            read_str(fd, &eos, buffer);
-            if (eos) return eos;
-            read_args(fd, &eos, buffer, args_buffer);
+            read_args(fd, &eos, method->shorty, args_buffer);
             if (eos) return eos;
 
-            object = (*env)->NewObjectA(env, class, method, args_buffer);
+            object = (*env)->NewObjectA(env, class, method->ID, args_buffer);
             if (!check_exception(fd, env))
                 write_ptr(fd, object);
             break;
 
         // 30..31
 
-        case 32:
+        case 32: {
             class = (jclass) read_ptr(fd, &eos);
             if (eos) return eos;
             buffer2 = read_str(fd, &eos, buffer);
             if (eos) return eos;
-            read_str(fd, &eos, buffer2);
+            char *shorty = read_str(fd, &eos, buffer2);
             if (eos) return eos;
 
-            method = (*env)->GetMethodID(env, class, buffer, buffer2);
+            size_t shorty_size = to_shorty(buffer2, shorty);
+            jmethodID method_id = (*env)->GetMethodID(env, class, buffer, buffer2);
+            method = jmethod_init(method_id, shorty, shorty_size, &eos);
+            if (eos) return eos;
+
             if (!check_exception(fd, env))
                 write_ptr(fd, method);
-            break;
+            break; }
 
         // 33..105
 

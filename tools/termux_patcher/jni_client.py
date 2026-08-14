@@ -2,6 +2,7 @@ import socket
 from struct import pack, unpack, calcsize
 from threading import Lock
 from functools import wraps, cache
+import re
 
 
 def synchronized(func, /):
@@ -10,6 +11,12 @@ def synchronized(func, /):
         with self._lock:
             return func(self, *a, **kw)
     return wrapper
+
+shorty_sub = re.compile(r"\[*L[\w/$]+;|\[+[ZBCSIJFD]").sub
+def to_shorty(sig: str, /) -> str:
+    return shorty_sub('L', sig)
+assert to_shorty("ZBCS[[IIZ[Legg;ZLbeef;IJFD") == "ZBCSLIZLZLIJFD"
+assert to_shorty("[[Landroid/os/Build$VERSION;") == "L"
 
 
 def read_byte(read, /) -> int:
@@ -185,12 +192,15 @@ class jclass:
         return f"<jclass {self.name}>"
 
 class jmethod:
-    def __init__(self, name, sig, inst):
+    def __init__(self, name, args, ret_t, inst):
         self.name = name
-        self.sig = sig
+        self.args = args
+        self.ret_t = ret_t
         self.inst = inst
+        self.shorty = to_shorty(args)
+      # print(args, "->", self.shorty)
     def __repr__(self):
-        return f"<jmethod {self.name}{self.sig}>"
+        return f"<jmethod {self.name}({self.args}){self.ret_t}>"
 
 class jobject:
     def __init__(self, jni, inst):
@@ -309,24 +319,23 @@ class JNIClient:
     # 8..28
 
     @synchronized
-    def NewObject(self, clazz: jclass, ctor: jmethod, sig: str, *args) -> jobject:
+    def NewObject(self, clazz: jclass, ctor: jmethod, *args) -> jobject:
         write = self._write
         write_byte(write, 29)
         write_ptr(write, clazz.inst)
         write_ptr(write, ctor.inst)
-        write_str(write, sig.lower())  # TODO: автоматизировать через jmethod
-        write_args(write, sig, args)
+        write_args(write, ctor.shorty, args)
         self._flush()
  
+        self._check_exception()
         return jobject(self, read_ptr(self._read))
 
     # 30..31
 
-    def GetMethodID(self, clazz: jclass, name: str, args: tuple[jclass|str, ...], return_t: jclass|str) -> jmethod:
-        args = [arg.name if isinstance(arg, jclass) else str(arg) for arg in args]
-        if isinstance(return_t, jclass):
-            return_t = return_t.name
-        sig = f"({''.join(args)}){return_t}"
+    def GetMethodID(self, clazz: jclass, name: str, args: tuple[jclass|str, ...], ret_t: jclass|str) -> jmethod:
+        args = "".join(arg.name if isinstance(arg, jclass) else str(arg) for arg in args)
+        if isinstance(ret_t, jclass):
+            ret_t = ret_t.name
 
         # не весь метод пустил под @synchronized,
         # т.к. здесь не только коммуникация
@@ -335,12 +344,12 @@ class JNIClient:
             write_byte(write, 32)
             write_ptr(write, clazz.inst)
             write_str(write, name)
-            write_str(write, sig)
+            write_str(write, f"({args}){ret_t}")
             self._flush()
 
             self._check_exception()
             inst = read_ptr(self._read)
-        return jmethod(name, sig, inst)
+        return jmethod(name, args, ret_t, inst)
 
     # 33..105
 
@@ -355,7 +364,6 @@ class JNIClient:
         return jstring(self, read_ptr(self._read))
 
 
-
 if __name__ == "__main__":
     jni = JNIClient()
     jni.CreateOrReuseVM()
@@ -367,7 +375,11 @@ if __name__ == "__main__":
     bigint_modPow = jni.GetMethodID(bigint, "modPow", (bigint, bigint), bigint)
     print("method:", bigint_ctor)
     print("method:", bigint_modPow)
-    str_v = jni.NewStringUTF("12345")
-    print("string:", str_v)
-    bigint_v = jni.NewObject(bigint, bigint_ctor, "L", str_v)
-    print("bigint_v:", bigint_v)
+    numbers = []
+    for num in (123456789, 3, 1000000007):
+        str_v = jni.NewStringUTF(str(num))
+        bigint_v = jni.NewObject(bigint, bigint_ctor, str_v)
+        print("string:", str_v)
+        print("bigint_v:", bigint_v)
+        numbers.append(bigint_v)
+    base, exp, mod = numbers
