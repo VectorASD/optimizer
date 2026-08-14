@@ -1,24 +1,34 @@
 import socket
 from struct import pack, unpack, calcsize
+from threading import Lock
+from functools import wraps
 
 
-def read_byte(read) -> int:
+def synchronized(func, /):
+    @wraps(func)
+    def wrapper(self, *a, **kw):
+        with self._lock:
+            return func(self, *a, **kw)
+    return wrapper
+
+
+def read_byte(read, /) -> int:
     try: return read(1)[0]
     except Exception:
         raise EOFError("Unexpected end of stream") from None
 
-def read_int(read) -> int:
+def read_int(read, /) -> int:
     try: return unpack("=i", read(4))[0]
     except Exception:
         raise EOFError("Unexpected end of stream") from None
 
 ptr_size = calcsize('P')
-def read_ptr(read) -> int:
+def read_ptr(read, /) -> int:
     try: return unpack('P', read(ptr_size))[0]
     except Exception as e:
         raise EOFError("Unexpected end of stream") from None
 
-def read_uleb128(read) -> int:
+def read_uleb128(read, /) -> int:
     result = shift = 0
     while True:
         try: byte = read(1)[0]
@@ -30,11 +40,11 @@ def read_uleb128(read) -> int:
         shift += 7
     return result
 
-def read_sleb128(read) -> int:
+def read_sleb128(read, /) -> int:
     u = read_uleb128(read)
     return (u >> 1) ^ -(u & 1)
 
-def read_str(read) -> str:
+def read_str(read, /) -> str:
     size = read_uleb128(read)
     data = read(size)
     if len(data) != size:
@@ -43,16 +53,16 @@ def read_str(read) -> str:
 
 
 int2byte = tuple(bytes((i,)) for i in range(256))
-def write_byte(write, val: int) -> None:
+def write_byte(write, val: int, /) -> None:
     write(int2byte[val])
 
-def write_int(write, val: int) -> None:
+def write_int(write, val: int, /) -> None:
     write(pack("=i", val))
 
-def write_ptr(write, val: int) -> None:
-    write(pack("=P", val))
+def write_ptr(write, val: int, /) -> None:
+    write(pack('P', val))
 
-def write_uleb128(write, val: int) -> None:
+def write_uleb128(write, val: int, /) -> None:
     assert val >= 0
     if val < 0x80:
         write(int2byte[val])
@@ -62,14 +72,38 @@ def write_uleb128(write, val: int) -> None:
         val >>= 7
         write(int2byte[byte | 0x80 if val else byte])
 
-def write_sleb128(write, val: int) -> None:
+def write_sleb128(write, val: int, /) -> None:
     u = (val << 1) ^ (val >> 31) & 0xffffffff
     write_uleb128(write, u)
 
-def write_str(write, val: str) -> None:
+def write_sleb128L(write, val: int, /) -> None:
+    u = (val << 1) ^ (val >> 63) & 0xffffffffffffffff
+    write_uleb128(write, u)
+
+def write_str(write, val: str, /) -> None:
     data = val.encode("utf-8")
     write_uleb128(write, len(data))
     write(data)
+
+# знаю про shorty ещё с сентября 2019 года, т.к. пилил весь месяц (свой отпуск) DexReader до финальной
+# но shorty понадобился только сейчас: август 2026 года :)
+args_dispatch = [None] * 128  # ascii
+args_dispatch[ord('z')] = lambda write, val, /: write(int2byte[bool(val)])
+args_dispatch[ord('b')] = lambda write, val, /: write(int2byte[int(val)])
+args_dispatch[ord('c')] = lambda write, val, /: write(int2byte[int(val)])
+args_dispatch[ord('s')] = write_sleb128
+args_dispatch[ord('i')] = write_sleb128
+args_dispatch[ord('j')] = write_sleb128L
+args_dispatch[ord('f')] = lambda write, val, /: write(pack("=f", val))
+args_dispatch[ord('d')] = lambda write, val, /: write(pack("=d", val))
+args_dispatch[ord('l')] = lambda write, val, /: write(pack('P', val.inst))
+# TODO: наталкивает на идею:
+# генерировать под каждый shorty свою pack-структуру или даже функцию
+
+def write_args(write, shorty, args, /):
+    assert len(shorty) == len(args)
+    for letter, arg in zip(shorty, args):
+        args_dispatch[ord(letter)](write, arg)
 
 
 class JNIError(Exception):
@@ -96,61 +130,100 @@ class JavaError(Exception):
     pass
 
 
+class jclass:
+    def __init__(self, name, inst):
+        self.name = f"L{name};"
+        self.inst = inst
+
+    def __repr__(self):
+        return f"<jclass {self.name}>"
+
+class jmethod:
+    def __init__(self, name, sig, inst):
+        self.name = name
+        self.sig = sig
+        self.inst = inst
+    def __repr__(self):
+        return f"<jmethod {self.name}{self.sig}>"
+
+class jobject:
+    def __init__(self, jni, inst):
+        self.jni = jni
+        self.inst = inst
+
+    def __repr__(self):
+        return f"<jobject at {hex(self.inst)}>"
+
+    # TODO: __del__
+
+class jstring(jobject):
+    def __repr__(self):
+        return f"<jstring at {hex(self.inst)}>"
+
+    # TODO: __del__
+
+
 class JNIClient:
     def __init__(self):
+        self._lock = Lock()
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.connect("/data/data/com.termux/files/usr/tmp/jni.sock")
         file = sock.makefile("rwb")
-        self.sock = sock
-        self.read = file.read
-        self.write = file.write
-        self.flush = file.flush
-        self.close = file.close
+        self._read = file.read
+        self._write = file.write
+        self._flush = file.flush
+        self._close = file.close
+        self._sock_close = sock.close
 
     def __del__(self):
-        self.close()
-        self.sock.close()
+        self._close()
+        self._sock_close()
 
-    def check_error(self):
-        error = read_sleb128(self.read)
+    def _check_error(self):
+        error = read_sleb128(self._read)
         if error:
             raise JNIError(error)
 
-    def check_exception(self):
-        message = read_str(self.read)
+    def _check_exception(self):
+        message = read_str(self._read)
         if message:
             raise JavaError(message)
 
     # VM methods
 
+    @synchronized
     def CreateJavaVM(self) -> None:
-        write_byte(self.write, 0)
-        self.flush()
-        self.check_error()
+        write_byte(self._write, 0)
+        self._flush()
+        self._check_error()
 
+    @synchronized
     def GetCreatedJavaVMs(self) -> None:
-        write_byte(self.write, 1)
-        self.flush()
-        self.check_error()
+        write_byte(self._write, 1)
+        self._flush()
+        self._check_error()
 
-        vm_count = read_uleb128(self.read)
+        vm_count = read_uleb128(self._read)
         return vm_count
 
+    @synchronized
     def SelectVM(self, index: int) -> None:
-        write_byte(self.write, 2)
-        write_byte(self.write, index)
-        self.flush()
-        self.check_error()
+        write_byte(self._write, 2)
+        write_byte(self._write, index)
+        self._flush()
+        self._check_error()
 
+    @synchronized
     def AttachCurrentThread(self) -> None:
-        write_byte(self.write, 3)
-        self.flush()
-        self.check_error()
+        write_byte(self._write, 3)
+        self._flush()
+        self._check_error()
 
+    @synchronized
     def DetachCurrentThread(self) -> None:
-        write_byte(self.write, 4)
-        self.flush()
-        self.check_error()
+        write_byte(self._write, 4)
+        self._flush()
+        self._check_error()
 
     # VM helper
 
@@ -165,26 +238,77 @@ class JNIClient:
 
     # native methods
 
+    @synchronized
     def GetVersion(self) -> tuple[int, int]:
-        write_byte(self.write, 5)
-        self.flush()
+        write_byte(self._write, 5)
+        self._flush()
 
-        read = self.read
+        read = self._read
         major = read_uleb128(read)
         minor = read_uleb128(read)
         return major, minor
 
     # TODO: DefineClass (kind=6)
 
-    def FindClass(self, class_name: str) -> int:
-        write = self.write
+    @synchronized
+    def FindClass(self, class_name: str) -> jclass:
+        write = self._write
         write_byte(write, 7)
         write_str(write, class_name)
-        self.flush()
+        self._flush()
 
-        self.check_exception()
-        jclass = read_ptr(self.read)
-        return jclass
+        self._check_exception()
+        return jclass(class_name, read_ptr(self._read))
+
+    # 8..28
+
+    @synchronized
+    def NewObject(self, clazz: jclass, ctor: jmethod, sig: str, *args) -> jobject:
+        write = self._write
+        write_byte(write, 29)
+        write_ptr(write, clazz.inst)
+        write_ptr(write, ctor.inst)
+        sig = sig.lower()
+        write_str(write, sig)  # TODO: автоматизировать через jmethod
+        write_args(write, sig, args)
+        self._flush()
+ 
+        return jobject(self, read_ptr(self._read))
+
+    # 30..31
+
+    def GetMethodID(self, clazz: jclass, name: str, args: tuple[jclass|str, ...], return_t: jclass|str) -> jmethod:
+        args = [arg.name if isinstance(arg, jclass) else str(arg) for arg in args]
+        if isinstance(return_t, jclass):
+            return_t = return_t.name
+        sig = f"({''.join(args)}){return_t}"
+
+        # не весь метод пустил под @synchronized,
+        # т.к. здесь не только коммуникация
+        write = self._write
+        with self._lock:
+            write_byte(write, 32)
+            write_ptr(write, clazz.inst)
+            write_str(write, name)
+            write_str(write, sig)
+            self._flush()
+
+            self._check_exception()
+            inst = read_ptr(self._read)
+        return jmethod(name, sig, inst)
+
+    # 33..105
+
+    @synchronized
+    def NewStringUTF(self, text: str) -> jstring:
+        write = self._write
+        write_byte(write, 106)
+        write_str(write, text)
+        self._flush()
+
+        self._check_exception()
+        return jstring(self, read_ptr(self._read))
+
 
 
 if __name__ == "__main__":
@@ -192,5 +316,13 @@ if __name__ == "__main__":
     jni.CreateOrReuseVM()
     print("version:", ".".join(map(str, jni.GetVersion())))
     bigint = jni.FindClass("java/math/BigInteger")
-    # JavaError: java.lang.NoClassDefFoundError: java/math/BigIntegerr  (РАБОТАЕТ!!!)
-    print("bigint:", hex(bigint))
+    string = jni.FindClass("java/lang/String")
+    print("bigint:", bigint)
+    bigint_ctor = jni.GetMethodID(bigint, "<init>", (string,), 'V')
+    bigint_modPow = jni.GetMethodID(bigint, "modPow", (bigint, bigint), bigint)
+    print("method:", bigint_ctor)
+    print("method:", bigint_modPow)
+    str_v = jni.NewStringUTF("12345")
+    print("string:", str_v)
+    bigint_v = jni.NewObject(bigint, bigint_ctor, "L".lower(), str_v)
+    print("bigint_v:", bigint_v)

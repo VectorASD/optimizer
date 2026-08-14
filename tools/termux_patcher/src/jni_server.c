@@ -44,11 +44,28 @@ int read_uleb128(int fd, bool *eos) {
     } while (byte & 0x80);
     return number;
 }
+jlong read_uleb128L(int fd, bool *eos) {
+    jlong number = 0, shift = 0;
+    uint8_t byte = 0;
+    do {
+        if (read(fd, &byte, 1) <= 0) {
+            *eos = true;
+            break;
+        }
+        number |= (byte & 0x7f) << shift;
+        shift += 7;
+    } while (byte & 0x80);
+    return number;
+}
 int read_sleb128(int fd, bool *eos) {
     int number = read_uleb128(fd, eos);
     return (number >> 1) ^ (number & 1 ? -1 : 0);  // zigzag
 }
-char* read_str(int fd, bool *eos, char* buffer) {
+jlong read_sleb128L(int fd, bool *eos) {
+    jlong number = read_uleb128L(fd, eos);
+    return (number >> 1) ^ (number & 1 ? -1 : 0);  // zigzag
+}
+char* read_str(int fd, bool *eos, char *buffer) {
     int size = read_uleb128(fd, eos);
     if (*eos)
         return NULL;
@@ -58,6 +75,65 @@ char* read_str(int fd, bool *eos, char* buffer) {
     }
     buffer[size] = 0;
     return buffer + (size + 1);  // next buffer
+}
+void read_args(int fd, bool *eos, const char *sig, jvalue *result) {
+    int pos = 0;
+    uint8_t byte;
+    int number;
+
+    jlong long_v;
+    jfloat float_v;
+    jdouble double_v;
+    jobject object_v;
+
+    while (1) {
+        const char letter = sig[pos];
+        switch (letter) {
+        case 0:
+            return;
+        case 'z':
+            if (read(fd, &byte, 1) <= 0) { *eos = true; return; }
+            result[pos] = (jvalue)(jboolean) (byte != 0);
+            break;
+        case 'b':
+            if (read(fd, &byte, 1) <= 0) { *eos = true; return; }
+            result[pos] = (jvalue)(jbyte) byte;
+            break;
+        case 'c':
+            if (read(fd, &byte, 1) <= 0) { *eos = true; return; }
+            result[pos] = (jvalue)(jchar) byte;
+            break;
+        case 's':
+            number = read_sleb128(fd, eos);
+            if (*eos) return;
+            result[pos] = (jvalue)(jshort) number;
+            break;
+        case 'i':
+            number = read_sleb128(fd, eos);
+            if (*eos) return;
+            result[pos] = (jvalue)(jint) number;
+            break;
+        case 'j':
+            long_v = read_sleb128L(fd, eos);
+            if (*eos) return;
+            result[pos] = (jvalue) long_v;
+            break;
+        case 'f':
+            if (read(fd, &float_v, 4) <= 0) { *eos = true; return; }
+            result[pos] = (jvalue) float_v;
+            break;
+        case 'd':
+            if (read(fd, &double_v, 8) <= 0) { *eos = true; return; }
+            result[pos] = (jvalue) double_v;
+            break;
+        case 'l':
+            object_v = (jobject) read_ptr(fd, eos);
+            if (*eos) return;
+            result[pos] = (jvalue) object_v;
+            break;
+        }
+        pos++;
+    }
 }
 
 void write_byte(int fd, uint8_t val) {
@@ -98,6 +174,7 @@ typedef struct ClientCtx {
     JavaVMInitArgs* args;
     bool own_vm;
     char *buffer;
+    jvalue *args_buffer;
 } ClientCtx;
 
 
@@ -150,8 +227,12 @@ bool handle_command(int fd, ClientCtx *ctx) {
     printf("(S) kind: %d\n", kind);
 
     JNIEnv *env = ctx->env;
-    char *buffer = ctx->buffer;
+    char *buffer = ctx->buffer, *buffer2;
+    jvalue *args_buffer = ctx->args_buffer;
+
     jclass class;
+    jmethodID method;
+    jobject object;
 
     switch (kind) {
         case 0: {
@@ -206,12 +287,59 @@ bool handle_command(int fd, ClientCtx *ctx) {
      // case 6: DefineClass...
         case 7:
             read_str(fd, &eos, buffer);
-            if (eos)
-                return eos;
+            if (eos) return eos;
+
             class = (*env)->FindClass(env, buffer);
             if (!check_exception(fd, env))
                 write_ptr(fd, class);
             break;
+
+        // 8..28
+
+        case 29:
+            class = (jclass) read_ptr(fd, &eos);
+            if (eos) return eos;
+            method = (jmethodID) read_ptr(fd, &eos);
+            if (eos) return eos;
+            read_str(fd, &eos, buffer);
+            if (eos) return eos;
+            read_args(fd, &eos, buffer, args_buffer);
+            if (eos) return eos;
+
+            object = (*env)->NewObjectA(env, class, method, args_buffer);
+            if (!check_exception(fd, env))
+                write_ptr(fd, object);
+            break;
+
+        // 30..31
+
+        case 32:
+            class = (jclass) read_ptr(fd, &eos);
+            if (eos) return eos;
+            buffer2 = read_str(fd, &eos, buffer);
+            if (eos) return eos;
+            read_str(fd, &eos, buffer2);
+            if (eos) return eos;
+
+            method = (*env)->GetMethodID(env, class, buffer, buffer2);
+            if (!check_exception(fd, env))
+                write_ptr(fd, method);
+            break;
+
+        // 33..105
+
+        case 106:
+            read_str(fd, &eos, buffer);
+            if (eos) return eos;
+
+            object = (*env)->NewStringUTF(env, buffer);
+            if (!check_exception(fd, env))
+                write_ptr(fd, object);
+            break;
+
+        default:
+            printf("unknown kind: %d\n", kind);
+            eos = true;
     }
     return eos;
 }
@@ -229,11 +357,12 @@ void* handle_client_thread(void* arg) {
         .options = &option,
         .ignoreUnrecognized = JNI_TRUE,
     };
-    char buffer[65536];  // 64 КБ
+    char buffer[8192];  // 8 КБ
+    jvalue args_buffer[256];
     ClientCtx ctx = {
         .vm = NULL, .env = NULL, .vm_count = 0,
         .args = &args, .own_vm = false,
-        .buffer = buffer,
+        .buffer = buffer, .args_buffer = args_buffer,
     };
 
     while (1)
