@@ -1,7 +1,7 @@
 import socket
 from struct import pack, unpack, calcsize
 from threading import Lock
-from functools import wraps
+from functools import wraps, cache
 
 
 def synchronized(func, /):
@@ -85,25 +85,71 @@ def write_str(write, val: str, /) -> None:
     write_uleb128(write, len(data))
     write(data)
 
+args_dispatch = [None] * 128  # ascii
+args_dispatch[ord('Z')] = "write(int2byte[bool(args[{}])])"
+args_dispatch[ord('B')] = "write(int2byte[int(args[{}])])"
+args_dispatch[ord('C')] = "write(int2byte[int(args[{}])])"
+args_dispatch[ord('S')] = "write_sleb128(write, args[{}])"
+args_dispatch[ord('I')] = "write_sleb128(write, args[{}])"
+args_dispatch[ord('J')] = "write_sleb128L(write, args[{}])"
+args_dispatch[ord('F')] = "write(pack('=f', args[{}]))"
+args_dispatch[ord('D')] = "write(pack('=d', args[{}]))"
+
+shorty2pack = [None] * 128  # ascii
+shorty2pack[ord('Z')] = '?'
+shorty2pack[ord('B')] = 'b'
+shorty2pack[ord('C')] = 'c'
+shorty2pack[ord('F')] = 'f'
+shorty2pack[ord('D')] = 'd'
+
 # знаю про shorty ещё с сентября 2019 года, т.к. пилил весь месяц (свой отпуск) DexReader до финальной
 # но shorty понадобился только сейчас: август 2026 года :)
-args_dispatch = [None] * 128  # ascii
-args_dispatch[ord('z')] = lambda write, val, /: write(int2byte[bool(val)])
-args_dispatch[ord('b')] = lambda write, val, /: write(int2byte[int(val)])
-args_dispatch[ord('c')] = lambda write, val, /: write(int2byte[int(val)])
-args_dispatch[ord('s')] = write_sleb128
-args_dispatch[ord('i')] = write_sleb128
-args_dispatch[ord('j')] = write_sleb128L
-args_dispatch[ord('f')] = lambda write, val, /: write(pack("=f", val))
-args_dispatch[ord('d')] = lambda write, val, /: write(pack("=d", val))
-args_dispatch[ord('l')] = lambda write, val, /: write(pack('P', val.inst))
-# TODO: наталкивает на идею:
-# генерировать под каждый shorty свою pack-структуру или даже функцию
+@cache
+def args_writer_gen(shorty):
+    pos, L = 0, len(shorty)
+    code = ["def func(write, args, /):"]
+    add_line = code.append
+    while pos < L:
+        letter = shorty[pos]
+        letter_c = ord(letter)
+        next_ = pos + 1
+        if letter == 'L':
+            while next_ < L and shorty[next_] == 'L':
+                next_ += 1
+            count = next_ - pos
+            if count == 1:
+                add_line(f"    write(pack('P', args[{pos}].inst))")
+            else:
+                args = [f"args[{i}].inst" for i in range(pos, next_)]
+                add_line(f"    write(pack({'P' * count !r}, {', '.join(args)}))")
+            pos = next_
+            continue
+        c = shorty2pack[letter_c]
+        packs = []
+        if c is not None:
+            packs.append(c)
+            while next_ < L:
+                c = shorty2pack[ord(shorty[next_])]
+                if c is None:
+                    break
+                packs.append(c)
+                next_ += 1
+        if len(packs) > 1:
+            add_line(f"    write(pack({'=' + ''.join(packs) !r}, *args[{pos if pos else ''}:{next_}]))")
+        else:
+            print(letter_c)
+            add_line("    " + args_dispatch[letter_c].format(pos))
+        pos = next_
+  # print('\n'.join(code))
+    _G = {"int2byte": int2byte, "write_sleb128": write_sleb128,
+          "write_sleb128L": write_sleb128L, "pack": pack}
+    exec('\n'.join(code), _G)
+    return _G["func"]
+# args_writer_gen("LLFLZLFDZBC")
 
 def write_args(write, shorty, args, /):
     assert len(shorty) == len(args)
-    for letter, arg in zip(shorty, args):
-        args_dispatch[ord(letter)](write, arg)
+    args_writer_gen(shorty)(write, args)
 
 
 class JNIError(Exception):
@@ -268,8 +314,7 @@ class JNIClient:
         write_byte(write, 29)
         write_ptr(write, clazz.inst)
         write_ptr(write, ctor.inst)
-        sig = sig.lower()
-        write_str(write, sig)  # TODO: автоматизировать через jmethod
+        write_str(write, sig.lower())  # TODO: автоматизировать через jmethod
         write_args(write, sig, args)
         self._flush()
  
@@ -324,5 +369,5 @@ if __name__ == "__main__":
     print("method:", bigint_modPow)
     str_v = jni.NewStringUTF("12345")
     print("string:", str_v)
-    bigint_v = jni.NewObject(bigint, bigint_ctor, "L".lower(), str_v)
+    bigint_v = jni.NewObject(bigint, bigint_ctor, "L", str_v)
     print("bigint_v:", bigint_v)
