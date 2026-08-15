@@ -12,28 +12,48 @@ def synchronized(func, /):
             return func(self, *a, **kw)
     return wrapper
 
+# Ljava/lang/String; с флагом final, так что наследников нет - детектор jstring тривиален
+def shorty_repl(match):
+    s = match.group(0)
+    # 'A' - jarray
+    # 'R' - jstring
+    # 'L' - jobject
+    return 'A' if s.startswith('[') else 'R' if s == "Ljava/lang/String;" else 'L'
 shorty_sub = re.compile(r"\[*L[\w/$]+;|\[+[ZBCSIJFD]").sub
 def to_shorty(sig: str, /) -> str:
-    return shorty_sub('L', sig)
-assert to_shorty("ZBCS[[IIZ[Legg;ZLbeef;IJFD") == "ZBCSLIZLZLIJFD"
-assert to_shorty("[[Landroid/os/Build$VERSION;") == "L"
-
-
+    return shorty_sub(shorty_repl, sig)
+assert to_shorty("ZBCS[[IIZ[Legg;ZLbeef;IJFD") == "ZBCSAIZAZLIJFD"
+assert to_shorty("[[Landroid/os/Build$VERSION;") == "A"
+assert to_shorty("Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;La;") == "RRARL"
 
 
 class jobject:
     def __init__(self, jni, inst):
         self.jni = jni
-        self.inst = inst
+        self._o_inst = inst
 
     def __repr__(self):
-        return f"<jobject at {hex(self.inst)}>"
+        return f"<jobject at {hex(self._o_inst)}>"
 
     # TODO: __del__
 
 class jstring(jobject):
+    def __init__(self, jni, inst):
+        self.jni = jni
+        self._s_inst = inst
+
     def __repr__(self):
-        return f"<jstring at {hex(self.inst)}>"
+        return f"<jstring at {hex(self._s_inst)}>"
+
+    # TODO: __del__
+
+class jarray(jobject):
+    def __init__(self, jni, inst):
+        self.jni = jni
+        self._a_inst = inst
+
+    def __repr__(self):
+        return f"<jarray at {hex(self._a_inst)}>"
 
     # TODO: __del__
 
@@ -80,7 +100,9 @@ def read_str(read, /) -> str:
     return data.decode("utf-8")
 
 result_dispatch = (
-    read_ptr,  # object
+    lambda jni, /: jobject(jni, read_ptr(jni._read)),
+    lambda jni, /: jstring(jni, read_ptr(jni._read)),
+    lambda jni, /: jarray(jni, read_ptr(jni._read)),
     lambda read, /: bool(read(1)[0]),  # boolean
     lambda read, /: read(1)[0],  # byte
     read_uleb128,  # char
@@ -91,8 +113,10 @@ result_dispatch = (
     lambda read, /: unpack("=d", read(8))[0],  # double
     lambda read, /: None,  # void
 )
-def read_value(read, kind: int, /):
-    return result_dispatch[kind](read)
+def read_value(jni, kind: int, /) -> jvalue:
+    if kind < 3:  # LRA
+        return result_dispatch[kind](jni)
+    return result_dispatch[kind](jni._read)
 
 
 int2byte = tuple(bytes((i,)) for i in range(256))
@@ -145,6 +169,14 @@ shorty2pack[ord('B')] = 'b'
 shorty2pack[ord('F')] = 'f'
 shorty2pack[ord('D')] = 'd'
 
+shorty2attr = [None] * 128  # ascii
+shorty2attr[ord('L')] = "_o_inst"
+shorty2attr[ord('R')] = "_s_inst"
+shorty2attr[ord('A')] = "_a_inst"
+# jclass -> _c_inst
+# jmethod -> _m_inst
+# Нет конфликтов в защите указателей
+
 # знаю про shorty ещё с сентября 2019 года, т.к. пилил весь месяц (свой отпуск) DexReader до финальной
 # но shorty понадобился только сейчас: август 2026 года :)
 @cache
@@ -156,14 +188,14 @@ def args_writer_gen(shorty):
         letter = shorty[pos]
         letter_c = ord(letter)
         next_ = pos + 1
-        if letter == 'L':
-            while next_ < L and shorty[next_] == 'L':
+        if letter in "LRA":  # jobject | jstring | jarray
+            while next_ < L and shorty[next_] in "LRA":
                 next_ += 1
             count = next_ - pos
             if count == 1:
-                add_line(f"    write(pack('P', args[{pos}].inst))")
+                add_line(f"    write(pack('P', args[{pos}].{shorty2attr[letter_c]}))")
             else:
-                args = [f"args[{i}].inst" for i in range(pos, next_)]
+                args = [f"args[{i}].{shorty2attr[ord(shorty[i])]}" for i in range(pos, next_)]
                 add_line(f"    write(pack({'P' * count !r}, {', '.join(args)}))")
             pos = next_
             continue
@@ -180,7 +212,6 @@ def args_writer_gen(shorty):
         if len(packs) > 1:
             add_line(f"    write(pack({'=' + ''.join(packs) !r}, *args[{pos if pos else ''}:{next_}]))")
         else:
-            print(letter_c)
             add_line("    " + args_dispatch[letter_c].format(pos))
         pos = next_
   # print('\n'.join(code))
@@ -224,14 +255,14 @@ class JavaError(Exception):
 class jclass:
     def __init__(self, name, inst):
         self.name = f"L{name};"
-        self.inst = inst
+        self._c_inst = inst
 
     def __repr__(self):
         return f"<jclass {self.name}>"
 
 class jmethod:
     ret_t2code = [None] * 128
-    for i, ret_t in enumerate("LZBCSIJFDV"):
+    for i, ret_t in enumerate("LRAZBCSIJFDV"):
         ret_t2code[ord(ret_t)] = i
     del i, ret_t
 
@@ -240,12 +271,14 @@ class jmethod:
         self.name = name
         self.args = args
         self.ret_t = ret_t
-        self.inst = inst
+        self._m_inst = inst
         self.shorty = to_shorty(args)
-        ret_code = ord(ret_t.replace('[', '')[0])
-        self.ret_k = self.ret_t2code[ret_code]
+        ret_s = to_shorty(ret_t)
+        if len(ret_s) != 1:
+            raise AttributeError(f"ret_t {ret_t!r} must consist of exactly one type")
+        self.ret_k = self.ret_t2code[ord(ret_s)]
       # print(args, "->", self.shorty)
-      # print(ret_t, "->", self.ret_k, chr(self.ret_k)
+      # print(ret_t, "->", self.ret_k, chr(self.ret_k))
     def __repr__(self):
         return f"<jmethod {self.name}({self.args}){self.ret_t}>"
 
@@ -353,8 +386,8 @@ class JNIClient:
     def NewObject(self, clazz: jclass, ctor: jmethod, /, *args: tuple[jvalue, ...]) -> jobject:
         write = self._write
         write_byte(write, 29)
-        write_ptr(write, clazz.inst)
-        write_ptr(write, ctor.inst)
+        write_ptr(write, clazz._c_inst)
+        write_ptr(write, ctor._m_inst)
         write_args(write, ctor.shorty, args)
         self._flush()
  
@@ -373,47 +406,43 @@ class JNIClient:
         write = self._write
         with self._lock:
             write_byte(write, 32)
-            write_ptr(write, clazz.inst)
+            write_ptr(write, clazz._c_inst)
             write_str(write, name)
             write_str(write, f"({args}){ret_t}")
             self._flush()
 
             self._check_exception()
-            inst = read_ptr(self._read)
-        return jmethod(clazz, name, args, ret_t, inst)
+            m_inst = read_ptr(self._read)
+        return jmethod(clazz, name, args, ret_t, m_inst)
 
     @synchronized
     def CallMethod(self, object: jobject, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
         write = self._write
         ret_kind = method.ret_k
-        write_byte(write, 33 + ret_kind)  # 33..42
-        write_ptr(write, object.inst)
-        write_ptr(write, method.inst)
+        write_byte(write, 33 + max(0, ret_kind-2))  # 33..42
+        write_ptr(write, object._o_inst)
+        write_ptr(write, method._m_inst)
         write_args(write, method.shorty, args)
         self._flush()
 
         self._check_exception()
-        if ret_kind == 0:  # 'L'
-            return jobject(self, read_value(self._read, ret_kind))
-        if ret_kind != 9:  # 'V'
-            return read_value(self._read, ret_kind)
+        if ret_kind != 11:  # 'V'
+            return read_value(self, ret_kind)
 
     @synchronized  # TODO: unchecked
     def CallNonvirtualMethod(self, object: jobject, clazz: jclass, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
         write = self._write
         ret_kind = method.ret_k
-        write_byte(write, 43 + ret_kind)  # 43..52
-        write_ptr(write, object.inst)
-        write_ptr(write, clazz.inst)
-        write_ptr(write, method.inst)
+        write_byte(write, 43 + max(0, ret_kind-2))  # 43..52
+        write_ptr(write, object._o_inst)
+        write_ptr(write, clazz._c_inst)
+        write_ptr(write, method._m_inst)
         write_args(write, method.shorty, args)
         self._flush()
 
         self._check_exception()
-        if ret_kind == 0:  # 'L'
-            return jobject(self, read_value(self._read, ret_kind))
-        if ret_kind != 9:  # 'V'
-            return read_value(self._read, ret_kind)
+        if ret_kind != 11:  # 'V'
+            return read_value(self, ret_kind)
 
     # 53..72
 
@@ -421,17 +450,15 @@ class JNIClient:
     def CallStaticMethod(self, clazz: jclass, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
         write = self._write
         ret_kind = method.ret_k
-        write_byte(write, 73 + ret_kind)  # 73..82
-        write_ptr(write, clazz.inst)
-        write_ptr(write, method.inst)
+        write_byte(write, 73 + max(0, ret_kind-2))  # 73..82
+        write_ptr(write, clazz._c_inst)
+        write_ptr(write, method._m_inst)
         write_args(write, method.shorty, args)
         self._flush()
 
         self._check_exception()
-        if ret_kind == 0:  # 'L'
-            return jobject(self, read_value(self._read, ret_kind))
-        if ret_kind != 9:  # 'V'
-            return read_value(self._read, ret_kind)
+        if ret_kind != 11:  # 'V'
+            return read_value(self, ret_kind)
 
     # 83..105
 
@@ -445,22 +472,27 @@ class JNIClient:
         self._check_exception()
         return jstring(self, read_ptr(self._read))
     def GetStringUTFLength(self, jstr: jstring) -> int:
-      # if not isinstance(jstr, jstring):
-      #     raise TypeError("GetStringUTFLength: this action will cause a Segmentation fault on the server!")
-      # TODO: Нет способа проверить, что jobject - это jstring, зато java.lang.String НЕ наследуется, что ОЧЕНЬ НА РУКУ!!!
+        if not isinstance(jstr, jstring):
+            raise TypeError(
+               f"GetStringUTFLength expected jstring, got {type(jstr).__name__}\n"
+                "This would cause a segmentation fault on the server if sent"
+            )
         write = self._write
         write_byte(write, 107)
-        write_ptr(write, jstr.inst)
+        write_ptr(write, jstr._s_inst)
         self._flush()
 
         self._check_exception()
         return read_uleb128(self._read)
     def GetStringUTFChars(self, jstr: jstring):
-      # if not isinstance(jstr, jstring):
-      #     raise TypeError("GetStringUTFLength: this action will cause a Segmentation fault on the server!")
+        if not isinstance(jstr, jstring):
+            raise TypeError(
+               f"GetStringUTFChars expected jstring, got {type(jstr).__name__}\n"
+                "This would cause a segmentation fault on the server if sent"
+            )
         write = self._write
         write_byte(write, 108)
-        write_ptr(write, jstr.inst)
+        write_ptr(write, jstr._s_inst)
         self._flush()
 
         self._check_exception()
