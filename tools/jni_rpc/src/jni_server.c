@@ -12,15 +12,25 @@ typedef int bool;
 #define true 1
 #define false 0
 
-size_t to_shorty(const char *src, char *dst) {
+size_t to_shorty(const char *src, char *dst, char *ret_t) {
     size_t src_pos = 0, dst_pos = 0;
     bool is_arr = false;
     while (true) {
         const char letter = src[src_pos++];
         switch (letter) {
-        case 0: case ')':
+        case ')':
             dst[dst_pos++] = 0;
+            while (src[src_pos] == '[')
+                src_pos++;
+            if (src[src_pos] == 0) {
+                fprintf(stderr, "Error: unexpected end of string while parsing signature\n");
+                return (size_t) -1;
+            }
+            *ret_t = src[src_pos];
             return dst_pos;
+        case 0:
+            fprintf(stderr, "Error: unexpected end of string while parsing signature\n");
+            return (size_t) -1;
         case '[':
             is_arr = true;
             break;
@@ -132,8 +142,9 @@ void read_args(int fd, bool *eos, const char *sig, jvalue *result) {
             result[pos] = (jvalue)(jbyte) byte;
             break;
         case 'C':
-            if (read(fd, &byte, 1) <= 0) { *eos = true; return; }
-            result[pos] = (jvalue)(jchar) byte;
+            number = read_uleb128(fd, eos);
+            if (*eos) return;
+            result[pos] = (jvalue)(jchar) number;
             break;
         case 'S':
             number = read_sleb128(fd, eos);
@@ -187,14 +198,40 @@ void write_uleb128(int fd, int val) {
         write(fd, &byte, 1);
     } while (val);
 }
+void write_uleb128L(int fd, jlong val) {
+    do {
+        uint8_t byte = val & 0x7f;
+        val >>= 7;
+        if (val)
+            byte |= 0x80;
+        write(fd, &byte, 1);
+    } while (val);
+}
 void write_sleb128(int fd, int val) {
     int u = (val << 1) ^ -(val < 0);
     write_uleb128(fd, u);
+}
+void write_sleb128L(int fd, jlong val) {
+    jlong u = (val << 1) ^ -(val < 0);
+    write_uleb128L(fd, u);
 }
 void write_str(int fd, const char* str) {
     size_t size = strlen(str);
     write_uleb128(fd, size);
     write(fd, str, size);
+}
+void write_value(int fd, const char kind, jvalue value) {
+    switch (kind) {
+        case 'L': write_ptr(fd, value.l); break;
+        case 'Z': write(fd, &value.z, 1); break;
+        case 'B': write(fd, &value.b, 1); break;
+        case 'C': write_uleb128(fd, value.c); break;
+        case 'S': write_sleb128(fd, value.s); break;
+        case 'I': write_sleb128(fd, value.i); break;
+        case 'J': write_sleb128L(fd, value.j); break;
+        case 'F': write(fd, &value.f, 4); break;
+        case 'D': write(fd, &value.d, 8); break;
+    }
 }
 
 
@@ -211,16 +248,18 @@ typedef struct ClientCtx {
 
 typedef struct jmethod {
     jmethodID ID;
+    char ret_t;
     char shorty[];  // flexible array member
 } jmethod;
 
-jmethod* jmethod_init(jmethodID id, const char *shorty, size_t shorty_size, bool *eos) {
+jmethod* jmethod_init(jmethodID id, const char *shorty, const size_t shorty_size, const char ret_t, bool *eos) {
     jmethod *method = (jmethod*) malloc(sizeof(jmethod) + shorty_size);
     if (method == NULL) {
         perror("jmethod malloc");
         *eos = true; return NULL;
     }
     method->ID = id;
+    method->ret_t = ret_t;
     memcpy(method->shorty, shorty, shorty_size);
     return method;
 }
@@ -281,6 +320,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
     jclass class;
     jmethod *method;
     jobject object;
+    jvalue value;
 
     switch (kind) {
         case 0: {
@@ -367,14 +407,41 @@ bool handle_command(int fd, ClientCtx *ctx) {
             char *shorty = read_str(fd, &eos, buffer2);
             if (eos) return eos;
 
-            size_t shorty_size = to_shorty(buffer2, shorty);
+            char ret_t;
+            size_t shorty_size = to_shorty(buffer2, shorty, &ret_t);
+            if (shorty_size == (size_t) -1) return true;
+
             jmethodID method_id = (*env)->GetMethodID(env, class, buffer, buffer2);
-            method = jmethod_init(method_id, shorty, shorty_size, &eos);
+            method = jmethod_init(method_id, shorty, shorty_size, ret_t, &eos);
             if (eos) return eos;
 
             if (!check_exception(fd, env))
                 write_ptr(fd, method);
             break; }
+
+        case 33 ... 42:
+            object = (jobject) read_ptr(fd, &eos);
+            if (eos) return eos;
+            method = (jmethod*) read_ptr(fd, &eos);
+            if (eos) return eos;
+            read_args(fd, &eos, method->shorty, args_buffer);
+            if (eos) return eos;
+
+            switch (kind) {
+                case 33: value = (jvalue) (*env)->CallObjectMethodA(env, object, method->ID, args_buffer); break;
+                case 34: value = (jvalue) (*env)->CallBooleanMethodA(env, object, method->ID, args_buffer); break;
+                case 35: value = (jvalue) (*env)->CallByteMethodA(env, object, method->ID, args_buffer); break;
+                case 36: value = (jvalue) (*env)->CallCharMethodA(env, object, method->ID, args_buffer); break;
+                case 37: value = (jvalue) (*env)->CallShortMethodA(env, object, method->ID, args_buffer); break;
+                case 38: value = (jvalue) (*env)->CallIntMethodA(env, object, method->ID, args_buffer); break;
+                case 39: value = (jvalue) (*env)->CallLongMethodA(env, object, method->ID, args_buffer); break;
+                case 40: value = (jvalue) (*env)->CallFloatMethodA(env, object, method->ID, args_buffer); break;
+                case 41: value = (jvalue) (*env)->CallDoubleMethodA(env, object, method->ID, args_buffer); break;
+                case 42: (*env)->CallVoidMethodA(env, object, method->ID, args_buffer); break;
+            }
+            if (!check_exception(fd, env) && kind != 42)
+                write_value(fd, method->ret_t, value);
+            break;
 
         // 33..105
 

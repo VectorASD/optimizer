@@ -19,6 +19,27 @@ assert to_shorty("ZBCS[[IIZ[Legg;ZLbeef;IJFD") == "ZBCSLIZLZLIJFD"
 assert to_shorty("[[Landroid/os/Build$VERSION;") == "L"
 
 
+
+
+class jobject:
+    def __init__(self, jni, inst):
+        self.jni = jni
+        self.inst = inst
+
+    def __repr__(self):
+        return f"<jobject at {hex(self.inst)}>"
+
+    # TODO: __del__
+
+class jstring(jobject):
+    def __repr__(self):
+        return f"<jstring at {hex(self.inst)}>"
+
+    # TODO: __del__
+
+jvalue = bool | int | float | jobject
+
+
 def read_byte(read, /) -> int:
     try: return read(1)[0]
     except Exception:
@@ -58,6 +79,21 @@ def read_str(read, /) -> str:
         raise EOFError("Unexpected end of stream") from None
     return data.decode("utf-8")
 
+result_dispatch = (
+    read_ptr,  # object
+    lambda read, /: bool(read(1)[0]),  # boolean
+    lambda read, /: read(1)[0],  # byte
+    read_uleb128,  # char
+    read_sleb128,  # short
+    read_sleb128,  # int
+    read_sleb128,  # long
+    lambda read, /: unpack("=f", read(4))[0],  # float
+    lambda read, /: unpack("=d", read(8))[0],  # double
+    lambda read, /: None,  # void
+)
+def read_value(read, kind: int, /):
+    return result_dispatch[kind](read)
+
 
 int2byte = tuple(bytes((i,)) for i in range(256))
 def write_byte(write, val: int, /) -> None:
@@ -82,6 +118,7 @@ def write_uleb128(write, val: int, /) -> None:
 def write_sleb128(write, val: int, /) -> None:
     u = (val << 1) ^ (val >> 31) & 0xffffffff
     write_uleb128(write, u)
+    # -1 >> 7 = -1, по этому нужна неотрицательная маска
 
 def write_sleb128L(write, val: int, /) -> None:
     u = (val << 1) ^ (val >> 63) & 0xffffffffffffffff
@@ -95,7 +132,7 @@ def write_str(write, val: str, /) -> None:
 args_dispatch = [None] * 128  # ascii
 args_dispatch[ord('Z')] = "write(int2byte[bool(args[{}])])"
 args_dispatch[ord('B')] = "write(int2byte[int(args[{}])])"
-args_dispatch[ord('C')] = "write(int2byte[int(args[{}])])"
+args_dispatch[ord('C')] = "write_uleb128(write, ord(args[{}]))"
 args_dispatch[ord('S')] = "write_sleb128(write, args[{}])"
 args_dispatch[ord('I')] = "write_sleb128(write, args[{}])"
 args_dispatch[ord('J')] = "write_sleb128L(write, args[{}])"
@@ -105,7 +142,6 @@ args_dispatch[ord('D')] = "write(pack('=d', args[{}]))"
 shorty2pack = [None] * 128  # ascii
 shorty2pack[ord('Z')] = '?'
 shorty2pack[ord('B')] = 'b'
-shorty2pack[ord('C')] = 'c'
 shorty2pack[ord('F')] = 'f'
 shorty2pack[ord('D')] = 'd'
 
@@ -149,14 +185,16 @@ def args_writer_gen(shorty):
         pos = next_
   # print('\n'.join(code))
     _G = {"int2byte": int2byte, "write_sleb128": write_sleb128,
+          "write_uleb128": write_uleb128,
           "write_sleb128L": write_sleb128L, "pack": pack}
     exec('\n'.join(code), _G)
     return _G["func"]
 # args_writer_gen("LLFLZLFDZBC")
 
-def write_args(write, shorty, args, /):
+def write_args(write, shorty: str, args: tuple[jvalue, ...], /):
     assert len(shorty) == len(args)
-    args_writer_gen(shorty)(write, args)
+    if shorty:
+        args_writer_gen(shorty)(write, args)
 
 
 class JNIError(Exception):
@@ -192,35 +230,28 @@ class jclass:
         return f"<jclass {self.name}>"
 
 class jmethod:
-    def __init__(self, name, args, ret_t, inst):
+    ret_t2code = [None] * 128
+    for i, ret_t in enumerate("LZBCSIJFDV"):
+        ret_t2code[ord(ret_t)] = i
+    del i, ret_t
+
+    def __init__(self, clazz, name, args, ret_t, inst):
+        self.clazz = clazz
         self.name = name
         self.args = args
         self.ret_t = ret_t
         self.inst = inst
         self.shorty = to_shorty(args)
+        ret_code = ord(ret_t.replace('[', '')[0])
+        self.ret_k = self.ret_t2code[ret_code]
       # print(args, "->", self.shorty)
+      # print(ret_t, "->", self.ret_k, chr(self.ret_k)
     def __repr__(self):
         return f"<jmethod {self.name}({self.args}){self.ret_t}>"
 
-class jobject:
-    def __init__(self, jni, inst):
-        self.jni = jni
-        self.inst = inst
-
-    def __repr__(self):
-        return f"<jobject at {hex(self.inst)}>"
-
-    # TODO: __del__
-
-class jstring(jobject):
-    def __repr__(self):
-        return f"<jstring at {hex(self.inst)}>"
-
-    # TODO: __del__
-
 
 class JNIClient:
-    def __init__(self):
+    def __init__(self, /):
         self._lock = Lock()
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.connect("/data/data/com.termux/files/usr/tmp/jni.sock")
@@ -231,16 +262,16 @@ class JNIClient:
         self._close = file.close
         self._sock_close = sock.close
 
-    def __del__(self):
+    def __del__(self, /):
         self._close()
         self._sock_close()
 
-    def _check_error(self):
+    def _check_error(self, /):
         error = read_sleb128(self._read)
         if error:
             raise JNIError(error)
 
-    def _check_exception(self):
+    def _check_exception(self, /):
         message = read_str(self._read)
         if message:
             raise JavaError(message)
@@ -248,13 +279,13 @@ class JNIClient:
     # VM methods
 
     @synchronized
-    def CreateJavaVM(self) -> None:
+    def CreateJavaVM(self, /) -> None:
         write_byte(self._write, 0)
         self._flush()
         self._check_error()
 
     @synchronized
-    def GetCreatedJavaVMs(self) -> None:
+    def GetCreatedJavaVMs(self, /) -> None:
         write_byte(self._write, 1)
         self._flush()
         self._check_error()
@@ -263,27 +294,27 @@ class JNIClient:
         return vm_count
 
     @synchronized
-    def SelectVM(self, index: int) -> None:
+    def SelectVM(self, index: int, /) -> None:
         write_byte(self._write, 2)
         write_byte(self._write, index)
         self._flush()
         self._check_error()
 
     @synchronized
-    def AttachCurrentThread(self) -> None:
+    def AttachCurrentThread(self, /) -> None:
         write_byte(self._write, 3)
         self._flush()
         self._check_error()
 
     @synchronized
-    def DetachCurrentThread(self) -> None:
+    def DetachCurrentThread(self, /) -> None:
         write_byte(self._write, 4)
         self._flush()
         self._check_error()
 
     # VM helper
 
-    def CreateOrReuseVM(self) -> None:
+    def CreateOrReuseVM(self, /) -> None:
         vm_count = jni.GetCreatedJavaVMs()
         print("vm count:", vm_count)
         if vm_count == 0:
@@ -295,7 +326,7 @@ class JNIClient:
     # native methods
 
     @synchronized
-    def GetVersion(self) -> tuple[int, int]:
+    def GetVersion(self, /) -> tuple[int, int]:
         write_byte(self._write, 5)
         self._flush()
 
@@ -307,7 +338,7 @@ class JNIClient:
     # TODO: DefineClass (kind=6)
 
     @synchronized
-    def FindClass(self, class_name: str) -> jclass:
+    def FindClass(self, class_name: str, /) -> jclass:
         write = self._write
         write_byte(write, 7)
         write_str(write, class_name)
@@ -319,7 +350,7 @@ class JNIClient:
     # 8..28
 
     @synchronized
-    def NewObject(self, clazz: jclass, ctor: jmethod, *args) -> jobject:
+    def NewObject(self, clazz: jclass, ctor: jmethod, /, *args: tuple[jvalue, ...]) -> jobject:
         write = self._write
         write_byte(write, 29)
         write_ptr(write, clazz.inst)
@@ -332,7 +363,7 @@ class JNIClient:
 
     # 30..31
 
-    def GetMethodID(self, clazz: jclass, name: str, args: tuple[jclass|str, ...], ret_t: jclass|str) -> jmethod:
+    def GetMethodID(self, clazz: jclass, name: str, args: tuple[jclass|str, ...], ret_t: jclass|str, /) -> jmethod:
         args = "".join(arg.name if isinstance(arg, jclass) else str(arg) for arg in args)
         if isinstance(ret_t, jclass):
             ret_t = ret_t.name
@@ -349,12 +380,28 @@ class JNIClient:
 
             self._check_exception()
             inst = read_ptr(self._read)
-        return jmethod(name, args, ret_t, inst)
-
-    # 33..105
+        return jmethod(clazz, name, args, ret_t, inst)
 
     @synchronized
-    def NewStringUTF(self, text: str) -> jstring:
+    def CallMethod(self, object: jobject, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
+        write = self._write
+        ret_kind = method.ret_k
+        write_byte(write, 33 + ret_kind)  # 33..42
+        write_ptr(write, object.inst)
+        write_ptr(write, method.inst)
+        write_args(write, method.shorty, args)
+        self._flush()
+
+        self._check_exception()
+        if ret_kind == 0:  # 'L'
+            return jobject(self, read_value(self._read, ret_kind))
+        if ret_kind != 9:  # 'V'
+            return read_value(self._read, ret_kind)
+
+    # 43..105
+
+    @synchronized
+    def NewStringUTF(self, text: str, /) -> jstring:
         write = self._write
         write_byte(write, 106)
         write_str(write, text)
@@ -368,13 +415,19 @@ if __name__ == "__main__":
     jni = JNIClient()
     jni.CreateOrReuseVM()
     print("version:", ".".join(map(str, jni.GetVersion())))
+
     bigint = jni.FindClass("java/math/BigInteger")
     string = jni.FindClass("java/lang/String")
     print("bigint:", bigint)
+    print("string:", string)
+
     bigint_ctor = jni.GetMethodID(bigint, "<init>", (string,), 'V')
     bigint_modPow = jni.GetMethodID(bigint, "modPow", (bigint, bigint), bigint)
-    print("method:", bigint_ctor)
-    print("method:", bigint_modPow)
+    bigint_toString = jni.GetMethodID(bigint, "toString", (), string)
+    print("<init>:", bigint_ctor)
+    print("modPow:", bigint_modPow)
+    print("toString:", bigint_toString)
+
     numbers = []
     for num in (123456789, 3, 1000000007):
         str_v = jni.NewStringUTF(str(num))
@@ -383,3 +436,8 @@ if __name__ == "__main__":
         print("bigint_v:", bigint_v)
         numbers.append(bigint_v)
     base, exp, mod = numbers
+
+    result = jni.CallMethod(base, bigint_modPow, exp, mod)
+    result_s = jni.CallMethod(result, bigint_toString)
+    print(result)
+    print(result_s)
