@@ -11,8 +11,9 @@
 typedef int bool;
 #define true 1
 #define false 0
+typedef const char* text;
 
-size_t to_shorty(const char *src, char *dst, char *ret_t) {
+size_t to_shorty(text src, char *dst, char *ret_t) {
     size_t src_pos = 0, dst_pos = 0;
     bool is_arr = false;
     while (true) {
@@ -118,7 +119,7 @@ char* read_str(int fd, bool *eos, char *buffer) {
     buffer[size] = 0;
     return buffer + (size + 1);  // next buffer
 }
-void read_args(int fd, bool *eos, const char *sig, jvalue *result) {
+void read_args(int fd, bool *eos, text sig, jvalue *result) {
     int pos = 0;
     uint8_t byte;
     int number;
@@ -215,7 +216,7 @@ void write_sleb128L(int fd, jlong val) {
     jlong u = (val << 1) ^ -(val < 0);
     write_uleb128L(fd, u);
 }
-void write_str(int fd, const char* str) {
+void write_str(int fd, text str) {
     size_t size = strlen(str);
     write_uleb128(fd, size);
     write(fd, str, size);
@@ -252,12 +253,13 @@ typedef struct jmethod {
     char shorty[];  // flexible array member
 } jmethod;
 
-jmethod* jmethod_init(jmethodID id, const char *shorty, const size_t shorty_size, const char ret_t, bool *eos) {
+jmethod* jmethod_init(jmethodID id, text shorty, const size_t shorty_size, const char ret_t, bool *eos) {
     jmethod *method = (jmethod*) malloc(sizeof(jmethod) + shorty_size);
     if (method == NULL) {
         perror("jmethod malloc");
         *eos = true; return NULL;
     }
+    // TODO: save "method" to memory bank + "free" after disconnection
     method->ID = id;
     method->ret_t = ret_t;
     memcpy(method->shorty, shorty, shorty_size);
@@ -273,9 +275,9 @@ bool check_exception(int fd, JNIEnv* env) {
     }
 
     jclass excClass = (*env)->GetObjectClass(env, exc);
-    const char* fallback = NULL;
+    text fallback = NULL;
     jstring msg = NULL;
-    const char* utf = NULL;
+    text utf = NULL;
 
     if (excClass) {
         jmethodID toString = (*env)->GetMethodID(env, excClass, "toString", "()Ljava/lang/String;");
@@ -317,10 +319,11 @@ bool handle_command(int fd, ClientCtx *ctx) {
     char *buffer = ctx->buffer, *buffer2;
     jvalue *args_buffer = ctx->args_buffer;
 
-    jclass class;
+    jclass clazz;
     jmethod *method;
     jobject object;
     jvalue value;
+    jstring string; jsize size;
 
     switch (kind) {
         case 0: {
@@ -377,22 +380,22 @@ bool handle_command(int fd, ClientCtx *ctx) {
             read_str(fd, &eos, buffer);
             if (eos) return eos;
 
-            class = (*env)->FindClass(env, buffer);
+            clazz = (*env)->FindClass(env, buffer);
             if (!check_exception(fd, env))
-                write_ptr(fd, class);
+                write_ptr(fd, clazz);
             break;
 
         // 8..28
 
         case 29:
-            class = (jclass) read_ptr(fd, &eos);
+            clazz = (jclass) read_ptr(fd, &eos);
             if (eos) return eos;
             method = (jmethod*) read_ptr(fd, &eos);
             if (eos) return eos;
             read_args(fd, &eos, method->shorty, args_buffer);
             if (eos) return eos;
 
-            object = (*env)->NewObjectA(env, class, method->ID, args_buffer);
+            object = (*env)->NewObjectA(env, clazz, method->ID, args_buffer);
             if (!check_exception(fd, env))
                 write_ptr(fd, object);
             break;
@@ -400,7 +403,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
         // 30..31
 
         case 32: {
-            class = (jclass) read_ptr(fd, &eos);
+            clazz = (jclass) read_ptr(fd, &eos);
             if (eos) return eos;
             buffer2 = read_str(fd, &eos, buffer);
             if (eos) return eos;
@@ -411,7 +414,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             size_t shorty_size = to_shorty(buffer2, shorty, &ret_t);
             if (shorty_size == (size_t) -1) return true;
 
-            jmethodID method_id = (*env)->GetMethodID(env, class, buffer, buffer2);
+            jmethodID method_id = (*env)->GetMethodID(env, clazz, buffer, buffer2);
             method = jmethod_init(method_id, shorty, shorty_size, ret_t, &eos);
             if (eos) return eos;
 
@@ -443,8 +446,61 @@ bool handle_command(int fd, ClientCtx *ctx) {
                 write_value(fd, method->ret_t, value);
             break;
 
-        // 33..105
+        case 43 ... 52:
+            object = (jobject) read_ptr(fd, &eos);
+            if (eos) return eos;
+            clazz = (jclass) read_ptr(fd, &eos);
+            if (eos) return eos;
+            method = (jmethod*) read_ptr(fd, &eos);
+            if (eos) return eos;
+            read_args(fd, &eos, method->shorty, args_buffer);
+            if (eos) return eos;
 
+            switch (kind) {
+                case 43: value = (jvalue) (*env)->CallNonvirtualObjectMethodA(env, object, clazz, method->ID, args_buffer); break;
+                case 44: value = (jvalue) (*env)->CallNonvirtualBooleanMethodA(env, object, clazz, method->ID, args_buffer); break;
+                case 45: value = (jvalue) (*env)->CallNonvirtualByteMethodA(env, object, clazz, method->ID, args_buffer); break;
+                case 46: value = (jvalue) (*env)->CallNonvirtualCharMethodA(env, object, clazz, method->ID, args_buffer); break;
+                case 47: value = (jvalue) (*env)->CallNonvirtualShortMethodA(env, object, clazz, method->ID, args_buffer); break;
+                case 48: value = (jvalue) (*env)->CallNonvirtualIntMethodA(env, object, clazz, method->ID, args_buffer); break;
+                case 49: value = (jvalue) (*env)->CallNonvirtualLongMethodA(env, object, clazz, method->ID, args_buffer); break;
+                case 50: value = (jvalue) (*env)->CallNonvirtualFloatMethodA(env, object, clazz, method->ID, args_buffer); break;
+                case 51: value = (jvalue) (*env)->CallNonvirtualDoubleMethodA(env, object, clazz, method->ID, args_buffer); break;
+                case 52: (*env)->CallNonvirtualVoidMethodA(env, object, clazz, method->ID, args_buffer); break;
+            }
+            if (!check_exception(fd, env) && kind != 52)
+                write_value(fd, method->ret_t, value);
+            break;
+
+        // 53..72
+
+        case 73 ... 82:
+            clazz = (jclass) read_ptr(fd, &eos);
+            if (eos) return eos;
+            method = (jmethod*) read_ptr(fd, &eos);
+            if (eos) return eos;
+            read_args(fd, &eos, method->shorty, args_buffer);
+            if (eos) return eos;
+
+            switch (kind) {
+                case 73: value = (jvalue) (*env)->CallStaticObjectMethodA(env, clazz, method->ID, args_buffer); break;
+                case 74: value = (jvalue) (*env)->CallStaticBooleanMethodA(env, clazz, method->ID, args_buffer); break;
+                case 75: value = (jvalue) (*env)->CallStaticByteMethodA(env, clazz, method->ID, args_buffer); break;
+                case 76: value = (jvalue) (*env)->CallStaticCharMethodA(env, clazz, method->ID, args_buffer); break;
+                case 77: value = (jvalue) (*env)->CallStaticShortMethodA(env, clazz, method->ID, args_buffer); break;
+                case 78: value = (jvalue) (*env)->CallStaticIntMethodA(env, clazz, method->ID, args_buffer); break;
+                case 79: value = (jvalue) (*env)->CallStaticLongMethodA(env, clazz, method->ID, args_buffer); break;
+                case 80: value = (jvalue) (*env)->CallStaticFloatMethodA(env, clazz, method->ID, args_buffer); break;
+                case 81: value = (jvalue) (*env)->CallStaticDoubleMethodA(env, clazz, method->ID, args_buffer); break;
+                case 82: (*env)->CallStaticVoidMethodA(env, clazz, method->ID, args_buffer); break;
+            }
+            if (!check_exception(fd, env) && kind != 82)
+                write_value(fd, method->ret_t, value);
+            break;
+
+        // 83..105
+
+        // TODO: support MUTF8
         case 106:
             read_str(fd, &eos, buffer);
             if (eos) return eos;
@@ -453,6 +509,29 @@ bool handle_command(int fd, ClientCtx *ctx) {
             if (!check_exception(fd, env))
                 write_ptr(fd, object);
             break;
+        case 107:
+            string = (jstring) read_ptr(fd, &eos);
+            if (eos) return eos;
+
+            size = (*env)->GetStringUTFLength(env, string);
+            if (!check_exception(fd, env))
+                write_uleb128(fd, size);
+            break;
+        case 108:
+            string = (jstring) read_ptr(fd, &eos);
+            if (eos) return eos;
+
+            text mutf8 = (*env)->GetStringUTFChars(env, string, /*isCopy=*/NULL);
+            if (!check_exception(fd, env)) {
+                write_str(fd, mutf8);
+                (*env)->ReleaseStringUTFChars(env, string, mutf8);
+            }
+            break;
+        case 109:
+            fprintf(stderr, "Warning: kind 109 (ReleaseStringUTFChars) is deprecated and not implemented\n");
+            return true;  // eos
+
+        // 110..173
 
         default:
             printf("unknown kind: %d\n", kind);
@@ -520,7 +599,7 @@ void* socket_listener_thread(void* arg) {
         return NULL;
     }
 
-    const char* socket_path = "/data/data/com.termux/files/usr/tmp/jni.sock";
+    text socket_path = "/data/data/com.termux/files/usr/tmp/jni.sock";
     unlink(socket_path);
 
     struct sockaddr_un addr;

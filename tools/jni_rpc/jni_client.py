@@ -398,7 +398,42 @@ class JNIClient:
         if ret_kind != 9:  # 'V'
             return read_value(self._read, ret_kind)
 
-    # 43..105
+    @synchronized  # TODO: unchecked
+    def CallNonvirtualMethod(self, object: jobject, clazz: jclass, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
+        write = self._write
+        ret_kind = method.ret_k
+        write_byte(write, 43 + ret_kind)  # 43..52
+        write_ptr(write, object.inst)
+        write_ptr(write, clazz.inst)
+        write_ptr(write, method.inst)
+        write_args(write, method.shorty, args)
+        self._flush()
+
+        self._check_exception()
+        if ret_kind == 0:  # 'L'
+            return jobject(self, read_value(self._read, ret_kind))
+        if ret_kind != 9:  # 'V'
+            return read_value(self._read, ret_kind)
+
+    # 53..72
+
+    @synchronized  # TODO: unchecked
+    def CallStaticMethod(self, clazz: jclass, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
+        write = self._write
+        ret_kind = method.ret_k
+        write_byte(write, 73 + ret_kind)  # 73..82
+        write_ptr(write, clazz.inst)
+        write_ptr(write, method.inst)
+        write_args(write, method.shorty, args)
+        self._flush()
+
+        self._check_exception()
+        if ret_kind == 0:  # 'L'
+            return jobject(self, read_value(self._read, ret_kind))
+        if ret_kind != 9:  # 'V'
+            return read_value(self._read, ret_kind)
+
+    # 83..105
 
     @synchronized
     def NewStringUTF(self, text: str, /) -> jstring:
@@ -409,6 +444,31 @@ class JNIClient:
 
         self._check_exception()
         return jstring(self, read_ptr(self._read))
+    def GetStringUTFLength(self, jstr: jstring) -> int:
+      # if not isinstance(jstr, jstring):
+      #     raise TypeError("GetStringUTFLength: this action will cause a Segmentation fault on the server!")
+      # TODO: Нет способа проверить, что jobject - это jstring, зато java.lang.String НЕ наследуется, что ОЧЕНЬ НА РУКУ!!!
+        write = self._write
+        write_byte(write, 107)
+        write_ptr(write, jstr.inst)
+        self._flush()
+
+        self._check_exception()
+        return read_uleb128(self._read)
+    def GetStringUTFChars(self, jstr: jstring):
+      # if not isinstance(jstr, jstring):
+      #     raise TypeError("GetStringUTFLength: this action will cause a Segmentation fault on the server!")
+        write = self._write
+        write_byte(write, 108)
+        write_ptr(write, jstr.inst)
+        self._flush()
+
+        self._check_exception()
+        return read_str(self._read)
+    def ReleaseStringUTFChars():
+        raise RuntimeError("Warning: ReleaseStringUTFChars (kind 109) is deprecated and not implemented")
+
+    # 110..173
 
 
 if __name__ == "__main__":
@@ -441,3 +501,8 @@ if __name__ == "__main__":
     result_s = jni.CallMethod(result, bigint_toString)
     print(result)
     print(result_s)
+
+    print("length:", jni.GetStringUTFLength(result_s))
+  # print("length:", jni.GetStringUTFLength(result))  # Segmentation fault, вместо java-исключения :)
+    print("data: ", jni.GetStringUTFChars(result_s))
+    print("check:", pow(123456789, 3, 1000000007))
