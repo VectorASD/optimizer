@@ -105,7 +105,7 @@ result_dispatch = (
     lambda jni, /: jarray(jni, read_ptr(jni._read)),
     lambda read, /: bool(read(1)[0]),  # boolean
     lambda read, /: read(1)[0],  # byte
-    read_uleb128,  # char
+    lambda read, /: chr(read_uleb128(read)),  # char
     read_sleb128,  # short
     read_sleb128,  # int
     read_sleb128,  # long
@@ -140,18 +140,34 @@ def write_uleb128(write, val: int, /) -> None:
         write(int2byte[byte | 0x80 if val else byte])
 
 def write_sleb128(write, val: int, /) -> None:
-    u = (val << 1) ^ (val >> 31) & 0xffffffff
+    u = ((val << 1) ^ (val >> 31)) & 0xffffffff
     write_uleb128(write, u)
     # -1 >> 7 = -1, по этому нужна неотрицательная маска
 
 def write_sleb128L(write, val: int, /) -> None:
-    u = (val << 1) ^ (val >> 63) & 0xffffffffffffffff
+    u = ((val << 1) ^ (val >> 63)) & 0xffffffffffffffff
     write_uleb128(write, u)
 
 def write_str(write, val: str, /) -> None:
     data = val.encode("utf-8")
     write_uleb128(write, len(data))
     write(data)
+
+value_dispatch = (
+    lambda write, v, /: write(pack('P', v._o_inst)),  # jobject
+    lambda write, v, /: write(pack('P', v._s_inst)),  # jstring
+    lambda write, v, /: write(pack('P', v._a_inst)),  # jarray
+    lambda write, v, /: write(int2byte[bool(v)]),  # boolean
+    lambda write, v, /: write(int2byte[int(v)]),  # byte
+    lambda write, v, /: write_uleb128(write, ord(v)),  # char
+    write_sleb128,  # short
+    write_sleb128,  # int
+    write_sleb128L,  # long
+    lambda write, v, /: write(pack('=f', v)),  # float
+    lambda write, v, /: write(pack('=d', v)),  # double
+)
+def write_value(write, val: jvalue, type: int, /):
+    value_dispatch[type](write, val)
 
 args_dispatch = [None] * 128  # ascii
 args_dispatch[ord('Z')] = "write(int2byte[bool(args[{}])])"
@@ -477,7 +493,7 @@ class JNIClient:
         return jfield(clazz, name, type, f_inst)
 
     @synchronized
-    def GetField(self, object: jobject, field: jfield) -> jvalue:
+    def GetField(self, object: jobject, field: jfield, /) -> jvalue:
         write = self._write
         write_byte(write, 54)  # 54..62
         write_ptr(write, object._o_inst)
@@ -486,7 +502,19 @@ class JNIClient:
 
         self._check_exception()
         return read_value(self, field.type_k)
-    # 63..72
+
+    @synchronized
+    def SetField(self, object: jobject, field: jfield, value: jvalue, /):
+        write = self._write
+        write_byte(write, 63)  # 63..71
+        write_ptr(write, object._o_inst)
+        write_ptr(write, field._f_inst)
+        write_value(write, value, field.type_k)
+        self._flush()
+
+        self._check_exception()
+
+    # 72
 
     @synchronized  # TODO: unchecked
     def CallStaticMethod(self, clazz: jclass, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
@@ -586,3 +614,8 @@ if __name__ == "__main__":
     bigint_signum = jni.GetFieldID(bigint, "signum", "I")
     print("signum:", bigint_signum)
     print("result.signum:", jni.GetField(result, bigint_signum))
+    for val in (-3, -2, 123456789, -123456789, -1):
+        jni.SetField(result, bigint_signum, val)
+        field_val = jni.GetField(result, bigint_signum)
+        print("result.signum:", field_val)
+        assert field_val == val

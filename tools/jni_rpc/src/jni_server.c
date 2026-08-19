@@ -124,6 +124,52 @@ char* read_str(int fd, bool *eos, char *buffer) {
     buffer[size] = 0;
     return buffer + (size + 1);  // next buffer
 }
+jvalue void_jvalue = (jvalue)(jint) 0;
+jvalue read_value(int fd, bool *eos, const char type) {
+    uint8_t byte;
+    int number;
+
+    jlong long_v;
+    jfloat float_v;
+    jdouble double_v;
+    jobject object_v;
+
+    switch (type) {
+    case 'Z':
+        if (read(fd, &byte, 1) <= 0) { *eos = true; return void_jvalue; }
+        return (jvalue)(jboolean) (byte != 0);
+    case 'B':
+        if (read(fd, &byte, 1) <= 0) { *eos = true; return void_jvalue; }
+        return (jvalue)(jbyte) byte;
+    case 'C':
+        number = read_uleb128(fd, eos);
+        if (*eos) return void_jvalue;
+        return (jvalue)(jchar) number;
+    case 'S':
+        number = read_sleb128(fd, eos);
+        if (*eos) return void_jvalue;
+        return (jvalue)(jshort) number;
+    case 'I':
+        number = read_sleb128(fd, eos);
+        if (*eos) return void_jvalue;
+        return (jvalue)(jint) number;
+    case 'J':
+        long_v = read_sleb128L(fd, eos);
+        if (*eos) return void_jvalue;
+        return (jvalue) long_v;
+    case 'F':
+        if (read(fd, &float_v, 4) <= 0) { *eos = true; return void_jvalue; }
+        return (jvalue) float_v;
+    case 'D':
+        if (read(fd, &double_v, 8) <= 0) { *eos = true; return void_jvalue; }
+        return (jvalue) double_v;
+    case 'L':
+        object_v = (jobject) read_ptr(fd, eos);
+        if (*eos) return void_jvalue;
+        return (jvalue) object_v;
+    }
+    return void_jvalue;
+}
 void read_args(int fd, bool *eos, text sig, jvalue *result) {
     int pos = 0;
     uint8_t byte;
@@ -135,53 +181,12 @@ void read_args(int fd, bool *eos, text sig, jvalue *result) {
     jobject object_v;
 
     while (1) {
-        const char letter = sig[pos];
-        switch (letter) {
-        case 0:
+        const char type = sig[pos];
+        if (type == 0)
             return;
-        case 'Z':
-            if (read(fd, &byte, 1) <= 0) { *eos = true; return; }
-            result[pos] = (jvalue)(jboolean) (byte != 0);
-            break;
-        case 'B':
-            if (read(fd, &byte, 1) <= 0) { *eos = true; return; }
-            result[pos] = (jvalue)(jbyte) byte;
-            break;
-        case 'C':
-            number = read_uleb128(fd, eos);
-            if (*eos) return;
-            result[pos] = (jvalue)(jchar) number;
-            break;
-        case 'S':
-            number = read_sleb128(fd, eos);
-            if (*eos) return;
-            result[pos] = (jvalue)(jshort) number;
-            break;
-        case 'I':
-            number = read_sleb128(fd, eos);
-            if (*eos) return;
-            result[pos] = (jvalue)(jint) number;
-            break;
-        case 'J':
-            long_v = read_sleb128L(fd, eos);
-            if (*eos) return;
-            result[pos] = (jvalue) long_v;
-            break;
-        case 'F':
-            if (read(fd, &float_v, 4) <= 0) { *eos = true; return; }
-            result[pos] = (jvalue) float_v;
-            break;
-        case 'D':
-            if (read(fd, &double_v, 8) <= 0) { *eos = true; return; }
-            result[pos] = (jvalue) double_v;
-            break;
-        case 'L':
-            object_v = (jobject) read_ptr(fd, eos);
-            if (*eos) return;
-            result[pos] = (jvalue) object_v;
-            break;
-        }
-        pos++;
+        result[pos++] = read_value(fd, eos, type);
+        if (*eos)
+            return;
     }
 }
 
@@ -539,7 +544,32 @@ bool handle_command(int fd, ClientCtx *ctx) {
             fprintf(stderr, "Warning: use 54 (Get<type>Field) instead of 55..62\n");
             return true;  // eos
 
-        // 63..72
+        case 63:
+            object = (jobject) read_ptr(fd, &eos);
+            if (eos) return eos;
+            field = (jfield*) read_ptr(fd, &eos);
+            if (eos) return eos;
+            value = read_value(fd, &eos, field->type);
+            if (eos) return eos;
+
+            switch (field->type) {
+                case 'L': (*env)->SetObjectField(env, object, field->ID, value.l); break;
+                case 'Z': (*env)->SetBooleanField(env, object, field->ID, value.z); break;
+                case 'B': (*env)->SetByteField(env, object, field->ID, value.b); break;
+                case 'C': (*env)->SetCharField(env, object, field->ID, value.c); break;
+                case 'S': (*env)->SetShortField(env, object, field->ID, value.s); break;
+                case 'I': (*env)->SetIntField(env, object, field->ID, value.i); break;
+                case 'J': (*env)->SetLongField(env, object, field->ID, value.j); break;
+                case 'F': (*env)->SetFloatField(env, object, field->ID, value.f); break;
+                case 'D': (*env)->SetDoubleField(env, object, field->ID, value.d); break;
+            }
+            check_exception(fd, env);
+            break;
+        case 64 ... 71:
+            fprintf(stderr, "Warning: use 63 (Set<type>Field) instead of 64..71\n");
+            return true;  // eos
+
+        // 72 (GetStaticMethodID)
 
         case 73 ... 82:
             clazz = (jclass) read_ptr(fd, &eos);
