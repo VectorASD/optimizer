@@ -13,6 +13,15 @@ typedef int bool;
 #define false 0
 typedef const char* text;
 
+char get_return_type(text src) {
+    size_t pos = 0;
+    while (src[pos] == '[')
+        pos++;
+    if (src[pos] == 0)
+        fprintf(stderr, "Error: unexpected end of string while parsing signature\n");
+    return src[pos];
+}
+
 size_t to_shorty(text src, char *dst, char *ret_t) {
     size_t src_pos = 0, dst_pos = 0;
     bool is_arr = false;
@@ -21,13 +30,9 @@ size_t to_shorty(text src, char *dst, char *ret_t) {
         switch (letter) {
         case ')':
             dst[dst_pos++] = 0;
-            while (src[src_pos] == '[')
-                src_pos++;
-            if (src[src_pos] == 0) {
-                fprintf(stderr, "Error: unexpected end of string while parsing signature\n");
+            *ret_t = get_return_type(src + src_pos);
+            if (*ret_t == 0)
                 return (size_t) -1;
-            }
-            *ret_t = src[src_pos];
             return dst_pos;
         case 0:
             fprintf(stderr, "Error: unexpected end of string while parsing signature\n");
@@ -247,6 +252,7 @@ typedef struct ClientCtx {
     jvalue *args_buffer;
 } ClientCtx;
 
+
 typedef struct jmethod {
     jmethodID ID;
     char ret_t;
@@ -264,6 +270,23 @@ jmethod* jmethod_init(jmethodID id, text shorty, const size_t shorty_size, const
     method->ret_t = ret_t;
     memcpy(method->shorty, shorty, shorty_size);
     return method;
+}
+
+
+typedef struct jfield {
+    jfieldID ID;
+    char type;
+} jfield;
+
+jfield* jfield_init(jfieldID id, const char type, bool *eos) {
+    jfield *field = (jfield*) malloc(sizeof(jfield));
+    if (field == NULL) {
+        perror("jmethod malloc");
+        *eos = true; return NULL;
+    }
+    field->ID = id;
+    field->type = type;
+    return field;
 }
 
 
@@ -321,6 +344,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
 
     jclass clazz;
     jmethod *method;
+    jfield *field;
     jobject object;
     jvalue value;
     jstring string; jsize size;
@@ -415,11 +439,11 @@ bool handle_command(int fd, ClientCtx *ctx) {
             if (shorty_size == (size_t) -1) return true;
 
             jmethodID method_id = (*env)->GetMethodID(env, clazz, buffer, buffer2);
-            method = jmethod_init(method_id, shorty, shorty_size, ret_t, &eos);
-            if (eos) return eos;
-
-            if (!check_exception(fd, env))
+            if (!check_exception(fd, env)) {
+                method = jmethod_init(method_id, shorty, shorty_size, ret_t, &eos);
+                if (eos) return eos;
                 write_ptr(fd, method);
+            }
             break; }
 
         case 33 ... 42:
@@ -472,7 +496,50 @@ bool handle_command(int fd, ClientCtx *ctx) {
                 write_value(fd, method->ret_t, value);
             break;
 
-        // 53..72
+        case 53: 
+            clazz = (jclass) read_ptr(fd, &eos);
+            if (eos) return eos;
+            buffer2 = read_str(fd, &eos, buffer);
+            if (eos) return eos;
+            read_str(fd, &eos, buffer2);
+            if (eos) return eos;
+
+            char type = get_return_type(buffer2);
+            if (type == 0) return true;
+
+            jfieldID field_id = (*env)->GetFieldID(env, clazz, buffer, buffer2);
+            if (!check_exception(fd, env)) {
+                field = jfield_init(field_id, type, &eos);
+                if (eos) return eos;
+                write_ptr(fd, field);
+            }
+            break;
+
+        case 54:
+            object = (jobject) read_ptr(fd, &eos);
+            if (eos) return eos;
+            field = (jfield*) read_ptr(fd, &eos);
+            if (eos) return eos;
+
+            switch (field->type) {
+                case 'L': value = (jvalue) (*env)->GetObjectField(env, object, field->ID); break;
+                case 'Z': value = (jvalue) (*env)->GetBooleanField(env, object, field->ID); break;
+                case 'B': value = (jvalue) (*env)->GetByteField(env, object, field->ID); break;
+                case 'C': value = (jvalue) (*env)->GetCharField(env, object, field->ID); break;
+                case 'S': value = (jvalue) (*env)->GetShortField(env, object, field->ID); break;
+                case 'I': value = (jvalue) (*env)->GetIntField(env, object, field->ID); break;
+                case 'J': value = (jvalue) (*env)->GetLongField(env, object, field->ID); break;
+                case 'F': value = (jvalue) (*env)->GetFloatField(env, object, field->ID); break;
+                case 'D': value = (jvalue) (*env)->GetDoubleField(env, object, field->ID); break;
+            }
+            if (!check_exception(fd, env))
+                write_value(fd, field->type, value);
+            break;
+        case 55 ... 62:
+            fprintf(stderr, "Warning: use 54 (Get<type>Field) instead of 55..62\n");
+            return true;  // eos
+
+        // 63..72
 
         case 73 ... 82:
             clazz = (jclass) read_ptr(fd, &eos);

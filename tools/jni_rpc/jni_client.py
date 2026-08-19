@@ -175,6 +175,7 @@ shorty2attr[ord('R')] = "_s_inst"
 shorty2attr[ord('A')] = "_a_inst"
 # jclass -> _c_inst
 # jmethod -> _m_inst
+# jfield -> _j_inst
 # Нет конфликтов в защите указателей
 
 # знаю про shorty ещё с сентября 2019 года, т.к. пилил весь месяц (свой отпуск) DexReader до финальной
@@ -266,7 +267,7 @@ class jmethod:
         ret_t2code[ord(ret_t)] = i
     del i, ret_t
 
-    def __init__(self, clazz, name, args, ret_t, inst):
+    def __init__(self, clazz, name, args, ret_t, inst, /):
         self.clazz = clazz
         self.name = name
         self.args = args
@@ -279,8 +280,23 @@ class jmethod:
         self.ret_k = self.ret_t2code[ord(ret_s)]
       # print(args, "->", self.shorty)
       # print(ret_t, "->", self.ret_k, chr(self.ret_k))
-    def __repr__(self):
+    def __repr__(self, /):
         return f"<jmethod {self.name}({self.args}){self.ret_t}>"
+
+class jfield:
+    ret_t2code = jmethod.ret_t2code
+
+    def __init__(self, clazz, name, type, inst, /):
+        self.clazz = clazz
+        self.name = name
+        self.type = type
+        self._f_inst = inst
+        type_s = to_shorty(type)
+        if len(type_s) != 1:
+            raise AttributeError(f"type {type_s!r} must consist of exactly one type")
+        self.type_k = self.ret_t2code[ord(type_s)]
+    def __repr__(self, /):
+        return f"<jfield {self.name}:{self.type}>"
 
 
 class JNIClient:
@@ -444,7 +460,33 @@ class JNIClient:
         if ret_kind != 11:  # 'V'
             return read_value(self, ret_kind)
 
-    # 53..72
+    def GetFieldID(self, clazz: jclass, name: str, type: jclass|str, /) -> jfield:
+        if isinstance(type, jclass):
+            type = type.name
+
+        write = self._write
+        with self._lock:
+            write_byte(write, 53)
+            write_ptr(write, clazz._c_inst)
+            write_str(write, name)
+            write_str(write, type)
+            self._flush()
+
+            self._check_exception()
+            f_inst = read_ptr(self._read)
+        return jfield(clazz, name, type, f_inst)
+
+    @synchronized
+    def GetField(self, object: jobject, field: jfield) -> jvalue:
+        write = self._write
+        write_byte(write, 54)  # 54..62
+        write_ptr(write, object._o_inst)
+        write_ptr(write, field._f_inst)
+        self._flush()
+
+        self._check_exception()
+        return read_value(self, field.type_k)
+    # 63..72
 
     @synchronized  # TODO: unchecked
     def CallStaticMethod(self, clazz: jclass, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
@@ -471,6 +513,7 @@ class JNIClient:
 
         self._check_exception()
         return jstring(self, read_ptr(self._read))
+    @synchronized
     def GetStringUTFLength(self, jstr: jstring) -> int:
         if not isinstance(jstr, jstring):
             raise TypeError(
@@ -484,6 +527,7 @@ class JNIClient:
 
         self._check_exception()
         return read_uleb128(self._read)
+    @synchronized
     def GetStringUTFChars(self, jstr: jstring):
         if not isinstance(jstr, jstring):
             raise TypeError(
@@ -538,3 +582,7 @@ if __name__ == "__main__":
   # print("length:", jni.GetStringUTFLength(result))  # Segmentation fault, вместо java-исключения :)
     print("data: ", jni.GetStringUTFChars(result_s))
     print("check:", pow(123456789, 3, 1000000007))
+
+    bigint_signum = jni.GetFieldID(bigint, "signum", "I")
+    print("signum:", bigint_signum)
+    print("result.signum:", jni.GetField(result, bigint_signum))
