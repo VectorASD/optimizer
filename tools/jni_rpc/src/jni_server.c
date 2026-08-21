@@ -1,17 +1,13 @@
-#include <stdio.h>  // printf
-#include <stdlib.h>  // malloc
-#include <unistd.h>  // read, write, close
-#include <pthread.h>  // pthread_create, pthread_detach
-#include <sys/socket.h>  // socket, AF_UNIX, SOCK_STREAM, bind, listen, accept
-#include <sys/un.h>  // struct sockaddr_un
+#include "jni.h"
+#include "common.h"
 
-#include <jni.h>
+#include <stdio.h> // printf
+#include <stdlib.h> // malloc
+#include <unistd.h> // read, write, close
+#include <pthread.h> // pthread_create, pthread_detach
+#include <sys/socket.h> // socket, AF_UNIX, SOCK_STREAM, bind, listen, accept
+#include <sys/un.h> // struct sockaddr_un
 
-
-typedef int bool;
-#define true 1
-#define false 0
-typedef const char* text;
 
 char get_return_type(text src) {
     size_t pos = 0;
@@ -107,11 +103,11 @@ jlong read_uleb128L(int fd, bool *eos) {
 }
 int read_sleb128(int fd, bool *eos) {
     int number = read_uleb128(fd, eos);
-    return (number >> 1) ^ (number & 1 ? -1 : 0);  // zigzag
+    return (number >> 1) ^ (number & 1 ? -1 : 0); // zigzag
 }
 jlong read_sleb128L(int fd, bool *eos) {
     jlong number = read_uleb128L(fd, eos);
-    return (number >> 1) ^ (number & 1 ? -1 : 0);  // zigzag
+    return (number >> 1) ^ (number & 1 ? -1 : 0); // zigzag
 }
 char* read_str(int fd, bool *eos, char *buffer) {
     int size = read_uleb128(fd, eos);
@@ -122,7 +118,7 @@ char* read_str(int fd, bool *eos, char *buffer) {
         return NULL;
     }
     buffer[size] = 0;
-    return buffer + (size + 1);  // next buffer
+    return buffer + (size + 1); // next buffer
 }
 jvalue void_jvalue = (jvalue)(jint) 0;
 jvalue read_value(int fd, bool *eos, const char type) {
@@ -261,7 +257,7 @@ typedef struct ClientCtx {
 typedef struct jmethod {
     jmethodID ID;
     char ret_t;
-    char shorty[];  // flexible array member
+    char shorty[]; // flexible array member
 } jmethod;
 
 jmethod* jmethod_init(jmethodID id, text shorty, const size_t shorty_size, const char ret_t, bool *eos) {
@@ -298,7 +294,7 @@ jfield* jfield_init(jfieldID id, const char type, bool *eos) {
 bool check_exception(int fd, JNIEnv* env) {
     jthrowable exc = (*env)->ExceptionOccurred(env);
     if (exc == NULL) {
-        write_uleb128(fd, 0);  // empty exception string
+        write_uleb128(fd, 0); // empty exception string
         return false;
     }
 
@@ -542,7 +538,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             break;
         case 55 ... 62:
             fprintf(stderr, "Warning: use 54 (Get<type>Field) instead of 55..62\n");
-            return true;  // eos
+            return true; // eos
 
         case 63:
             object = (jobject) read_ptr(fd, &eos);
@@ -567,7 +563,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             break;
         case 64 ... 71:
             fprintf(stderr, "Warning: use 63 (Set<type>Field) instead of 64..71\n");
-            return true;  // eos
+            return true; // eos
 
         // 72 (GetStaticMethodID)
 
@@ -626,7 +622,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             break;
         case 109:
             fprintf(stderr, "Warning: kind 109 (ReleaseStringUTFChars) is deprecated and not implemented\n");
-            return true;  // eos
+            return true; // eos
 
         // 110..173
 
@@ -650,7 +646,7 @@ void* handle_client_thread(void* arg) {
         .options = &option,
         .ignoreUnrecognized = JNI_TRUE,
     };
-    char buffer[8192];  // 8 КБ
+    char buffer[8192]; // 8 КБ
     jvalue args_buffer[256];
     ClientCtx ctx = {
         .vm = NULL, .env = NULL, .vm_count = 0,
