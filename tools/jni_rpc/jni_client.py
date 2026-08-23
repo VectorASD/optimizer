@@ -428,7 +428,7 @@ class JNIClient:
 
     # 30..31
 
-    def GetMethodID(self, clazz: jclass, name: str, args: tuple[jclass|str, ...], ret_t: jclass|str, /) -> jmethod:
+    def GetMethodID(self, clazz: jclass, name: str, args: tuple[jclass|str, ...], ret_t: jclass|str = 'V', /) -> jmethod:
         args = "".join(arg.name if isinstance(arg, jclass) else str(arg) for arg in args)
         if isinstance(ret_t, jclass):
             ret_t = ret_t.name
@@ -450,29 +450,28 @@ class JNIClient:
     @synchronized
     def CallMethod(self, object: jobject, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
         write = self._write
-        ret_kind = method.ret_k
-        write_byte(write, 33 + max(0, ret_kind-2))  # 33..42
+        write_byte(write, 33)  # 33..42
         write_ptr(write, object._o_inst)
         write_ptr(write, method._m_inst)
         write_args(write, method.shorty, args)
         self._flush()
 
         self._check_exception()
+        ret_kind = method.ret_k
         if ret_kind != 11:  # 'V'
             return read_value(self, ret_kind)
 
-    @synchronized  # TODO: unchecked
-    def CallNonvirtualMethod(self, object: jobject, clazz: jclass, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
+    @synchronized
+    def CallNonvirtualMethod(self, object: jobject, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
         write = self._write
-        ret_kind = method.ret_k
-        write_byte(write, 43 + max(0, ret_kind-2))  # 43..52
+        write_byte(write, 43)  # 43..52
         write_ptr(write, object._o_inst)
-        write_ptr(write, clazz._c_inst)
         write_ptr(write, method._m_inst)
         write_args(write, method.shorty, args)
         self._flush()
 
         self._check_exception()
+        ret_kind = method.ret_k
         if ret_kind != 11:  # 'V'
             return read_value(self, ret_kind)
 
@@ -519,14 +518,14 @@ class JNIClient:
     @synchronized  # TODO: unchecked
     def CallStaticMethod(self, clazz: jclass, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
         write = self._write
-        ret_kind = method.ret_k
-        write_byte(write, 73 + max(0, ret_kind-2))  # 73..82
+        write_byte(write, 73)  # 73..82
         write_ptr(write, clazz._c_inst)
         write_ptr(write, method._m_inst)
         write_args(write, method.shorty, args)
         self._flush()
 
         self._check_exception()
+        ret_kind = method.ret_k
         if ret_kind != 11:  # 'V'
             return read_value(self, ret_kind)
 
@@ -580,17 +579,19 @@ if __name__ == "__main__":
     jni.CreateOrReuseVM()
     print("version:", ".".join(map(str, jni.GetVersion())))
 
+    jbase = jni.FindClass("java/lang/Object")
     bigint = jni.FindClass("java/math/BigInteger")
     string = jni.FindClass("java/lang/String")
+    print("object:", jbase)
     print("bigint:", bigint)
     print("string:", string)
 
-    bigint_ctor = jni.GetMethodID(bigint, "<init>", (string,), 'V')
+    bigint_ctor = jni.GetMethodID(bigint, "<init>", (string,))
     bigint_modPow = jni.GetMethodID(bigint, "modPow", (bigint, bigint), bigint)
-    bigint_toString = jni.GetMethodID(bigint, "toString", (), string)
+    toString = jni.GetMethodID(jbase, "toString", (), string)
     print("<init>:", bigint_ctor)
     print("modPow:", bigint_modPow)
-    print("toString:", bigint_toString)
+    print("toString:", toString)
 
     numbers = []
     for num in (123456789, 3, 1000000007):
@@ -602,7 +603,7 @@ if __name__ == "__main__":
     base, exp, mod = numbers
 
     result = jni.CallMethod(base, bigint_modPow, exp, mod)
-    result_s = jni.CallMethod(result, bigint_toString)
+    result_s = jni.CallMethod(result, toString)
     print(result)
     print(result_s)
 
@@ -619,3 +620,8 @@ if __name__ == "__main__":
         field_val = jni.GetField(result, bigint_signum)
         print("result.signum:", field_val)
         assert field_val == val
+
+    result_s = jni.CallMethod(result, toString)  # -350575129
+    print("result:", jni.GetStringUTFChars(result_s))
+    result_s = jni.CallNonvirtualMethod(result, toString)  # java.math.BigInteger@eb1aa5e7
+    print("result:", jni.GetStringUTFChars(result_s))

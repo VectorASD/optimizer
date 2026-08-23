@@ -282,11 +282,12 @@ typedef struct ClientCtx {
 
 typedef struct jmethod {
     jmethodID ID;
+    jclass clazz;
     char ret_t;
     char shorty[]; // flexible array member
 } jmethod;
 
-jmethod* jmethod_init(jmethodID id, text signature, bool *eos, BlockPool *pool) {
+jmethod* jmethod_init(jmethodID id, jclass clazz, text signature, bool *eos, BlockPool *pool) {
     size_t shorty_size = get_shorty_size(signature);
     if (shorty_size == (size_t) -1) {
         *eos = true;
@@ -300,6 +301,7 @@ jmethod* jmethod_init(jmethodID id, text signature, bool *eos, BlockPool *pool) 
     }
 
     method->ID = id;
+    method->clazz = clazz;
     text ret_s = to_shorty(signature, method->shorty);
     method->ret_t = get_return_type(ret_s, eos);
 
@@ -376,7 +378,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
 
     JNIEnv* env = ctx->env;
     ScratchPool* scratch_mem = ctx->scratch_mem;
-    char* buffer, *buffer2;
+    char *buffer, *buffer2;
     jvalue* args_buffer = ctx->args_buffer;
 
     jclass clazz;
@@ -473,13 +475,13 @@ bool handle_command(int fd, ClientCtx *ctx) {
 
             jmethodID method_id = (*env)->GetMethodID(env, clazz, buffer, buffer2);
             if (!check_exception(fd, env)) {
-                method = jmethod_init(method_id, buffer2, &eos, ctx->block_mem);
+                method = jmethod_init(method_id, clazz, buffer2, &eos, ctx->block_mem);
                 if (eos) return eos;
                 write_ptr(fd, method);
             }
             break;
 
-        case 33 ... 42:
+        case 33:
             object = (jobject) read_ptr(fd, &eos);
             if (eos) return eos;
             method = (jmethod*) read_ptr(fd, &eos);
@@ -487,47 +489,51 @@ bool handle_command(int fd, ClientCtx *ctx) {
             read_args(fd, &eos, method->shorty, args_buffer);
             if (eos) return eos;
 
-            switch (kind) {
-                case 33: value = (jvalue) (*env)->CallObjectMethodA(env, object, method->ID, args_buffer); break;
-                case 34: value = (jvalue) (*env)->CallBooleanMethodA(env, object, method->ID, args_buffer); break;
-                case 35: value = (jvalue) (*env)->CallByteMethodA(env, object, method->ID, args_buffer); break;
-                case 36: value = (jvalue) (*env)->CallCharMethodA(env, object, method->ID, args_buffer); break;
-                case 37: value = (jvalue) (*env)->CallShortMethodA(env, object, method->ID, args_buffer); break;
-                case 38: value = (jvalue) (*env)->CallIntMethodA(env, object, method->ID, args_buffer); break;
-                case 39: value = (jvalue) (*env)->CallLongMethodA(env, object, method->ID, args_buffer); break;
-                case 40: value = (jvalue) (*env)->CallFloatMethodA(env, object, method->ID, args_buffer); break;
-                case 41: value = (jvalue) (*env)->CallDoubleMethodA(env, object, method->ID, args_buffer); break;
-                case 42: (*env)->CallVoidMethodA(env, object, method->ID, args_buffer); break;
+            switch (method->ret_t) {
+                case 'L': value = (jvalue) (*env)->CallObjectMethodA(env, object, method->ID, args_buffer); break;
+                case 'Z': value = (jvalue) (*env)->CallBooleanMethodA(env, object, method->ID, args_buffer); break;
+                case 'B': value = (jvalue) (*env)->CallByteMethodA(env, object, method->ID, args_buffer); break;
+                case 'C': value = (jvalue) (*env)->CallCharMethodA(env, object, method->ID, args_buffer); break;
+                case 'S': value = (jvalue) (*env)->CallShortMethodA(env, object, method->ID, args_buffer); break;
+                case 'I': value = (jvalue) (*env)->CallIntMethodA(env, object, method->ID, args_buffer); break;
+                case 'J': value = (jvalue) (*env)->CallLongMethodA(env, object, method->ID, args_buffer); break;
+                case 'F': value = (jvalue) (*env)->CallFloatMethodA(env, object, method->ID, args_buffer); break;
+                case 'D': value = (jvalue) (*env)->CallDoubleMethodA(env, object, method->ID, args_buffer); break;
+                case 'V': (*env)->CallVoidMethodA(env, object, method->ID, args_buffer); break;
             }
-            if (!check_exception(fd, env) && kind != 42)
+            if (!check_exception(fd, env) && method->ret_t != 'V')
                 write_value(fd, method->ret_t, value);
             break;
+        case 34 ... 42:
+            fprintf(stderr, "Warning: use 33 (Call<type>MethodA) instead of 34..42\n");
+            return true; // eos
 
-        case 43 ... 52:
+        case 43:
             object = (jobject) read_ptr(fd, &eos);
-            if (eos) return eos;
-            clazz = (jclass) read_ptr(fd, &eos);
             if (eos) return eos;
             method = (jmethod*) read_ptr(fd, &eos);
             if (eos) return eos;
             read_args(fd, &eos, method->shorty, args_buffer);
             if (eos) return eos;
 
-            switch (kind) {
-                case 43: value = (jvalue) (*env)->CallNonvirtualObjectMethodA(env, object, clazz, method->ID, args_buffer); break;
-                case 44: value = (jvalue) (*env)->CallNonvirtualBooleanMethodA(env, object, clazz, method->ID, args_buffer); break;
-                case 45: value = (jvalue) (*env)->CallNonvirtualByteMethodA(env, object, clazz, method->ID, args_buffer); break;
-                case 46: value = (jvalue) (*env)->CallNonvirtualCharMethodA(env, object, clazz, method->ID, args_buffer); break;
-                case 47: value = (jvalue) (*env)->CallNonvirtualShortMethodA(env, object, clazz, method->ID, args_buffer); break;
-                case 48: value = (jvalue) (*env)->CallNonvirtualIntMethodA(env, object, clazz, method->ID, args_buffer); break;
-                case 49: value = (jvalue) (*env)->CallNonvirtualLongMethodA(env, object, clazz, method->ID, args_buffer); break;
-                case 50: value = (jvalue) (*env)->CallNonvirtualFloatMethodA(env, object, clazz, method->ID, args_buffer); break;
-                case 51: value = (jvalue) (*env)->CallNonvirtualDoubleMethodA(env, object, clazz, method->ID, args_buffer); break;
-                case 52: (*env)->CallNonvirtualVoidMethodA(env, object, clazz, method->ID, args_buffer); break;
+            switch (method->ret_t) {
+                case 'L': value = (jvalue) (*env)->CallNonvirtualObjectMethodA(env, object, method->clazz, method->ID, args_buffer); break;
+                case 'Z': value = (jvalue) (*env)->CallNonvirtualBooleanMethodA(env, object, method->clazz, method->ID, args_buffer); break;
+                case 'B': value = (jvalue) (*env)->CallNonvirtualByteMethodA(env, object, method->clazz, method->ID, args_buffer); break;
+                case 'C': value = (jvalue) (*env)->CallNonvirtualCharMethodA(env, object, method->clazz, method->ID, args_buffer); break;
+                case 'S': value = (jvalue) (*env)->CallNonvirtualShortMethodA(env, object, method->clazz, method->ID, args_buffer); break;
+                case 'I': value = (jvalue) (*env)->CallNonvirtualIntMethodA(env, object, method->clazz, method->ID, args_buffer); break;
+                case 'J': value = (jvalue) (*env)->CallNonvirtualLongMethodA(env, object, method->clazz, method->ID, args_buffer); break;
+                case 'F': value = (jvalue) (*env)->CallNonvirtualFloatMethodA(env, object, method->clazz, method->ID, args_buffer); break;
+                case 'D': value = (jvalue) (*env)->CallNonvirtualDoubleMethodA(env, object, method->clazz, method->ID, args_buffer); break;
+                case 'V': (*env)->CallNonvirtualVoidMethodA(env, object, method->clazz, method->ID, args_buffer); break;
             }
-            if (!check_exception(fd, env) && kind != 52)
+            if (!check_exception(fd, env) && method->ret_t != 'V')
                 write_value(fd, method->ret_t, value);
             break;
+        case 44 ... 52:
+            fprintf(stderr, "Warning: use 43 (CallNonvirtual<type>MethodA) instead of 44..52\n");
+            return true; // eos
 
         case 53: 
             clazz = (jclass) read_ptr(fd, &eos);
@@ -596,7 +602,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
 
         // 72 (GetStaticMethodID)
 
-        case 73 ... 82:
+        case 73:
             clazz = (jclass) read_ptr(fd, &eos);
             if (eos) return eos;
             method = (jmethod*) read_ptr(fd, &eos);
@@ -604,21 +610,24 @@ bool handle_command(int fd, ClientCtx *ctx) {
             read_args(fd, &eos, method->shorty, args_buffer);
             if (eos) return eos;
 
-            switch (kind) {
-                case 73: value = (jvalue) (*env)->CallStaticObjectMethodA(env, clazz, method->ID, args_buffer); break;
-                case 74: value = (jvalue) (*env)->CallStaticBooleanMethodA(env, clazz, method->ID, args_buffer); break;
-                case 75: value = (jvalue) (*env)->CallStaticByteMethodA(env, clazz, method->ID, args_buffer); break;
-                case 76: value = (jvalue) (*env)->CallStaticCharMethodA(env, clazz, method->ID, args_buffer); break;
-                case 77: value = (jvalue) (*env)->CallStaticShortMethodA(env, clazz, method->ID, args_buffer); break;
-                case 78: value = (jvalue) (*env)->CallStaticIntMethodA(env, clazz, method->ID, args_buffer); break;
-                case 79: value = (jvalue) (*env)->CallStaticLongMethodA(env, clazz, method->ID, args_buffer); break;
-                case 80: value = (jvalue) (*env)->CallStaticFloatMethodA(env, clazz, method->ID, args_buffer); break;
-                case 81: value = (jvalue) (*env)->CallStaticDoubleMethodA(env, clazz, method->ID, args_buffer); break;
-                case 82: (*env)->CallStaticVoidMethodA(env, clazz, method->ID, args_buffer); break;
+            switch (method->ret_t) {
+                case 'L': value = (jvalue) (*env)->CallStaticObjectMethodA(env, clazz, method->ID, args_buffer); break;
+                case 'Z': value = (jvalue) (*env)->CallStaticBooleanMethodA(env, clazz, method->ID, args_buffer); break;
+                case 'B': value = (jvalue) (*env)->CallStaticByteMethodA(env, clazz, method->ID, args_buffer); break;
+                case 'C': value = (jvalue) (*env)->CallStaticCharMethodA(env, clazz, method->ID, args_buffer); break;
+                case 'S': value = (jvalue) (*env)->CallStaticShortMethodA(env, clazz, method->ID, args_buffer); break;
+                case 'I': value = (jvalue) (*env)->CallStaticIntMethodA(env, clazz, method->ID, args_buffer); break;
+                case 'J': value = (jvalue) (*env)->CallStaticLongMethodA(env, clazz, method->ID, args_buffer); break;
+                case 'F': value = (jvalue) (*env)->CallStaticFloatMethodA(env, clazz, method->ID, args_buffer); break;
+                case 'D': value = (jvalue) (*env)->CallStaticDoubleMethodA(env, clazz, method->ID, args_buffer); break;
+                case 'V': (*env)->CallStaticVoidMethodA(env, clazz, method->ID, args_buffer); break;
             }
-            if (!check_exception(fd, env) && kind != 82)
+            if (!check_exception(fd, env) && method->ret_t != 'V')
                 write_value(fd, method->ret_t, value);
             break;
+        case 74 ... 82:
+            fprintf(stderr, "Warning: use 73 (CallStatic<type>MethodA) instead of 74..82\n");
+            return true; // eos
 
         // 83..105
 
