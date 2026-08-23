@@ -1,5 +1,6 @@
-#include "jni.h"
+#include "mem_pool.h"
 #include "common.h"
+#include "jni.h"
 
 #include <stdio.h> // printf
 #include <stdlib.h> // malloc
@@ -9,30 +10,42 @@
 #include <sys/un.h> // struct sockaddr_un
 
 
-char get_return_type(text src) {
-    size_t pos = 0;
-    while (src[pos] == '[')
-        pos++;
-    if (src[pos] == 0)
-        fprintf(stderr, "Error: unexpected end of string while parsing signature\n");
-    return src[pos];
-}
-
-size_t to_shorty(text src, char *dst, char *ret_t) {
+size_t get_shorty_size(text src) {
     size_t src_pos = 0, dst_pos = 0;
-    bool is_arr = false;
     while (true) {
         const char letter = src[src_pos++];
         switch (letter) {
         case ')':
-            dst[dst_pos++] = 0;
-            *ret_t = get_return_type(src + src_pos);
-            if (*ret_t == 0)
-                return (size_t) -1;
+            dst_pos++; // null term
             return dst_pos;
         case 0:
             fprintf(stderr, "Error: unexpected end of string while parsing signature\n");
             return (size_t) -1;
+        case 'L':
+            while (src[src_pos] != ';' && src[src_pos] != 0 && src[src_pos] != ')')
+                src_pos++;
+            if (src[src_pos] == ';')
+                src_pos++;
+            dst_pos++; // 'L'
+            break;
+        case 'Z': case 'B': case 'C': case 'S':
+        case 'I': case 'J': case 'F': case 'D':
+            dst_pos++; // primitive or 'L'
+            break;
+        }
+    }
+}
+
+text to_shorty(text src, char *dst) {
+    size_t src_pos = 0, dst_pos = 0;
+    bool is_arr = false;
+
+    while (true) {
+        const char letter = src[src_pos++];
+        switch (letter) {
+        case ')':
+            dst[dst_pos] = 0;
+            return src + src_pos;
         case '[':
             is_arr = true;
             break;
@@ -54,6 +67,17 @@ size_t to_shorty(text src, char *dst, char *ret_t) {
             break;
         }
     }
+}
+
+char get_return_type(text src, bool *eos) {
+    size_t pos = 0;
+    while (src[pos] == '[')
+        pos++;
+    if (src[pos] == 0) {
+        *eos = true;
+        fprintf(stderr, "Error: unexpected end of string while parsing signature\n");
+    }
+    return src[pos];
 }
 
 
@@ -109,16 +133,17 @@ jlong read_sleb128L(int fd, bool *eos) {
     jlong number = read_uleb128L(fd, eos);
     return (number >> 1) ^ (number & 1 ? -1 : 0); // zigzag
 }
-char* read_str(int fd, bool *eos, char *buffer) {
+char* read_str(int fd, bool *eos, ScratchPool *pool) {
     int size = read_uleb128(fd, eos);
     if (*eos)
         return NULL;
-    if (read(fd, buffer, size) <= 0) {
+    char* buffer = (char*) pool_alloc(pool, size+1);
+    if (!buffer || read(fd, buffer, size) <= 0) {
         *eos = true;
         return NULL;
     }
     buffer[size] = 0;
-    return buffer + (size + 1); // next buffer
+    return buffer;
 }
 jvalue void_jvalue = (jvalue)(jint) 0;
 jvalue read_value(int fd, bool *eos, const char type) {
@@ -249,8 +274,9 @@ typedef struct ClientCtx {
     int vm_count;
     JavaVMInitArgs* args;
     bool own_vm;
-    char *buffer;
-    jvalue *args_buffer;
+    ScratchPool* scratch_mem;
+    BlockPool* block_mem;
+    jvalue* args_buffer;
 } ClientCtx;
 
 
@@ -260,16 +286,23 @@ typedef struct jmethod {
     char shorty[]; // flexible array member
 } jmethod;
 
-jmethod* jmethod_init(jmethodID id, text shorty, const size_t shorty_size, const char ret_t, bool *eos) {
-    jmethod *method = (jmethod*) malloc(sizeof(jmethod) + shorty_size);
+jmethod* jmethod_init(jmethodID id, text signature, bool *eos, BlockPool *pool) {
+    size_t shorty_size = get_shorty_size(signature);
+    if (shorty_size == (size_t) -1) {
+        *eos = true;
+        return NULL;
+    }
+
+    jmethod* method = (jmethod*) block_pool_alloc(pool, sizeof(jmethod) + shorty_size);
     if (method == NULL) {
-        perror("jmethod malloc");
+        fprintf(stderr, "jmethod pool alloc\n");
         *eos = true; return NULL;
     }
-    // TODO: save "method" to memory bank + "free" after disconnection
+
     method->ID = id;
-    method->ret_t = ret_t;
-    memcpy(method->shorty, shorty, shorty_size);
+    text ret_s = to_shorty(signature, method->shorty);
+    method->ret_t = get_return_type(ret_s, eos);
+
     return method;
 }
 
@@ -279,14 +312,16 @@ typedef struct jfield {
     char type;
 } jfield;
 
-jfield* jfield_init(jfieldID id, const char type, bool *eos) {
-    jfield *field = (jfield*) malloc(sizeof(jfield));
+jfield* jfield_init(jfieldID id, text type_s, bool *eos, BlockPool *pool) {
+    jfield* field = (jfield*) block_pool_alloc(pool, sizeof(jfield));
     if (field == NULL) {
-        perror("jmethod malloc");
+        fprintf(stderr, "jfield pool alloc\n");
         *eos = true; return NULL;
     }
+
     field->ID = id;
-    field->type = type;
+    field->type = get_return_type(type_s, eos);
+
     return field;
 }
 
@@ -339,13 +374,14 @@ bool handle_command(int fd, ClientCtx *ctx) {
         return eos;
     printf("(S) kind: %d\n", kind);
 
-    JNIEnv *env = ctx->env;
-    char *buffer = ctx->buffer, *buffer2;
-    jvalue *args_buffer = ctx->args_buffer;
+    JNIEnv* env = ctx->env;
+    ScratchPool* scratch_mem = ctx->scratch_mem;
+    char* buffer, *buffer2;
+    jvalue* args_buffer = ctx->args_buffer;
 
     jclass clazz;
-    jmethod *method;
-    jfield *field;
+    jmethod* method;
+    jfield* field;
     jobject object;
     jvalue value;
     jstring string; jsize size;
@@ -402,7 +438,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
 
      // case 6: DefineClass...
         case 7:
-            read_str(fd, &eos, buffer);
+            buffer = read_str(fd, &eos, scratch_mem);
             if (eos) return eos;
 
             clazz = (*env)->FindClass(env, buffer);
@@ -427,25 +463,21 @@ bool handle_command(int fd, ClientCtx *ctx) {
 
         // 30..31
 
-        case 32: {
+        case 32:
             clazz = (jclass) read_ptr(fd, &eos);
             if (eos) return eos;
-            buffer2 = read_str(fd, &eos, buffer);
+            buffer = read_str(fd, &eos, scratch_mem);
             if (eos) return eos;
-            char *shorty = read_str(fd, &eos, buffer2);
+            buffer2 = read_str(fd, &eos, scratch_mem);
             if (eos) return eos;
-
-            char ret_t;
-            size_t shorty_size = to_shorty(buffer2, shorty, &ret_t);
-            if (shorty_size == (size_t) -1) return true;
 
             jmethodID method_id = (*env)->GetMethodID(env, clazz, buffer, buffer2);
             if (!check_exception(fd, env)) {
-                method = jmethod_init(method_id, shorty, shorty_size, ret_t, &eos);
+                method = jmethod_init(method_id, buffer2, &eos, ctx->block_mem);
                 if (eos) return eos;
                 write_ptr(fd, method);
             }
-            break; }
+            break;
 
         case 33 ... 42:
             object = (jobject) read_ptr(fd, &eos);
@@ -500,17 +532,14 @@ bool handle_command(int fd, ClientCtx *ctx) {
         case 53: 
             clazz = (jclass) read_ptr(fd, &eos);
             if (eos) return eos;
-            buffer2 = read_str(fd, &eos, buffer);
+            buffer = read_str(fd, &eos, scratch_mem);
             if (eos) return eos;
-            read_str(fd, &eos, buffer2);
+            buffer2 = read_str(fd, &eos, scratch_mem);
             if (eos) return eos;
-
-            char type = get_return_type(buffer2);
-            if (type == 0) return true;
 
             jfieldID field_id = (*env)->GetFieldID(env, clazz, buffer, buffer2);
             if (!check_exception(fd, env)) {
-                field = jfield_init(field_id, type, &eos);
+                field = jfield_init(field_id, buffer2, &eos, ctx->block_mem);
                 if (eos) return eos;
                 write_ptr(fd, field);
             }
@@ -595,7 +624,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
 
         // TODO: support MUTF8
         case 106:
-            read_str(fd, &eos, buffer);
+            buffer = read_str(fd, &eos, scratch_mem);
             if (eos) return eos;
 
             object = (*env)->NewStringUTF(env, buffer);
@@ -646,17 +675,23 @@ void* handle_client_thread(void* arg) {
         .options = &option,
         .ignoreUnrecognized = JNI_TRUE,
     };
-    char buffer[8192]; // 8 КБ
+    ScratchPool scratch_mem = pool_init();
+    BlockPool block_mem = block_pool_init();
     jvalue args_buffer[256];
     ClientCtx ctx = {
         .vm = NULL, .env = NULL, .vm_count = 0,
         .args = &args, .own_vm = false,
-        .buffer = buffer, .args_buffer = args_buffer,
+        .scratch_mem = &scratch_mem, .block_mem = &block_mem,
+        .args_buffer = args_buffer,
     };
 
     while (1)
         if (handle_command(client_fd, &ctx))
             break;
+        pool_clear(&scratch_mem);
+
+    pool_clear(&scratch_mem);
+    block_pool_clear(&block_mem);
 
     JavaVM* vm = ctx.vm;
     if (vm) {

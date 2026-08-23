@@ -35,7 +35,7 @@ mkdir -p "$OBJ"
 "${CC[@]}" "${CFLAGS[@]}" -MF "$OBJ/utils.d" -o "$OBJ/utils.o" -c "$SRC/utils.c"
 "${CC[@]}" "${CFLAGS[@]}" -MF "$OBJ/mem_pool.d" -o "$OBJ/mem_pool.o" -c "$SRC/mem_pool.c"
 
-"${CC[@]}" -o "$OBJ/jni_server.so" "$OBJ/utils.o" "$OBJ/jni_server.o" \
+"${CC[@]}" -o "$OBJ/jni_server.so" "$OBJ"/*.o \
     -L"$(dirname "$JNI_LIB")" -ljvm \
     -Wl,-rpath,"$(dirname "$JNI_LIB")"
 
