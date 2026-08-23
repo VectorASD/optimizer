@@ -1,5 +1,5 @@
 #include "common.h"
-#include <stdint.h>
+#include <stdint.h> // uint16_t, size_t
 
 
 #ifndef UTILS_H

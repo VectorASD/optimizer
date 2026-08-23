@@ -31,8 +31,9 @@ CFLAGS=("-I$INCLUDE" "-I$JNI_INCLUDE" "-fPIC" "-MMD")
 
 mkdir -p "$OBJ"
 
-"${CC[@]}" "${CFLAGS[@]}" -MF "$OBJ/utils.d" -o "$OBJ/utils.o" -c "$SRC/utils.c"
 "${CC[@]}" "${CFLAGS[@]}" -MF "$OBJ/jni_server.d" -o "$OBJ/jni_server.o" -c "$SRC/jni_server.c"
+"${CC[@]}" "${CFLAGS[@]}" -MF "$OBJ/utils.d" -o "$OBJ/utils.o" -c "$SRC/utils.c"
+"${CC[@]}" "${CFLAGS[@]}" -MF "$OBJ/mem_pool.d" -o "$OBJ/mem_pool.o" -c "$SRC/mem_pool.c"
 
 "${CC[@]}" -o "$OBJ/jni_server.so" "$OBJ/utils.o" "$OBJ/jni_server.o" \
     -L"$(dirname "$JNI_LIB")" -ljvm \
