@@ -1,5 +1,6 @@
 #include "mem_pool.h"
 #include "common.h"
+#include "utils.h"
 #include "jni.h"
 
 #include <stdio.h> // printf
@@ -247,10 +248,12 @@ void write_sleb128L(int fd, jlong val) {
     jlong u = (val << 1) ^ -(val < 0);
     write_uleb128L(fd, u);
 }
-void write_str(int fd, text str) {
-    size_t size = strlen(str);
+void write_str_with_size(int fd, text str, size_t size) {
     write_uleb128(fd, size);
     write(fd, str, size);
+}
+void write_str(int fd, text str) {
+    write_str_with_size(fd, str, strlen(str));
 }
 void write_value(int fd, const char kind, jvalue value) {
     switch (kind) {
@@ -328,11 +331,12 @@ jfield* jfield_init(jfieldID id, text type_s, bool *eos, BlockPool *pool) {
 }
 
 
-bool check_exception(int fd, JNIEnv* env) {
+bool _check_exception(int fd, JNIEnv* env, bool send_ok) {
     jthrowable exc = (*env)->ExceptionOccurred(env);
     if (exc == NULL) {
-        write_uleb128(fd, 0); // empty exception string
-        return false;
+        if (send_ok)
+            write_uleb128(fd, 0); // empty exception string
+        return true;
     }
 
     jclass excClass = (*env)->GetObjectClass(env, exc);
@@ -365,7 +369,10 @@ bool check_exception(int fd, JNIEnv* env) {
     }
 
     (*env)->ExceptionClear(env);
-    return true;
+    return false;
+}
+bool check_exception(int fd, JNIEnv* env) {
+    return _check_exception(fd, env, /*send_ok=*/true);
 }
 
 bool handle_command(int fd, ClientCtx *ctx) {
@@ -444,7 +451,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             if (eos) return eos;
 
             clazz = (*env)->FindClass(env, buffer);
-            if (!check_exception(fd, env))
+            if (check_exception(fd, env))
                 write_ptr(fd, clazz);
             break;
 
@@ -459,7 +466,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             if (eos) return eos;
 
             object = (*env)->NewObjectA(env, clazz, method->ID, args_buffer);
-            if (!check_exception(fd, env))
+            if (check_exception(fd, env))
                 write_ptr(fd, object);
             break;
 
@@ -474,7 +481,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             if (eos) return eos;
 
             jmethodID method_id = (*env)->GetMethodID(env, clazz, buffer, buffer2);
-            if (!check_exception(fd, env)) {
+            if (check_exception(fd, env)) {
                 method = jmethod_init(method_id, clazz, buffer2, &eos, ctx->block_mem);
                 if (eos) return eos;
                 write_ptr(fd, method);
@@ -501,7 +508,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
                 case 'D': value = (jvalue) (*env)->CallDoubleMethodA(env, object, method->ID, args_buffer); break;
                 case 'V': (*env)->CallVoidMethodA(env, object, method->ID, args_buffer); break;
             }
-            if (!check_exception(fd, env) && method->ret_t != 'V')
+            if (check_exception(fd, env) && method->ret_t != 'V')
                 write_value(fd, method->ret_t, value);
             break;
         case 34 ... 42:
@@ -528,7 +535,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
                 case 'D': value = (jvalue) (*env)->CallNonvirtualDoubleMethodA(env, object, method->clazz, method->ID, args_buffer); break;
                 case 'V': (*env)->CallNonvirtualVoidMethodA(env, object, method->clazz, method->ID, args_buffer); break;
             }
-            if (!check_exception(fd, env) && method->ret_t != 'V')
+            if (check_exception(fd, env) && method->ret_t != 'V')
                 write_value(fd, method->ret_t, value);
             break;
         case 44 ... 52:
@@ -544,7 +551,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             if (eos) return eos;
 
             jfieldID field_id = (*env)->GetFieldID(env, clazz, buffer, buffer2);
-            if (!check_exception(fd, env)) {
+            if (check_exception(fd, env)) {
                 field = jfield_init(field_id, buffer2, &eos, ctx->block_mem);
                 if (eos) return eos;
                 write_ptr(fd, field);
@@ -568,7 +575,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
                 case 'F': value = (jvalue) (*env)->GetFloatField(env, object, field->ID); break;
                 case 'D': value = (jvalue) (*env)->GetDoubleField(env, object, field->ID); break;
             }
-            if (!check_exception(fd, env))
+            if (check_exception(fd, env))
                 write_value(fd, field->type, value);
             break;
         case 55 ... 62:
@@ -622,22 +629,52 @@ bool handle_command(int fd, ClientCtx *ctx) {
                 case 'D': value = (jvalue) (*env)->CallStaticDoubleMethodA(env, clazz, method->ID, args_buffer); break;
                 case 'V': (*env)->CallStaticVoidMethodA(env, clazz, method->ID, args_buffer); break;
             }
-            if (!check_exception(fd, env) && method->ret_t != 'V')
+            if (check_exception(fd, env) && method->ret_t != 'V')
                 write_value(fd, method->ret_t, value);
             break;
         case 74 ... 82:
             fprintf(stderr, "Warning: use 73 (CallStatic<type>MethodA) instead of 74..82\n");
             return true; // eos
 
-        // 83..105
+        // 83..102
 
-        // TODO: support MUTF8
+        case 103:
+            string = (jstring) read_ptr(fd, &eos);
+            if (eos) return eos;
+
+            size = (*env)->GetStringLength(env, string);
+            if (check_exception(fd, env))
+                write_uleb128(fd, size);
+            break;
+        case 104:
+            string = (jstring) read_ptr(fd, &eos);
+            if (eos) return eos;
+
+            size = (*env)->GetStringLength(env, string);
+            if (_check_exception(fd, env, /*send_ok=*/false)) {
+                const jchar* char_str = (*env)->GetStringChars(env, string, /*isCopy=*/NULL);
+                if (check_exception(fd, env)) {
+                    size_t utf8_size;
+                    text utf8 = utf16_to_utf8_nobom(char_str, (size_t) size, &utf8_size, &eos, scratch_mem);
+                    if (char_str)
+                        (*env)->ReleaseStringChars(env, string, char_str);
+                    if (eos) return eos;
+                    write_str_with_size(fd, utf8, utf8_size);
+                }
+            }
+            break;
+        case 105:
+            fprintf(stderr, "Warning: kind 105 (ReleaseStringChars) is deprecated and not implemented\n");
+            return true; // eos
+
+        // MUTF8 должен обрабатывать на стороне клиента, как массив байтов.
+        // Для получения UTF8 лучше всего использовать "NewString" и "GetStringChars" без "UTF"-суффикса
         case 106:
             buffer = read_str(fd, &eos, scratch_mem);
             if (eos) return eos;
 
             object = (*env)->NewStringUTF(env, buffer);
-            if (!check_exception(fd, env))
+            if (check_exception(fd, env))
                 write_ptr(fd, object);
             break;
         case 107:
@@ -645,7 +682,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             if (eos) return eos;
 
             size = (*env)->GetStringUTFLength(env, string);
-            if (!check_exception(fd, env))
+            if (check_exception(fd, env))
                 write_uleb128(fd, size);
             break;
         case 108:
@@ -653,7 +690,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             if (eos) return eos;
 
             text mutf8 = (*env)->GetStringUTFChars(env, string, /*isCopy=*/NULL);
-            if (!check_exception(fd, env)) {
+            if (check_exception(fd, env)) {
                 write_str(fd, mutf8);
                 (*env)->ReleaseStringUTFChars(env, string, mutf8);
             }

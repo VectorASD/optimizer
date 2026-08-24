@@ -2,7 +2,7 @@
 #include <stdlib.h>
 
 
-void check_bom(uint16_t **src_p, size_t *size_p) {
+void utf16_check_bom(uint16_t **src_p, size_t *size_p) {
     if (*size_p == 0)
         return;
     uint16_t bom = (*src_p)[0];
@@ -20,7 +20,9 @@ void check_bom(uint16_t **src_p, size_t *size_p) {
     }
 }
 
-size_t utf16_size(uint16_t *src, size_t src_size, bool *eos) {
+size_t utf16_size(const uint16_t *src, size_t src_size, bool *eos) {
+    if (!src)
+        return 0;
     size_t dst_size = 0, pos = 0;
     int codepoint = 0;
     while (pos < src_size) {
@@ -55,16 +57,15 @@ size_t utf16_size(uint16_t *src, size_t src_size, bool *eos) {
     return dst_size;
 }
 
-uint8_t* utf16_to_utf8(uint16_t *src, size_t src_size, size_t *dst_size, bool *eos) {
-    check_bom(&src, &src_size);
+text _utf16_to_utf8(const uint16_t *src, size_t src_size, size_t *dst_size, bool *eos, ScratchPool *pool) {
     *dst_size = utf16_size(src, src_size, eos);
     if (*eos || *dst_size == 0)
-        return NULL;
+        return "";
 
-    uint8_t *dst = (uint8_t*) malloc(*dst_size);
+    uint8_t *dst = (uint8_t*) pool_alloc(pool, *dst_size);
     if (!dst) {
         perror("malloc utf16_to_utf8");
-        *eos = true; return NULL;
+        *eos = true; return "";
     }
     size_t dst_pos = 0, src_pos = 0;
     int codepoint = 0;
@@ -99,5 +100,14 @@ uint8_t* utf16_to_utf8(uint16_t *src, size_t src_size, size_t *dst_size, bool *e
             dst[dst_pos++] = (uint8_t) (0x80 | codepoint & 0x3F);
         }
     }
-    return dst;
+    return (text) dst;
+}
+
+text utf16_to_utf8(uint16_t *src, size_t src_size, size_t *dst_size, bool *eos, ScratchPool *pool) {
+    utf16_check_bom(&src, &src_size);
+    return _utf16_to_utf8(src, src_size, dst_size, eos, pool);
+}
+
+text utf16_to_utf8_nobom(const uint16_t *src, size_t src_size, size_t *dst_size, bool *eos, ScratchPool *pool) {
+    return _utf16_to_utf8(src, src_size, dst_size, eos, pool);
 }

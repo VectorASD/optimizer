@@ -92,12 +92,13 @@ def read_sleb128(read, /) -> int:
     u = read_uleb128(read)
     return (u >> 1) ^ -(u & 1)
 
-def read_str(read, /) -> str:
+def read_str(read, bin=False, /) -> str:
     size = read_uleb128(read)
     data = read(size)
     if len(data) != size:
         raise EOFError("Unexpected end of stream") from None
-    return data.decode("utf-8")
+    # сервер (utf16_to_utf8) гарантирует корректность кодировки
+    return data if bin else data.decode("utf-8")
 
 result_dispatch = (
     lambda jni, /: jobject(jni, read_ptr(jni._read)),
@@ -269,7 +270,7 @@ class JavaError(Exception):
     pass
 
 
-class jclass:
+class jclass(jobject):
     def __init__(self, name, inst):
         self.name = f"L{name};"
         self._c_inst = inst
@@ -529,7 +530,28 @@ class JNIClient:
         if ret_kind != 11:  # 'V'
             return read_value(self, ret_kind)
 
-    # 83..105
+    # 83..102
+
+    @synchronized
+    def GetStringLength(self, jstr: jstring) -> int:
+        write = self._write
+        write_byte(write, 103)
+        write_ptr(write, jstr._s_inst)
+        self._flush()
+
+        self._check_exception()
+        return read_uleb128(self._read)
+    @synchronized
+    def GetStringChars(self, jstr: jstring):
+        write = self._write
+        write_byte(write, 104)
+        write_ptr(write, jstr._s_inst)
+        self._flush()
+
+        self._check_exception()
+        return read_str(self._read)
+    def ReleaseStringChars():
+        raise RuntimeError("Warning: ReleaseStringChars (kind 105) is deprecated and not implemented")
 
     @synchronized
     def NewStringUTF(self, text: str, /) -> jstring:
@@ -542,11 +564,6 @@ class JNIClient:
         return jstring(self, read_ptr(self._read))
     @synchronized
     def GetStringUTFLength(self, jstr: jstring) -> int:
-        if not isinstance(jstr, jstring):
-            raise TypeError(
-               f"GetStringUTFLength expected jstring, got {type(jstr).__name__}\n"
-                "This would cause a segmentation fault on the server if sent"
-            )
         write = self._write
         write_byte(write, 107)
         write_ptr(write, jstr._s_inst)
@@ -556,18 +573,13 @@ class JNIClient:
         return read_uleb128(self._read)
     @synchronized
     def GetStringUTFChars(self, jstr: jstring):
-        if not isinstance(jstr, jstring):
-            raise TypeError(
-               f"GetStringUTFChars expected jstring, got {type(jstr).__name__}\n"
-                "This would cause a segmentation fault on the server if sent"
-            )
         write = self._write
         write_byte(write, 108)
         write_ptr(write, jstr._s_inst)
         self._flush()
 
         self._check_exception()
-        return read_str(self._read)
+        return read_str(self._read, True)
     def ReleaseStringUTFChars():
         raise RuntimeError("Warning: ReleaseStringUTFChars (kind 109) is deprecated and not implemented")
 
@@ -607,7 +619,8 @@ if __name__ == "__main__":
     print(result)
     print(result_s)
 
-    print("length:", jni.GetStringUTFLength(result_s))
+    print("length (utf16):", jni.GetStringLength(result_s))
+    print("length (mutf8):", jni.GetStringUTFLength(result_s))
   # print("length:", jni.GetStringUTFLength(result))  # Segmentation fault, вместо java-исключения :)
     print("data: ", jni.GetStringUTFChars(result_s))
     print("check:", pow(123456789, 3, 1000000007))
@@ -622,6 +635,6 @@ if __name__ == "__main__":
         assert field_val == val
 
     result_s = jni.CallMethod(result, toString)  # -350575129
-    print("result:", jni.GetStringUTFChars(result_s))
+    print("result:", jni.GetStringChars(result_s))
     result_s = jni.CallNonvirtualMethod(result, toString)  # java.math.BigInteger@eb1aa5e7
-    print("result:", jni.GetStringUTFChars(result_s))
+    print("result:", jni.GetStringChars(result_s))
