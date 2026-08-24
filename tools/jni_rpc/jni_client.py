@@ -530,8 +530,17 @@ class JNIClient:
         if ret_kind != 11:  # 'V'
             return read_value(self, ret_kind)
 
-    # 83..102
+    # 83..101
 
+    @synchronized
+    def NewString(self, text: str, /) -> jstring:
+        write = self._write
+        write_byte(write, 102)
+        write_str(write, text)
+        self._flush()
+
+        self._check_exception()
+        return jstring(self, read_ptr(self._read))
     @synchronized
     def GetStringLength(self, jstr: jstring) -> int:
         write = self._write
@@ -638,3 +647,7 @@ if __name__ == "__main__":
     print("result:", jni.GetStringChars(result_s))
     result_s = jni.CallNonvirtualMethod(result, toString)  # java.math.BigInteger@eb1aa5e7
     print("result:", jni.GetStringChars(result_s))
+
+    utf16_str = jni.NewString("123 data\0meow рус! \U0001F525•")
+    print("utf16_str:", utf16_str)
+    print("utf8_str:", repr(jni.GetStringChars(utf16_str)))

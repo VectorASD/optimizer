@@ -146,6 +146,19 @@ char* read_str(int fd, bool *eos, ScratchPool *pool) {
     buffer[size] = 0;
     return buffer;
 }
+char* read_str_with_size(int fd, bool *eos, int *size_p, ScratchPool *pool) {
+    int size = read_uleb128(fd, eos);
+    if (*eos)
+        return NULL;
+    char* buffer = (char*) pool_alloc(pool, size+1);
+    if (!buffer || read(fd, buffer, size) <= 0) {
+        *eos = true;
+        return NULL;
+    }
+    buffer[size] = 0;
+    *size_p = size;
+    return buffer;
+}
 jvalue void_jvalue = (jvalue)(jint) 0;
 jvalue read_value(int fd, bool *eos, const char type) {
     uint8_t byte;
@@ -636,8 +649,21 @@ bool handle_command(int fd, ClientCtx *ctx) {
             fprintf(stderr, "Warning: use 73 (CallStatic<type>MethodA) instead of 74..82\n");
             return true; // eos
 
-        // 83..102
+        // 83..101
 
+        case 102: {
+            int utf8_size;
+            buffer = read_str_with_size(fd, &eos, &utf8_size, scratch_mem);
+            if (eos) return eos;
+
+            size_t utf16_size;
+            const jchar* utf16 = utf8_to_utf16((uint8_t*) buffer, utf8_size, &utf16_size, &eos, scratch_mem);
+            if (eos) return eos;
+
+            object = (*env)->NewString(env, utf16, (jsize) utf16_size);
+            if (check_exception(fd, env))
+                write_ptr(fd, object);
+            break; }
         case 103:
             string = (jstring) read_ptr(fd, &eos);
             if (eos) return eos;
