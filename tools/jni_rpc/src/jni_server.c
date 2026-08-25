@@ -402,7 +402,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
     jvalue* args_buffer = ctx->args_buffer;
 
     jclass clazz;
-    jmethod* method;
+    jmethod* method; jmethodID method_id;
     jfield* field;
     jobject object;
     jvalue value;
@@ -493,7 +493,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             buffer2 = read_str(fd, &eos, scratch_mem);
             if (eos) return eos;
 
-            jmethodID method_id = (*env)->GetMethodID(env, clazz, buffer, buffer2);
+            method_id = (*env)->GetMethodID(env, clazz, buffer, buffer2);
             if (check_exception(fd, env)) {
                 method = jmethod_init(method_id, clazz, buffer2, &eos, ctx->block_mem);
                 if (eos) return eos;
@@ -620,27 +620,39 @@ bool handle_command(int fd, ClientCtx *ctx) {
             fprintf(stderr, "Warning: use 63 (Set<type>Field) instead of 64..71\n");
             return true; // eos
 
-        // 72 (GetStaticMethodID)
-
-        case 73:
+        case 72:
             clazz = (jclass) read_ptr(fd, &eos);
             if (eos) return eos;
+            buffer = read_str(fd, &eos, scratch_mem);
+            if (eos) return eos;
+            buffer2 = read_str(fd, &eos, scratch_mem);
+            if (eos) return eos;
+
+            method_id = (*env)->GetStaticMethodID(env, clazz, buffer, buffer2);
+            if (check_exception(fd, env)) {
+                method = jmethod_init(method_id, clazz, buffer2, &eos, ctx->block_mem);
+                if (eos) return eos;
+                write_ptr(fd, method);
+            }
+            break;
+
+        case 73:
             method = (jmethod*) read_ptr(fd, &eos);
             if (eos) return eos;
             read_args(fd, &eos, method->shorty, args_buffer);
             if (eos) return eos;
 
             switch (method->ret_t) {
-                case 'L': value = (jvalue) (*env)->CallStaticObjectMethodA(env, clazz, method->ID, args_buffer); break;
-                case 'Z': value = (jvalue) (*env)->CallStaticBooleanMethodA(env, clazz, method->ID, args_buffer); break;
-                case 'B': value = (jvalue) (*env)->CallStaticByteMethodA(env, clazz, method->ID, args_buffer); break;
-                case 'C': value = (jvalue) (*env)->CallStaticCharMethodA(env, clazz, method->ID, args_buffer); break;
-                case 'S': value = (jvalue) (*env)->CallStaticShortMethodA(env, clazz, method->ID, args_buffer); break;
-                case 'I': value = (jvalue) (*env)->CallStaticIntMethodA(env, clazz, method->ID, args_buffer); break;
-                case 'J': value = (jvalue) (*env)->CallStaticLongMethodA(env, clazz, method->ID, args_buffer); break;
-                case 'F': value = (jvalue) (*env)->CallStaticFloatMethodA(env, clazz, method->ID, args_buffer); break;
-                case 'D': value = (jvalue) (*env)->CallStaticDoubleMethodA(env, clazz, method->ID, args_buffer); break;
-                case 'V': (*env)->CallStaticVoidMethodA(env, clazz, method->ID, args_buffer); break;
+                case 'L': value = (jvalue) (*env)->CallStaticObjectMethodA(env, method->clazz, method->ID, args_buffer); break;
+                case 'Z': value = (jvalue) (*env)->CallStaticBooleanMethodA(env, method->clazz, method->ID, args_buffer); break;
+                case 'B': value = (jvalue) (*env)->CallStaticByteMethodA(env, method->clazz, method->ID, args_buffer); break;
+                case 'C': value = (jvalue) (*env)->CallStaticCharMethodA(env, method->clazz, method->ID, args_buffer); break;
+                case 'S': value = (jvalue) (*env)->CallStaticShortMethodA(env, method->clazz, method->ID, args_buffer); break;
+                case 'I': value = (jvalue) (*env)->CallStaticIntMethodA(env, method->clazz, method->ID, args_buffer); break;
+                case 'J': value = (jvalue) (*env)->CallStaticLongMethodA(env, method->clazz, method->ID, args_buffer); break;
+                case 'F': value = (jvalue) (*env)->CallStaticFloatMethodA(env, method->clazz, method->ID, args_buffer); break;
+                case 'D': value = (jvalue) (*env)->CallStaticDoubleMethodA(env, method->clazz, method->ID, args_buffer); break;
+                case 'V': (*env)->CallStaticVoidMethodA(env, method->clazz, method->ID, args_buffer); break;
             }
             if (check_exception(fd, env) && method->ret_t != 'V')
                 write_value(fd, method->ret_t, value);
@@ -694,7 +706,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             return true; // eos
 
         // MUTF8 должен обрабатывать на стороне клиента, как массив байтов.
-        // Для получения UTF8 лучше всего использовать "NewString" и "GetStringChars" без "UTF"-суффикса
+        // Для работы с UTF8 лучше всего использовать "NewString" и "GetStringChars" без "UTF"-суффикса
         case 106:
             buffer = read_str(fd, &eos, scratch_mem);
             if (eos) return eos;
@@ -850,6 +862,7 @@ void init_lib() {
 }*/
 
 int main() {
+    printf("\n");
     init_socket_server();
     printf("Server is running. Use 'kill %d' or Ctrl+C to stop.\n", getpid());
     while (1)

@@ -15,16 +15,21 @@ def synchronized(func, /):
 # Ljava/lang/String; с флагом final, так что наследников нет - детектор jstring тривиален
 def shorty_repl(match):
     s = match.group(0)
-    # 'A' - jarray
-    # 'R' - jstring
     # 'L' - jobject
-    return 'A' if s.startswith('[') else 'R' if s == "Ljava/lang/String;" else 'L'
+    # 'R' - jstring
+    # 'A' - jarray
+    # 'K' - jclass
+    return ('A' if s.startswith('[')
+        else 'R' if s == "Ljava/lang/String;"
+        else 'K' if s == "Ljava/lang/Class;"
+        else 'L')
 shorty_sub = re.compile(r"\[*L[\w/$]+;|\[+[ZBCSIJFD]").sub
 def to_shorty(sig: str, /) -> str:
     return shorty_sub(shorty_repl, sig)
 assert to_shorty("ZBCS[[IIZ[Legg;ZLbeef;IJFD") == "ZBCSAIZAZLIJFD"
 assert to_shorty("[[Landroid/os/Build$VERSION;") == "A"
 assert to_shorty("Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;La;") == "RRARL"
+assert to_shorty("Ljava/lang/Class;[ZLjava/lang/String;") == "KAR"
 
 
 class jobject:
@@ -104,6 +109,7 @@ result_dispatch = (
     lambda jni, /: jobject(jni, read_ptr(jni._read)),
     lambda jni, /: jstring(jni, read_ptr(jni._read)),
     lambda jni, /: jarray(jni, read_ptr(jni._read)),
+    lambda jni, /: jclass(jni, None, read_ptr(jni._read)),
     lambda read, /: bool(read(1)[0]),  # boolean
     lambda read, /: read(1)[0],  # byte
     lambda read, /: chr(read_uleb128(read)),  # char
@@ -115,7 +121,7 @@ result_dispatch = (
     lambda read, /: None,  # void
 )
 def read_value(jni, kind: int, /) -> jvalue:
-    if kind < 3:  # LRA
+    if kind < 4:  # LRAK
         return result_dispatch[kind](jni)
     return result_dispatch[kind](jni._read)
 
@@ -154,10 +160,15 @@ def write_str(write, val: str, /) -> None:
     write_uleb128(write, len(data))
     write(data)
 
+def write_str_bin(write, data: bytes, /) -> None:
+    write_uleb128(write, len(data))
+    write(data)
+
 value_dispatch = (
     lambda write, v, /: write(pack('P', v._o_inst)),  # jobject
     lambda write, v, /: write(pack('P', v._s_inst)),  # jstring
     lambda write, v, /: write(pack('P', v._a_inst)),  # jarray
+    lambda write, v, /: write(pack('P', v._c_inst)),  # jclass
     lambda write, v, /: write(int2byte[bool(v)]),  # boolean
     lambda write, v, /: write(int2byte[int(v)]),  # byte
     lambda write, v, /: write_uleb128(write, ord(v)),  # char
@@ -190,7 +201,7 @@ shorty2attr = [None] * 128  # ascii
 shorty2attr[ord('L')] = "_o_inst"
 shorty2attr[ord('R')] = "_s_inst"
 shorty2attr[ord('A')] = "_a_inst"
-# jclass -> _c_inst
+shorty2attr[ord('K')] = "_c_inst"
 # jmethod -> _m_inst
 # jfield -> _j_inst
 # Нет конфликтов в защите указателей
@@ -206,8 +217,8 @@ def args_writer_gen(shorty):
         letter = shorty[pos]
         letter_c = ord(letter)
         next_ = pos + 1
-        if letter in "LRA":  # jobject | jstring | jarray
-            while next_ < L and shorty[next_] in "LRA":
+        if letter in "LRAK":  # jobject | jstring | jarray | jclass
+            while next_ < L and shorty[next_] in "LRAK":
                 next_ += 1
             count = next_ - pos
             if count == 1:
@@ -271,20 +282,33 @@ class JavaError(Exception):
 
 
 class jclass(jobject):
-    def __init__(self, name, inst):
-        self.name = f"L{name};"
-        self._c_inst = inst
+    def __init__(self, jni, name, inst):
+        self.jni = jni
+        self._name = name
+        self._lock = Lock()
+        self._c_inst = inst  # для jni-методов, что всегда требуют jclass
+        self._o_inst = inst  # эквивалент java.lang.Class<?>
+
+    @property
+    def name(self):
+        with self._lock:
+            name = self._name
+            if name is None:
+                jni = self.jni
+                jstr = jni.GetStringChars(jni.getName(self))
+                name = self._name = f"L{jstr.replace('.', '/')};"
+        return name
 
     def __repr__(self):
         return f"<jclass {self.name}>"
 
-class jmethod:
+class jmethod_base:
     ret_t2code = [None] * 128
-    for i, ret_t in enumerate("LRAZBCSIJFDV"):
+    for i, ret_t in enumerate("LRAKZBCSIJFDV"):
         ret_t2code[ord(ret_t)] = i
     del i, ret_t
 
-    def __init__(self, clazz, name, args, ret_t, inst, /):
+    def __init__(self, clazz: jclass, name: str|None, args: str, ret_t: str, inst: int, /):
         self.clazz = clazz
         self.name = name
         self.args = args
@@ -295,13 +319,29 @@ class jmethod:
         if len(ret_s) != 1:
             raise AttributeError(f"ret_t {ret_t!r} must consist of exactly one type")
         self.ret_k = self.ret_t2code[ord(ret_s)]
-      # print(args, "->", self.shorty)
-      # print(ret_t, "->", self.ret_k, chr(self.ret_k))
+
+class jmethod(jmethod_base):
+    def __init__(self, clazz: jclass, name: str|None, args: str, ret_t: str, inst: int, /):
+        jmethod_base.__init__(self, clazz, name, args, ret_t, inst)
+        self._call = clazz.jni.CallMethod
     def __repr__(self, /):
         return f"<jmethod {self.name}({self.args}){self.ret_t}>"
 
+    def __call__(self, object: jobject, /, *args: tuple[jvalue, ...]) -> jobject:
+        return self._call(object, self, *args)
+
+class jmethod_static(jmethod_base):
+    def __init__(self, clazz: jclass, name: str|None, args: str, ret_t: str, inst: int, /):
+        jmethod_base.__init__(self, clazz, name, args, ret_t, inst)
+        self._call = clazz.jni.CallStaticMethod
+    def __repr__(self, /):
+        return f"<jmethod_static {self.name}({self.args}){self.ret_t}>"
+
+    def __call__(self, /, *args: tuple[jvalue, ...]) -> jobject:
+        return self._call(self, *args)
+
 class jfield:
-    ret_t2code = jmethod.ret_t2code
+    ret_t2code = jmethod_base.ret_t2code
 
     def __init__(self, clazz, name, type, inst, /):
         self.clazz = clazz
@@ -327,6 +367,10 @@ class JNIClient:
         self._flush = file.flush
         self._close = file.close
         self._sock_close = sock.close
+
+        self._class_type = None; self._ct_lock = Lock()
+        self._string_type = None; self._st_lock = Lock()
+        self._get_name = None; self._gn_lock = Lock()
 
     def __del__(self, /):
         self._close()
@@ -378,7 +422,7 @@ class JNIClient:
         self._flush()
         self._check_error()
 
-    # VM helper
+    # VM helpers
 
     def CreateOrReuseVM(self, /) -> None:
         vm_count = jni.GetCreatedJavaVMs()
@@ -388,6 +432,30 @@ class JNIClient:
         else:
             self.SelectVM(vm_count - 1)  # last VM in list
             self.AttachCurrentThread()
+
+    @property
+    def classType(self, /) -> jclass:
+        with self._ct_lock:
+            result = self._class_type
+            if result is None:
+                result = self._class_type = self.FindClass("java/lang/Class")
+        return result
+
+    @property
+    def stringType(self, /) -> jclass:
+        with self._st_lock:
+            result = self._string_type
+            if result is None:
+                result = self._string_type = self.FindClass("java/lang/String")
+        return result
+
+    @property
+    def getName(self, /) -> jmethod:
+        with self._gn_lock:
+            result = self._get_name
+            if result is None:
+                result = self._get_name = self.GetMethodID(self.classType, "getName", (), self.stringType)
+        return result
 
     # native methods
 
@@ -411,7 +479,7 @@ class JNIClient:
         self._flush()
 
         self._check_exception()
-        return jclass(class_name, read_ptr(self._read))
+        return jclass(self, f"L{class_name};", read_ptr(self._read))
 
     # 8..28
 
@@ -429,13 +497,12 @@ class JNIClient:
 
     # 30..31
 
-    def GetMethodID(self, clazz: jclass, name: str, args: tuple[jclass|str, ...], ret_t: jclass|str = 'V', /) -> jmethod:
+    def GetMethodID(self, clazz: jclass, name: str, args: tuple[jclass|str, ...] = (), ret_t: jclass|str = 'V', /) -> jmethod:
         args = "".join(arg.name if isinstance(arg, jclass) else str(arg) for arg in args)
         if isinstance(ret_t, jclass):
             ret_t = ret_t.name
+        # .name от jclass может использовать self._lock
 
-        # не весь метод пустил под @synchronized,
-        # т.к. здесь не только коммуникация
         write = self._write
         with self._lock:
             write_byte(write, 32)
@@ -459,7 +526,7 @@ class JNIClient:
 
         self._check_exception()
         ret_kind = method.ret_k
-        if ret_kind != 11:  # 'V'
+        if ret_kind != 12:  # 'V'
             return read_value(self, ret_kind)
 
     @synchronized
@@ -473,7 +540,7 @@ class JNIClient:
 
         self._check_exception()
         ret_kind = method.ret_k
-        if ret_kind != 11:  # 'V'
+        if ret_kind != 12:  # 'V'
             return read_value(self, ret_kind)
 
     def GetFieldID(self, clazz: jclass, name: str, type: jclass|str, /) -> jfield:
@@ -514,20 +581,35 @@ class JNIClient:
 
         self._check_exception()
 
-    # 72
+    def GetStaticMethodID(self, clazz: jclass, name: str, args: tuple[jclass|str, ...] = (), ret_t: jclass|str = 'V', /) -> jmethod_static:
+        args = "".join(arg.name if isinstance(arg, jclass) else str(arg) for arg in args)
+        if isinstance(ret_t, jclass):
+            ret_t = ret_t.name
+        # .name от jclass может использовать self._lock
 
-    @synchronized  # TODO: unchecked
-    def CallStaticMethod(self, clazz: jclass, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
+        write = self._write
+        with self._lock:
+            write_byte(write, 72)
+            write_ptr(write, clazz._c_inst)
+            write_str(write, name)
+            write_str(write, f"({args}){ret_t}")
+            self._flush()
+
+            self._check_exception()
+            m_inst = read_ptr(self._read)
+        return jmethod_static(clazz, name, args, ret_t, m_inst)
+
+    @synchronized
+    def CallStaticMethod(self, method: jmethod_static, /, *args: tuple[jvalue, ...]) -> jvalue|None:
         write = self._write
         write_byte(write, 73)  # 73..82
-        write_ptr(write, clazz._c_inst)
         write_ptr(write, method._m_inst)
         write_args(write, method.shorty, args)
         self._flush()
 
         self._check_exception()
         ret_kind = method.ret_k
-        if ret_kind != 11:  # 'V'
+        if ret_kind != 12:  # 'V'
             return read_value(self, ret_kind)
 
     # 83..101
@@ -551,7 +633,7 @@ class JNIClient:
         self._check_exception()
         return read_uleb128(self._read)
     @synchronized
-    def GetStringChars(self, jstr: jstring):
+    def GetStringChars(self, jstr: jstring) -> str:
         write = self._write
         write_byte(write, 104)
         write_ptr(write, jstr._s_inst)
@@ -563,10 +645,10 @@ class JNIClient:
         raise RuntimeError("Warning: ReleaseStringChars (kind 105) is deprecated and not implemented")
 
     @synchronized
-    def NewStringUTF(self, text: str, /) -> jstring:
+    def NewStringUTF(self, text: bytes, /) -> jstring:
         write = self._write
         write_byte(write, 106)
-        write_str(write, text)
+        write_str_bin(write, text)
         self._flush()
 
         self._check_exception()
@@ -581,7 +663,7 @@ class JNIClient:
         self._check_exception()
         return read_uleb128(self._read)
     @synchronized
-    def GetStringUTFChars(self, jstr: jstring):
+    def GetStringUTFChars(self, jstr: jstring) -> bytes:
         write = self._write
         write_byte(write, 108)
         write_ptr(write, jstr._s_inst)
@@ -595,11 +677,7 @@ class JNIClient:
     # 110..173
 
 
-if __name__ == "__main__":
-    jni = JNIClient()
-    jni.CreateOrReuseVM()
-    print("version:", ".".join(map(str, jni.GetVersion())))
-
+def first_check(jni):
     jbase = jni.FindClass("java/lang/Object")
     bigint = jni.FindClass("java/math/BigInteger")
     string = jni.FindClass("java/lang/String")
@@ -616,7 +694,7 @@ if __name__ == "__main__":
 
     numbers = []
     for num in (123456789, 3, 1000000007):
-        str_v = jni.NewStringUTF(str(num))
+        str_v = jni.NewStringUTF(str(num).encode("utf-8"))
         bigint_v = jni.NewObject(bigint, bigint_ctor, str_v)
         print("string:", str_v)
         print("bigint_v:", bigint_v)
@@ -651,3 +729,22 @@ if __name__ == "__main__":
     utf16_str = jni.NewString("123 data\0meow рус! \U0001F525•")
     print("utf16_str:", utf16_str)
     print("utf8_str:", repr(jni.GetStringChars(utf16_str)))
+
+def check_static(jni):
+    object_t = jni.FindClass("java/lang/Object")
+    class_t = jni.classType
+    string_t = jni.stringType
+    forName = jni.GetStaticMethodID(class_t, "forName", (string_t,), class_t)
+    field_s = jni.NewStringUTF(b"java.lang.reflect.Field")
+    field_t = forName(field_s)
+    assert isinstance(field_t, jclass)
+    print("Field:", field_t)
+
+
+if __name__ == "__main__":
+    jni = JNIClient()
+    jni.CreateOrReuseVM()
+    print("version:", ".".join(map(str, jni.GetVersion())))
+
+  # first_check(jni)
+    check_static(jni)
