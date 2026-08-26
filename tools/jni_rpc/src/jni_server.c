@@ -408,6 +408,8 @@ bool handle_command(int fd, ClientCtx *ctx) {
     jvalue value;
     jstring string; jsize size;
 
+    jarray array; jobjectArray object_arr;
+
     switch (kind) {
         case 0: {
             if (!ctx->vm) {
@@ -471,14 +473,12 @@ bool handle_command(int fd, ClientCtx *ctx) {
         // 8..28
 
         case 29:
-            clazz = (jclass) read_ptr(fd, &eos);
-            if (eos) return eos;
             method = (jmethod*) read_ptr(fd, &eos);
             if (eos) return eos;
             read_args(fd, &eos, method->shorty, args_buffer);
             if (eos) return eos;
 
-            object = (*env)->NewObjectA(env, clazz, method->ID, args_buffer);
+            object = (*env)->NewObjectA(env, method->clazz, method->ID, args_buffer);
             if (check_exception(fd, env))
                 write_ptr(fd, object);
             break;
@@ -737,7 +737,66 @@ bool handle_command(int fd, ClientCtx *ctx) {
             fprintf(stderr, "Warning: kind 109 (ReleaseStringUTFChars) is deprecated and not implemented\n");
             return true; // eos
 
-        // 110..173
+        case 110:
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+
+            size = (*env)->GetArrayLength(env, array);
+            if (check_exception(fd, env))
+                write_uleb128(fd, size);
+            break;
+
+        case 111:
+            size = read_uleb128(fd, &eos);
+            if (eos) return eos;
+            clazz = (jclass) read_ptr(fd, &eos);
+            if (eos) return eos;
+            object = (jobject) read_ptr(fd, &eos);
+            if (eos) return eos;
+
+            object_arr = (*env)->NewObjectArray(env, /*len=*/size, clazz, /*init=*/object);
+            if (check_exception(fd, env))
+                write_ptr(fd, object_arr);
+            break;
+
+        case 112:
+            object_arr = (jobjectArray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            size = read_sleb128(fd, &eos);
+            if (eos) return eos;
+
+            if (size < 0) {
+                jsize arr_size = (*env)->GetArrayLength(env, (jarray) object_arr);
+                if (!_check_exception(fd, env, /*send_ok=*/false))
+                    break;
+                size += arr_size;
+            }
+
+            object = (*env)->GetObjectArrayElement(env, object_arr, /*index=*/size);
+            if (check_exception(fd, env))
+                write_ptr(fd, object);
+            break;
+
+        case 113:
+            object_arr = (jobjectArray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            size = read_sleb128(fd, &eos);
+            if (eos) return eos;
+            object = (jobject) read_ptr(fd, &eos);
+            if (eos) return eos;
+
+            if (size < 0) {
+                jsize arr_size = (*env)->GetArrayLength(env, (jarray) object_arr);
+                if (!_check_exception(fd, env, /*send_ok=*/false))
+                    break;
+                size += arr_size;
+            }
+
+            (*env)->SetObjectArrayElement(env, object_arr, /*index=*/size, /*val=*/ object);
+            check_exception(fd, env);
+            break;
+
+        // 114..173
 
         default:
             printf("unknown kind: %d\n", kind);

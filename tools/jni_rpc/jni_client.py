@@ -38,9 +38,12 @@ class jobject:
         self._o_inst = inst
 
     def __repr__(self):
-        return f"<jobject at {hex(self._o_inst)}>"
+        inst = self._o_inst
+        return f"<jobject at {hex(inst) if inst else '<null>'}>"
 
     # TODO: __del__
+
+jvalue = bool | int | float | jobject
 
 class jstring(jobject):
     def __init__(self, jni, inst):
@@ -50,19 +53,44 @@ class jstring(jobject):
     def __repr__(self):
         return f"<jstring at {hex(self._s_inst)}>"
 
+    @property
+    def str(self):
+        return self.jni.GetStringChars(self)
+    @property
+    def bin(self):
+        return self.jni.GetStringUTFChars(self)
+
     # TODO: __del__
 
 class jarray(jobject):
     def __init__(self, jni, inst):
-        self.jni = jni
         self._a_inst = inst
+        self._len = jni.GetArrayLength
 
     def __repr__(self):
         return f"<jarray at {hex(self._a_inst)}>"
 
+    def __len__(self):
+        return self._len(self)
+
     # TODO: __del__
 
-jvalue = bool | int | float | jobject
+class jobjectArray(jarray):
+    def __init__(self, jni, inst):
+        jarray.__init__(self, jni, inst)
+        self._oa_inst = inst
+        self._gi = jni.GetObjectArrayElement
+        self._si = jni.SetObjectArrayElement
+
+    def __getitem__(self, index: int, /) -> jobject:
+        if isinstance(index, slice):
+            raise ValueError("jobjectArray is not supported slice")
+        return self._gi(self, index)
+
+    def __setitem__(self, index: int, object: jobject, /):
+        if isinstance(index, slice):
+            raise ValueError("jobjectArray is not supported slice")
+        return self._si(self, index, object)
 
 
 def read_byte(read, /) -> int:
@@ -137,7 +165,8 @@ def write_ptr(write, val: int, /) -> None:
     write(pack('P', val))
 
 def write_uleb128(write, val: int, /) -> None:
-    assert val >= 0
+    if val < 0:
+        raise ValueError(f"negative value for write_uleb128: {val}")
     if val < 0x80:
         write(int2byte[val])
         return
@@ -302,6 +331,7 @@ class jclass(jobject):
     def __repr__(self):
         return f"<jclass {self.name}>"
 
+
 class jmethod_base:
     ret_t2code = [None] * 128
     for i, ret_t in enumerate("LRAKZBCSIJFDV"):
@@ -330,6 +360,16 @@ class jmethod(jmethod_base):
     def __call__(self, object: jobject, /, *args: tuple[jvalue, ...]) -> jobject:
         return self._call(object, self, *args)
 
+class jmethod_ctor(jmethod_base):
+    def __init__(self, clazz: jclass, name: str|None, args: str, ret_t: str, inst: int, /):
+        jmethod_base.__init__(self, clazz, name, args, ret_t, inst)
+        self._call = clazz.jni.NewObject
+    def __repr__(self, /):
+        return f"<jmethod_ctor {self.name}({self.args}){self.ret_t}>"
+
+    def __call__(self, /, *args: tuple[jvalue, ...]) -> jobject:
+        return self._call(self, *args)
+
 class jmethod_static(jmethod_base):
     def __init__(self, clazz: jclass, name: str|None, args: str, ret_t: str, inst: int, /):
         jmethod_base.__init__(self, clazz, name, args, ret_t, inst)
@@ -339,6 +379,9 @@ class jmethod_static(jmethod_base):
 
     def __call__(self, /, *args: tuple[jvalue, ...]) -> jobject:
         return self._call(self, *args)
+
+# есть ли смысл поддерживать jmethod_static_ctor для <clinit>?
+
 
 class jfield:
     ret_t2code = jmethod_base.ret_t2code
@@ -359,6 +402,7 @@ class jfield:
 class JNIClient:
     def __init__(self, /):
         self._lock = Lock()
+
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.connect("/data/data/com.termux/files/usr/tmp/jni.sock")
         file = sock.makefile("rwb")
@@ -373,8 +417,10 @@ class JNIClient:
         self._get_name = None; self._gn_lock = Lock()
 
     def __del__(self, /):
-        self._close()
-        self._sock_close()
+        try:
+            self._close()
+            self._sock_close()
+        except AttributeError: pass
 
     def _check_error(self, /):
         error = read_sleb128(self._read)
@@ -457,6 +503,10 @@ class JNIClient:
                 result = self._get_name = self.GetMethodID(self.classType, "getName", (), self.stringType)
         return result
 
+    @property
+    def null(self, /) -> jobject:
+        return jobject(self, 0)
+
     # native methods
 
     @synchronized
@@ -484,10 +534,9 @@ class JNIClient:
     # 8..28
 
     @synchronized
-    def NewObject(self, clazz: jclass, ctor: jmethod, /, *args: tuple[jvalue, ...]) -> jobject:
+    def NewObject(self, ctor: jmethod, /, *args: tuple[jvalue, ...]) -> jobject:
         write = self._write
         write_byte(write, 29)
-        write_ptr(write, clazz._c_inst)
         write_ptr(write, ctor._m_inst)
         write_args(write, ctor.shorty, args)
         self._flush()
@@ -513,7 +562,7 @@ class JNIClient:
 
             self._check_exception()
             m_inst = read_ptr(self._read)
-        return jmethod(clazz, name, args, ret_t, m_inst)
+        return (jmethod_ctor if name == "<init>" else jmethod)(clazz, name, args, ret_t, m_inst)
 
     @synchronized
     def CallMethod(self, object: jobject, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
@@ -674,7 +723,52 @@ class JNIClient:
     def ReleaseStringUTFChars():
         raise RuntimeError("Warning: ReleaseStringUTFChars (kind 109) is deprecated and not implemented")
 
-    # 110..173
+    @synchronized
+    def GetArrayLength(self, array: jarray, /) -> int:
+        write = self._write
+        write_byte(write, 110)
+        write_ptr(write, array._a_inst)
+        self._flush()
+
+        self._check_exception()
+        return read_uleb128(self._read)
+
+    @synchronized
+    def NewObjectArray(self, size: int, clazz: jclass, init: jobject, /) -> jobjectArray:
+        write = self._write
+        write_byte(write, 111)
+      # write_sleb128(write, size)  # java.lang.NegativeArraySizeException: -1
+        write_uleb128(write, size)
+        write_ptr(write, clazz._c_inst)
+        write_ptr(write, init._o_inst)
+        self._flush()
+
+        self._check_exception()
+        return jobjectArray(self, read_ptr(self._read))
+
+    @synchronized
+    def GetObjectArrayElement(self, obj_arr: jobjectArray, index: int, /) -> jobject:
+        write = self._write
+        write_byte(write, 112)
+        write_ptr(write, obj_arr._oa_inst)
+        write_sleb128(write, index)
+        self._flush()
+
+        self._check_exception()
+        return jobject(self, read_ptr(self._read))
+
+    @synchronized
+    def SetObjectArrayElement(self, obj_arr: jobjectArray, index: int, object: jobject, /):
+        write = self._write
+        write_byte(write, 113)
+        write_ptr(write, obj_arr._oa_inst)
+        write_sleb128(write, index)
+        write_ptr(write, object._o_inst)
+        self._flush()
+
+        self._check_exception()
+
+    # 114..173
 
 
 def first_check(jni):
@@ -695,7 +789,7 @@ def first_check(jni):
     numbers = []
     for num in (123456789, 3, 1000000007):
         str_v = jni.NewStringUTF(str(num).encode("utf-8"))
-        bigint_v = jni.NewObject(bigint, bigint_ctor, str_v)
+        bigint_v = jni.NewObject(bigint_ctor, str_v)
         print("string:", str_v)
         print("bigint_v:", bigint_v)
         numbers.append(bigint_v)
@@ -740,6 +834,36 @@ def check_static(jni):
     assert isinstance(field_t, jclass)
     print("Field:", field_t)
 
+def check_arrays(jni):
+    object_t = jni.FindClass("java/lang/Object")
+    string_t = jni.stringType
+    bigint = jni.FindClass("java/math/BigInteger")
+    bigint_ctor = jni.GetMethodID(bigint, "<init>", (string_t,))
+    bigint_valueOf = jni.GetStaticMethodID(bigint, "valueOf", ("J",), bigint)
+    toString = jni.GetMethodID(object_t, "toString", (), string_t)
+    print("null:", jni.null)
+
+    for size in (0, 10):  # range(11):
+        arr = jni.NewObjectArray(size, bigint, jni.null)
+        print("arr:", arr, "size:", len(arr))
+
+    print("idx[0]:", arr[0])
+    print("idx[9]:", arr[9])
+    print("idx[-1]:", arr[-1])
+
+    num_123 = bigint_ctor(jni.NewStringUTF(b"123"))
+    num_321 = bigint_valueOf(-321)
+    print("num_123:", toString(num_123).str)
+    print("num_321:", toString(num_321).bin)
+
+    def toString_wrap(item):
+        try: return toString(item).str
+        except JavaError: return "..."
+    arr[3] = num_123
+    arr[7] = num_321
+    print("neg:", tuple(toString_wrap(arr[i]) for i in range(-10, 0)))
+    print("pos:", tuple(toString_wrap(arr[i]) for i in range(10)))
+
 
 if __name__ == "__main__":
     jni = JNIClient()
@@ -747,4 +871,5 @@ if __name__ == "__main__":
     print("version:", ".".join(map(str, jni.GetVersion())))
 
   # first_check(jni)
-    check_static(jni)
+  # check_static(jni)
+    check_arrays(jni)
