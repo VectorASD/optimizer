@@ -399,6 +399,51 @@ class jfield:
         return f"<jfield {self.name}:{self.type}>"
 
 
+# Даже здесь у меня DSL вылез на boilerplate-код! :)
+
+def makeTypeGetter(inits, class_name, _counter=[0], /):
+    n = _counter[0]; _counter[0] += 1
+    cache_name = f"_{n}_type"
+    lock_name = f"_{n}_lock"
+    code = f"""
+def func(self, /) -> jclass:
+    with self.{lock_name}:
+        result = self.{cache_name}
+        if result is None:
+            result = self.{cache_name} = self.FindClass({class_name!r})
+    return result
+
+def init(jni, /):
+    jni.{cache_name} = None
+    jni.{lock_name} = Lock()
+inits.append(init)
+"""
+    _G = {"jclass": jclass, "inits": inits, "Lock": Lock}
+    exec(code, _G)
+    return property(_G["func"])
+
+def makeMethodGetter(inits, class_str, method_name, args_str, return_str, _counter=[0], /):
+    n = _counter[0]; _counter[0] += 1
+    cache_name = f"_{n}_method"
+    lock_name = f"_{n}_mlock"
+    code = f"""
+def func(self, /) -> jmethod:
+    with self.{lock_name}:
+        result = self.{cache_name}
+        if result is None:
+            result = self.{cache_name} = self.GetMethodID({class_str}, {method_name!r}, {args_str}, {return_str})
+    return result
+
+def init(jni, /):
+    jni.{cache_name} = None
+    jni.{lock_name} = Lock()
+inits.append(init)
+"""
+    _G = {"jmethod": jmethod, "inits": inits, "Lock": Lock}
+    exec(code, _G)
+    return property(_G["func"])
+
+
 class JNIClient:
     def __init__(self, /):
         self._lock = Lock()
@@ -412,9 +457,8 @@ class JNIClient:
         self._close = file.close
         self._sock_close = sock.close
 
-        self._class_type = None; self._ct_lock = Lock()
-        self._string_type = None; self._st_lock = Lock()
-        self._get_name = None; self._gn_lock = Lock()
+        for maker_init_func in self._inits:
+            maker_init_func(self)
 
     def __del__(self, /):
         try:
@@ -479,29 +523,13 @@ class JNIClient:
             self.SelectVM(vm_count - 1)  # last VM in list
             self.AttachCurrentThread()
 
-    @property
-    def classType(self, /) -> jclass:
-        with self._ct_lock:
-            result = self._class_type
-            if result is None:
-                result = self._class_type = self.FindClass("java/lang/Class")
-        return result
-
-    @property
-    def stringType(self, /) -> jclass:
-        with self._st_lock:
-            result = self._string_type
-            if result is None:
-                result = self._string_type = self.FindClass("java/lang/String")
-        return result
-
-    @property
-    def getName(self, /) -> jmethod:
-        with self._gn_lock:
-            result = self._get_name
-            if result is None:
-                result = self._get_name = self.GetMethodID(self.classType, "getName", (), self.stringType)
-        return result
+    _inits = []
+    objectType = makeTypeGetter(_inits, "java/lang/Object")
+    classType = makeTypeGetter(_inits, "java/lang/Class")
+    stringType = makeTypeGetter(_inits, "java/lang/String")
+    methodType = makeTypeGetter(_inits, "java/lang/reflect/Method")
+    fieldType = makeTypeGetter(_inits, "java/lang/reflect/Field")
+    getName = makeMethodGetter(_inits, "self.classType", "getName", (), "self.stringType")
 
     @property
     def null(self, /) -> jobject:
