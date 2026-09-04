@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">SC2</string>
+    <string name="title_activity_main">MAIN_ACTIVITY</string>
+    <string name="lol">meow</string>
+    <string name="lol2">woof!!!</string>
+    <string name="lol3">cat</string>
+    <string name="lol4">dog</string>
+</resources>
