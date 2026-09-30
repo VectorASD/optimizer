@@ -43,7 +43,8 @@ int init_reflection_cache(ClientCtx* ctx) {
     jmethodID mgd = (*env)->GetMethodID(env, mc_g, "getDeclaringClass",   "()Ljava/lang/Class;");
     jmethodID mgp = (*env)->GetMethodID(env, mc_g, "getParameterTypes",   "()[Ljava/lang/Class;");
     jmethodID mgr = (*env)->GetMethodID(env, mc_g, "getReturnType",       "()Ljava/lang/Class;");
-    int error = !gcn ? 5 : !gdm ? 6 : !gms ? 7 : !mgn ? 8 : !mgd ? 9 : !mgp ? 10 : !mgr ? 11 : 0;
+    jmethodID mgm = (*env)->GetMethodID(env, mc_g, "getModifiers", "()I");
+    int error = !gcn ? 5 : !gdm ? 6 : !gms ? 7 : !mgn ? 8 : !mgd ? 9 : !mgp ? 10 : !mgr ? 11 : !mgm ? 12 : 0;
     if (error) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteGlobalRef(env, cc_g);
@@ -60,6 +61,7 @@ int init_reflection_cache(ClientCtx* ctx) {
     ctx->methodGetDeclaringClass = mgd;
     ctx->methodGetParameterTypes = mgp;
     ctx->methodGetReturnType     = mgr;
+    ctx->methodGetModifiers     = mgm;
     return JNI_OK;
 }
 
@@ -120,7 +122,7 @@ size_t append_class_type(ClientCtx* ctx, jobject clazz, char* buf, size_t pos, s
 
 // Строит "(params)return" прямо в ctx->scratch_mem->buffer.
 // Возвращает строку с нулевым терминатором при успехе
-char* build_method_signature(ClientCtx* ctx, jobject method_obj) {
+char* build_method_signature(ClientCtx* ctx, jobject method_obj, bool is_ctor) {
     JNIEnv* env = ctx->env;
     char* buf = (char*) ctx->scratch_mem->buffer;
     size_t cap = sizeof(ctx->scratch_mem->buffer);
@@ -129,16 +131,7 @@ char* build_method_signature(ClientCtx* ctx, jobject method_obj) {
     jobjectArray params = (jobjectArray)(*env)->CallObjectMethod(env, method_obj, ctx->methodGetParameterTypes);
     if (!params) return NULL;
 
-    jobject ret = (*env)->CallObjectMethod(env, method_obj, ctx->methodGetReturnType);
-    if (!ret) {
-        (*env)->DeleteLocalRef(env, params);
-        return NULL;
-    }
-
     bool ok = true;
-
-    if (pos >= cap) { ok = false; goto cleanup; }
-    buf[pos++] = '(';
 
     jsize n = (*env)->GetArrayLength(env, params);
     for (jsize i = 0; i < n; i++) {
@@ -152,14 +145,24 @@ char* build_method_signature(ClientCtx* ctx, jobject method_obj) {
     if (pos >= cap) { ok = false; goto cleanup; }
     buf[pos++] = ')';
 
-    pos = append_class_type(ctx, ret, buf, pos, cap);
-    if (pos == (size_t)-1) { ok = false; goto cleanup; }
+    jobject ret;
+    if (is_ctor) {
+        ret = NULL;
+        if (pos >= cap) { ok = false; goto cleanup; }
+        buf[pos++] = 'V';
+    } else {
+        ret = (*env)->CallObjectMethod(env, method_obj, ctx->methodGetReturnType);
+        if (!ret) { ok = false; goto cleanup; }
+        pos = append_class_type(ctx, ret, buf, pos, cap);
+        if (pos == (size_t)-1) { ok = false; goto cleanup; }
+    }
 
     if (pos >= cap) { ok = false; goto cleanup; }
     buf[pos] = 0;
 
 cleanup:
     (*env)->DeleteLocalRef(env, params);
-    (*env)->DeleteLocalRef(env, ret);
+    if (ret)
+        (*env)->DeleteLocalRef(env, ret);
     return ok ? buf : NULL;
 }

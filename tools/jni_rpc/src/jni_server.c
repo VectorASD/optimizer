@@ -466,16 +466,22 @@ bool handle_command(int fd, ClientCtx *ctx) {
         case 8:
             object = (jobject) read_ptr(fd, &eos);
             if (eos) return eos;
+            bool is_ctor = read_byte(fd, &eos);
+            if (eos) return eos;
 
             method_id = (*env)->FromReflectedMethod(env, object);
             if (_check_exception(fd, env, /*send_ok=*/false)) {
                 // clazz = (*env)->GetObjectClass(env, object);
                 clazz = (jclass)(*env)->CallObjectMethod(env, object, ctx->methodGetDeclaringClass);
+                jint modifiers = (*env)->CallIntMethod(env, object, ctx->methodGetModifiers);
                 if (_check_exception(fd, env, /*send_ok=*/false)) {
-                    jstring jname = (jstring)(*env)->CallObjectMethod(env, object, ctx->methodGetName);
-                    text name = jname ? (*env)->GetStringUTFChars(env, jname, NULL) : NULL;
+                    jstring jname; text name;
+                    if (!is_ctor) {
+                        jname = (jstring)(*env)->CallObjectMethod(env, object, ctx->methodGetName);
+                        name = jname ? (*env)->GetStringUTFChars(env, jname, NULL) : NULL;
+                    }
                     if (_check_exception(fd, env, /*send_ok=*/false)) {
-                        buffer = build_method_signature(ctx, object);
+                        buffer = build_method_signature(ctx, object, is_ctor);
                         if (buffer == NULL) {
                            if (check_exception(fd, env))
                                write_str(fd, "signature is <null>");
@@ -483,12 +489,15 @@ bool handle_command(int fd, ClientCtx *ctx) {
                             method = jmethod_init(method_id, clazz, buffer, &eos, ctx->block_mem);
                             if (eos) return eos;
                             write_ptr(fd, clazz);
-                            write_str(fd, name);
+                            if (!is_ctor)
+                                write_str(fd, name);
                             write_str(fd, buffer);
+                            write_uleb128(fd, modifiers);
                             write_ptr(fd, method);
                         }
                     }
-                    (*env)->DeleteLocalRef(env, jname);
+                    if (!is_ctor)
+                        (*env)->DeleteLocalRef(env, jname);
                 }
             }
             break;

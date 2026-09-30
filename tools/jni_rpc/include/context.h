@@ -27,11 +27,12 @@ typedef struct ClientCtx {
     jmethodID methodGetDeclaringClass;
     jmethodID methodGetParameterTypes;
     jmethodID methodGetReturnType;
+    jmethodID methodGetModifiers;
 } ClientCtx;
 
 int init_reflection_cache(ClientCtx* ctx);
 size_t append_class_type(ClientCtx* ctx, jobject clazz, char* buf, size_t pos, size_t cap);
-char* build_method_signature(ClientCtx* ctx, jobject method_obj);
+char* build_method_signature(ClientCtx* ctx, jobject method_obj, bool is_ctor);
 
 
 #endif // CONTEXT_H

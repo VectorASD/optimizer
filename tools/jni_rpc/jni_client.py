@@ -316,6 +316,7 @@ class JNIError(Exception):
         "Method.getDeclaringClass not found",  # 9
         "Method.getParameterTypes not found",  # 10
         "Method.getReturnType not found",  # 11
+        "Method.getModifiers not found",  # 12
     )
 
     def __init__(self, code):
@@ -353,24 +354,44 @@ class jclass(jobject):
     def __str__(self):
         return self.name
 
-    def inspect(self, ismethod: bool = True, isparent: bool = False) -> tuple[jmethod | jfield, ...]:
+    def inspect(self, is_method: bool = True, is_ctor: bool = False, only_public: bool = False) -> tuple[jmethod | jfield, ...]:
         """
         Получает список полей или методов класса.
 
-        :param ismethod: True - методы, False - поля.
-        :param isparent: True - включая унаследованные публичные члены, False - только объявленные в этом классе.
+        :param is_method: True - методы (или конструкторы, если is_ctor=True), False - поля;
+        :param is_ctor: True - только конструкторы (игнорируется, если is_method=False);
+        :param only_public:
+            True - только public методы, включая унаследованные;
+            False - все методы (включая private/protected), объявленные *только* в этом классе.
         :return: кортеж из методов или полей.
         """
         jni = self.jni
-        if ismethod:
-            getter = jni.getMethods if isparent else jni.getDeclaredMethods
+        if is_method:
+            if is_ctor:
+                getter = jni.getConstructors if only_public else jni.getDeclaredConstructors
+            else:
+                getter = jni.getMethods if only_public else jni.getDeclaredMethods
+            array = getter(self)
+            methods = [jni.FromReflectedMethod(item, is_ctor) for item in array.object[:]]
+            for method in methods:
+                print(method)
+            print("|methods|:", len(methods))
         else:
-            getter = jni.getFields if isparent else jni.getDeclaredFields
-        array = getter(self)
-        print("ARR:", array)
-        methods = [jni.FromReflectedMethod(item) for item in array.object[:]]
-        for method in methods:
-            print(method)
+            getter = jni.getFields if only_public else jni.getDeclaredFields
+
+    def inspect_all(self, is_method=True, is_ctor=False) -> dict:
+        """Все члены из всей иерархии наследования (до Object включительно)."""
+        jni = self.jni
+        seen = {}  # name+signature -> jmethod, чтобы не дублировать переопределённые
+        clazz = self
+        while clazz is not None:
+            for item in clazz.inspect(is_method=is_method, is_ctor=is_ctor):
+                key = (item.name, item.args, item.ret_t)
+                if key not in seen:
+                    seen[key] = item
+            # getSuperclass возвращает jclass или NULL (для Object / интерфейсов)
+            clazz = clazz.getSuperclass()  # TODO: unreleased
+        return tuple(seen.values())
 
 
 class jmethod_base:
@@ -571,12 +592,15 @@ class JNIClient:
     stringType = makeTypeGetter(_inits, "java/lang/String")
     methodType = makeTypeGetter(_inits, "java/lang/reflect/Method")
     fieldType = makeTypeGetter(_inits, "java/lang/reflect/Field")
+    ctorType = makeTypeGetter(_inits, "java/lang/reflect/Constructor")
 
     c_getName = makeMethodGetter(_inits, "self.classType", "getName", (), "self.stringType")
     getMethods = makeMethodGetter(_inits, "self.classType", "getMethods", (), "f'[{self.methodType}'")
     getDeclaredMethods = makeMethodGetter(_inits, "self.classType", "getDeclaredMethods", (), "f'[{self.methodType}'")
     getFields = makeMethodGetter(_inits, "self.classType", "getFields", (), "f'[{self.fieldType}'")
     getDeclaredFields = makeMethodGetter(_inits, "self.classType", "getDeclaredFields", (), "f'[{self.fieldType}'")
+    getConstructors = makeMethodGetter(_inits, "self.classType", "getConstructors", (), "f'[{self.ctorType}'")
+    getDeclaredConstructors = makeMethodGetter(_inits, "self.classType", "getDeclaredConstructors", (), "f'[{self.ctorType}'")
 
     m_getName = makeMethodGetter(_inits, "self.methodType", "getName", (), "self.stringType")
     m_getModifiers = makeMethodGetter(_inits, "self.methodType", "getModifiers", (), "I")
@@ -613,19 +637,22 @@ class JNIClient:
         return jclass(self, f"L{class_name};", read_ptr(self._read))
 
     @synchronized
-    def FromReflectedMethod(self, object: jobject, /) -> jmethod:
+    def FromReflectedMethod(self, object: jobject, is_ctor: bool, /) -> jmethod:
         write = self._write
         write_byte(write, 8)
         write_ptr(write, object._o_inst)
+        write_byte(write, is_ctor)
         self._flush()
 
         self._check_exception()
         read = self._read
         clazz = jclass(jni, None, read_ptr(read))
-        name = read_str(read)
+        name = "<init>" if is_ctor else read_str(read)
         signature = read_str(read)
-        args, ret_t = signature.split(')')
-        return jmethod(clazz, name, args[1:], ret_t, read_ptr(read))
+        modifiers = read_uleb128(read)
+        is_static = modifiers & 0x8
+        args, ret_t = signature.split(')')  # изначально *не* вшивается '('
+        return (jmethod_static if is_static else jmethod_ctor if is_ctor else jmethod)(clazz, name, args, ret_t, read_ptr(read))
 
     # 9..28
 
@@ -960,7 +987,9 @@ def check_arrays(jni):
     print("neg:", tuple(toString_wrap(arr[i]) for i in range(-10, 0)))
     print("pos:", tuple(toString_wrap(arr[i]) for i in range(10)))
 
+    bigint.inspect(is_ctor=True)
     bigint.inspect()
+    bigint.inspect(is_method=False)
 
 
 if __name__ == "__main__":
