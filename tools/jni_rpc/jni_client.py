@@ -64,14 +64,19 @@ class jstring(jobject):
 
 class jarray(jobject):
     def __init__(self, jni, inst):
+        self.jni = jni
         self._a_inst = inst
         self._len = jni.GetArrayLength
 
     def __repr__(self):
-        return f"<jarray at {hex(self._a_inst)}>"
+        return f"<{type(self).__name__} at {hex(self._a_inst)}>"
 
     def __len__(self):
         return self._len(self)
+
+    @property
+    def object(self):
+        return jobjectArray(self.jni, self._a_inst)
 
     # TODO: __del__
 
@@ -84,7 +89,12 @@ class jobjectArray(jarray):
 
     def __getitem__(self, index: int, /) -> jobject:
         if isinstance(index, slice):
-            raise ValueError("jobjectArray is not supported slice")
+            step = index.step or 1
+            if step != 1:
+                raise ValueError("jobjectArray is not supported slice with step != 1")
+            # TODO: add support array regions in server
+            _gi = self._gi
+            return [_gi(self, i) for i in range(index.start or 0, index.stop or len(self))]
         return self._gi(self, index)
 
     def __setitem__(self, index: int, object: jobject, /):
@@ -288,23 +298,34 @@ def write_args(write, shorty: str, args: tuple[jvalue, ...], /):
 
 class JNIError(Exception):
     _descriptions = (
-        "success",  # 0
-        "unknown error",  # -1
-        "thread detached from the VM",  # -2
-        "JNI version error",  # -3
-        "not enough memory",  # -4
-        "VM already created",  # -5
         "invalid arguments",  # -6
+        "VM already created",  # -5
+        "not enough memory",  # -4
+        "JNI version error",  # -3
+        "thread detached from the VM",  # -2
+        "unknown error",  # -1
+        "success",  # 0
+        "no JNIEnv in context",  # 1
+        "java/lang/Class not found",  # 2
+        "java/lang/reflect/Method not found",  # 3
+        "NewGlobalRef failed",  # 4
+        "Class.getName not found",  # 5
+        "Class.getDeclaredMethods not found",  # 6
+        "Class.getMethods not found",  # 7
+        "Method.getName not found",  # 8
+        "Method.getDeclaringClass not found",  # 9
+        "Method.getParameterTypes not found",  # 10
+        "Method.getReturnType not found",  # 11
     )
 
     def __init__(self, code):
         self.code = code
 
     def __str__(self):
-        code = -self.code
-        if code not in range(len(self._descriptions)):
+        idx = self.code + 6
+        if idx not in range(len(self._descriptions)):
             return f"unknown: {self.code}"
-        return self._descriptions[code]
+        return self._descriptions[idx]
 
 class JavaError(Exception):
     pass
@@ -323,13 +344,33 @@ class jclass(jobject):
         with self._lock:
             name = self._name
             if name is None:
-                jni = self.jni
-                jstr = jni.GetStringChars(jni.getName(self))
+                jstr = self.jni.c_getName(self).str
                 name = self._name = f"L{jstr.replace('.', '/')};"
         return name
 
     def __repr__(self):
         return f"<jclass {self.name}>"
+    def __str__(self):
+        return self.name
+
+    def inspect(self, ismethod: bool = True, isparent: bool = False) -> tuple[jmethod | jfield, ...]:
+        """
+        Получает список полей или методов класса.
+
+        :param ismethod: True - методы, False - поля.
+        :param isparent: True - включая унаследованные публичные члены, False - только объявленные в этом классе.
+        :return: кортеж из методов или полей.
+        """
+        jni = self.jni
+        if ismethod:
+            getter = jni.getMethods if isparent else jni.getDeclaredMethods
+        else:
+            getter = jni.getFields if isparent else jni.getDeclaredFields
+        array = getter(self)
+        print("ARR:", array)
+        methods = [jni.FromReflectedMethod(item) for item in array.object[:]]
+        for method in methods:
+            print(method)
 
 
 class jmethod_base:
@@ -524,12 +565,24 @@ class JNIClient:
             self.AttachCurrentThread()
 
     _inits = []
+
     objectType = makeTypeGetter(_inits, "java/lang/Object")
     classType = makeTypeGetter(_inits, "java/lang/Class")
     stringType = makeTypeGetter(_inits, "java/lang/String")
     methodType = makeTypeGetter(_inits, "java/lang/reflect/Method")
     fieldType = makeTypeGetter(_inits, "java/lang/reflect/Field")
-    getName = makeMethodGetter(_inits, "self.classType", "getName", (), "self.stringType")
+
+    c_getName = makeMethodGetter(_inits, "self.classType", "getName", (), "self.stringType")
+    getMethods = makeMethodGetter(_inits, "self.classType", "getMethods", (), "f'[{self.methodType}'")
+    getDeclaredMethods = makeMethodGetter(_inits, "self.classType", "getDeclaredMethods", (), "f'[{self.methodType}'")
+    getFields = makeMethodGetter(_inits, "self.classType", "getFields", (), "f'[{self.fieldType}'")
+    getDeclaredFields = makeMethodGetter(_inits, "self.classType", "getDeclaredFields", (), "f'[{self.fieldType}'")
+
+    m_getName = makeMethodGetter(_inits, "self.methodType", "getName", (), "self.stringType")
+    m_getModifiers = makeMethodGetter(_inits, "self.methodType", "getModifiers", (), "I")
+
+    f_getName = makeMethodGetter(_inits, "self.fieldType", "getName", (), "self.stringType")
+    f_getModifiers = makeMethodGetter(_inits, "self.fieldType", "getModifiers", (), "I")
 
     @property
     def null(self, /) -> jobject:
@@ -559,7 +612,22 @@ class JNIClient:
         self._check_exception()
         return jclass(self, f"L{class_name};", read_ptr(self._read))
 
-    # 8..28
+    @synchronized
+    def FromReflectedMethod(self, object: jobject, /) -> jmethod:
+        write = self._write
+        write_byte(write, 8)
+        write_ptr(write, object._o_inst)
+        self._flush()
+
+        self._check_exception()
+        read = self._read
+        clazz = jclass(jni, None, read_ptr(read))
+        name = read_str(read)
+        signature = read_str(read)
+        args, ret_t = signature.split(')')
+        return jmethod(clazz, name, args[1:], ret_t, read_ptr(read))
+
+    # 9..28
 
     @synchronized
     def NewObject(self, ctor: jmethod, /, *args: tuple[jvalue, ...]) -> jobject:
@@ -891,6 +959,8 @@ def check_arrays(jni):
     arr[7] = num_321
     print("neg:", tuple(toString_wrap(arr[i]) for i in range(-10, 0)))
     print("pos:", tuple(toString_wrap(arr[i]) for i in range(10)))
+
+    bigint.inspect()
 
 
 if __name__ == "__main__":

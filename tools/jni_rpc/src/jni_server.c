@@ -1,6 +1,7 @@
 #include "mem_pool.h"
 #include "common.h"
 #include "utils.h"
+#include "context.h"
 #include "jni.h"
 
 #include <stdio.h> // printf
@@ -283,19 +284,6 @@ void write_value(int fd, const char kind, jvalue value) {
 }
 
 
-typedef struct ClientCtx {
-    JavaVM* vm;
-    JNIEnv* env;
-    JavaVM* vm_arr[16];
-    int vm_count;
-    JavaVMInitArgs* args;
-    bool own_vm;
-    ScratchPool* scratch_mem;
-    BlockPool* block_mem;
-    jvalue* args_buffer;
-} ClientCtx;
-
-
 typedef struct jmethod {
     jmethodID ID;
     jclass clazz;
@@ -414,6 +402,8 @@ bool handle_command(int fd, ClientCtx *ctx) {
         case 0: {
             if (!ctx->vm) {
                 error = JNI_CreateJavaVM(&ctx->vm, (void **) &ctx->env, ctx->args);
+                if (error == JNI_OK)
+                    error = init_reflection_cache(ctx);
                 ctx->own_vm = (error == JNI_OK && ctx->vm);
             }
             write_sleb128(fd, error);
@@ -437,8 +427,11 @@ bool handle_command(int fd, ClientCtx *ctx) {
             break; }
         case 3: {
             JavaVMAttachArgs* args = NULL;
-            if (ctx->vm)
+            if (ctx->vm) {
                 error = (*ctx->vm)->AttachCurrentThread(ctx->vm, (void **) &ctx->env, args);
+                if (error == JNI_OK)
+                    error = init_reflection_cache(ctx);
+            }
             write_sleb128(fd, error);
             break; }
         case 4:
@@ -470,7 +463,40 @@ bool handle_command(int fd, ClientCtx *ctx) {
                 write_ptr(fd, clazz);
             break;
 
-        // 8..28
+        case 8:
+            object = (jobject) read_ptr(fd, &eos);
+            if (eos) return eos;
+
+            method_id = (*env)->FromReflectedMethod(env, object);
+            if (_check_exception(fd, env, /*send_ok=*/false)) {
+                // clazz = (*env)->GetObjectClass(env, object);
+                clazz = (jclass)(*env)->CallObjectMethod(env, object, ctx->methodGetDeclaringClass);
+                if (_check_exception(fd, env, /*send_ok=*/false)) {
+                    jstring jname = (jstring)(*env)->CallObjectMethod(env, object, ctx->methodGetName);
+                    text name = jname ? (*env)->GetStringUTFChars(env, jname, NULL) : NULL;
+                    if (_check_exception(fd, env, /*send_ok=*/false)) {
+                        buffer = build_method_signature(ctx, object);
+                        if (buffer == NULL) {
+                           if (check_exception(fd, env))
+                               write_str(fd, "signature is <null>");
+                        } else if (check_exception(fd, env)) {
+                            method = jmethod_init(method_id, clazz, buffer, &eos, ctx->block_mem);
+                            if (eos) return eos;
+                            write_ptr(fd, clazz);
+                            write_str(fd, name);
+                            write_str(fd, buffer);
+                            write_ptr(fd, method);
+                        }
+                    }
+                    (*env)->DeleteLocalRef(env, jname);
+                }
+            }
+            break;
+        /*jmethodID (JNICALL *FromReflectedMethod)  // kind=8
+      (JNIEnv *env, jobject method);
+    jfieldID (JNICALL *FromReflectedField)  // kind=9
+      (JNIEnv *env, jobject field);*/
+        // 9..28
 
         case 29:
             method = (jmethod*) read_ptr(fd, &eos);

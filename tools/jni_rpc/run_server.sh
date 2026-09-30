@@ -33,6 +33,7 @@ mkdir -p "$OBJ"
 
 "${CC[@]}" "${CFLAGS[@]}" -MF "$OBJ/jni_server.d" -o "$OBJ/jni_server.o" -c "$SRC/jni_server.c"
 "${CC[@]}" "${CFLAGS[@]}" -MF "$OBJ/utils.d" -o "$OBJ/utils.o" -c "$SRC/utils.c"
+"${CC[@]}" "${CFLAGS[@]}" -MF "$OBJ/context.d" -o "$OBJ/context.o" -c "$SRC/context.c"
 "${CC[@]}" "${CFLAGS[@]}" -MF "$OBJ/mem_pool.d" -o "$OBJ/mem_pool.o" -c "$SRC/mem_pool.c"
 
 "${CC[@]}" -o "$OBJ/jni_server.so" "$OBJ"/*.o \
