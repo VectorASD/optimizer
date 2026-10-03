@@ -20,6 +20,7 @@ typedef struct ClientCtx {
     // Кэш рефлексивных типов и методов
     jclass classClass; // java.lang.Class
     jclass methodClass; // java.lang.reflect.Method
+    jclass fieldClass; // java.lang.reflect.Field
     jmethodID classGetName;
     jmethodID classGetDeclaredMethods;
     jmethodID classGetMethods;
@@ -28,6 +29,10 @@ typedef struct ClientCtx {
     jmethodID methodGetParameterTypes;
     jmethodID methodGetReturnType;
     jmethodID methodGetModifiers;
+    jmethodID fieldGetName;
+    jmethodID fieldGetDeclaringClass;
+    jmethodID fieldGetType;
+    jmethodID fieldGetModifiers;
 } ClientCtx;
 
 int init_reflection_cache(ClientCtx* ctx);

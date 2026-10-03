@@ -5,55 +5,50 @@
 // 1 - нет JNIEnv в контексте
 // 2 - java/lang/Class не найден
 // 3 - java/lang/reflect/Method не найден
-// 4 - NewGlobalRef провалился (любой из двух)
-// 5..11 - соответствующий GetMethodID вернул NULL
+// 4 - java/lang/reflect/Field не найден
+// 5..16 - соответствующий GetMethodID вернул NULL
 int init_reflection_cache(ClientCtx* ctx) {
     JNIEnv* env = ctx->env;
     if (!env) return 1;
 
-    jclass classClass = (*env)->FindClass(env, "java/lang/Class");
-    if (!classClass) {
-        (*env)->ExceptionClear(env);
-        return 2;
-    }
-
-    jclass methodClass = (*env)->FindClass(env, "java/lang/reflect/Method");
-    if (!methodClass) {
-        (*env)->ExceptionClear(env);
-        (*env)->DeleteLocalRef(env, classClass);
-        return 3;
-    }
-
-    jclass cc_g = (jclass)(*env)->NewGlobalRef(env, classClass);
-    jclass mc_g = (jclass)(*env)->NewGlobalRef(env, methodClass);
-    (*env)->DeleteLocalRef(env, classClass);
-    (*env)->DeleteLocalRef(env, methodClass);
-
-    if (!cc_g || !mc_g) {
-        (*env)->ExceptionClear(env);
-        if (cc_g) (*env)->DeleteGlobalRef(env, cc_g);
-        if (mc_g) (*env)->DeleteGlobalRef(env, mc_g);
-        return 4;
-    }
-
-    jmethodID gcn = (*env)->GetMethodID(env, cc_g, "getName",             "()Ljava/lang/String;");
-    jmethodID gdm = (*env)->GetMethodID(env, cc_g, "getDeclaredMethods",  "()[Ljava/lang/reflect/Method;");
-    jmethodID gms = (*env)->GetMethodID(env, cc_g, "getMethods",          "()[Ljava/lang/reflect/Method;");
-    jmethodID mgn = (*env)->GetMethodID(env, mc_g, "getName",             "()Ljava/lang/String;");
-    jmethodID mgd = (*env)->GetMethodID(env, mc_g, "getDeclaringClass",   "()Ljava/lang/Class;");
-    jmethodID mgp = (*env)->GetMethodID(env, mc_g, "getParameterTypes",   "()[Ljava/lang/Class;");
-    jmethodID mgr = (*env)->GetMethodID(env, mc_g, "getReturnType",       "()Ljava/lang/Class;");
-    jmethodID mgm = (*env)->GetMethodID(env, mc_g, "getModifiers", "()I");
-    int error = !gcn ? 5 : !gdm ? 6 : !gms ? 7 : !mgn ? 8 : !mgd ? 9 : !mgp ? 10 : !mgr ? 11 : !mgm ? 12 : 0;
+    jclass cc = (*env)->FindClass(env, "java/lang/Class");
+    jclass mc = (*env)->FindClass(env, "java/lang/reflect/Method");
+    jclass fc = (*env)->FindClass(env, "java/lang/reflect/Field");
+    int error = !cc ? 2 : !mc ? 3 : !fc ? 4 : 0;
     if (error) {
         (*env)->ExceptionClear(env);
-        (*env)->DeleteGlobalRef(env, cc_g);
-        (*env)->DeleteGlobalRef(env, mc_g);
+        if (cc) (*env)->DeleteLocalRef(env, cc);
+        if (mc) (*env)->DeleteLocalRef(env, mc);
+        if (fc) (*env)->DeleteLocalRef(env, fc);
         return error;
     }
 
-    ctx->classClass              = cc_g;
-    ctx->methodClass             = mc_g;
+    jmethodID gcn = (*env)->GetMethodID(env, cc, "getName",             "()Ljava/lang/String;");
+    jmethodID gdm = (*env)->GetMethodID(env, cc, "getDeclaredMethods",  "()[Ljava/lang/reflect/Method;");
+    jmethodID gms = (*env)->GetMethodID(env, cc, "getMethods",          "()[Ljava/lang/reflect/Method;");
+    jmethodID mgn = (*env)->GetMethodID(env, mc, "getName",             "()Ljava/lang/String;");
+    jmethodID mgd = (*env)->GetMethodID(env, mc, "getDeclaringClass",   "()Ljava/lang/Class;");
+    jmethodID mgp = (*env)->GetMethodID(env, mc, "getParameterTypes",   "()[Ljava/lang/Class;");
+    jmethodID mgr = (*env)->GetMethodID(env, mc, "getReturnType",       "()Ljava/lang/Class;");
+    jmethodID mgm = (*env)->GetMethodID(env, mc, "getModifiers", "()I");
+    jmethodID fgn = (*env)->GetMethodID(env, fc, "getName",           "()Ljava/lang/String;");
+    jmethodID fgd = (*env)->GetMethodID(env, fc, "getDeclaringClass", "()Ljava/lang/Class;");
+    jmethodID fgt = (*env)->GetMethodID(env, fc, "getType",           "()Ljava/lang/Class;");
+    jmethodID fgm = (*env)->GetMethodID(env, fc, "getModifiers",      "()I");
+    error = !gcn ?  5 : !gdm ?  6 : !gms ?  7 :
+            !mgn ?  8 : !mgd ?  9 : !mgp ? 10 : !mgr ? 11 : !mgm ? 12 :
+            !fgn ? 13 : !fgd ? 14 : !fgt ? 15 : !fgm ? 16 : 0;
+    if (error) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteLocalRef(env, cc);
+        (*env)->DeleteLocalRef(env, mc);
+        (*env)->DeleteLocalRef(env, fc);
+        return error;
+    }
+
+    ctx->classClass              = cc;
+    ctx->methodClass             = mc;
+    ctx->fieldClass              = fc;
     ctx->classGetName            = gcn;
     ctx->classGetDeclaredMethods = gdm;
     ctx->classGetMethods         = gms;
@@ -61,7 +56,11 @@ int init_reflection_cache(ClientCtx* ctx) {
     ctx->methodGetDeclaringClass = mgd;
     ctx->methodGetParameterTypes = mgp;
     ctx->methodGetReturnType     = mgr;
-    ctx->methodGetModifiers     = mgm;
+    ctx->methodGetModifiers      = mgm;
+    ctx->fieldGetName            = fgn;
+    ctx->fieldGetDeclaringClass  = fgd;
+    ctx->fieldGetType            = fgt;
+    ctx->fieldGetModifiers       = fgm;
     return JNI_OK;
 }
 

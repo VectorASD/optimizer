@@ -391,7 +391,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
 
     jclass clazz;
     jmethod* method; jmethodID method_id;
-    jfield* field;
+    jfield* field; jfieldID field_id;
     jobject object;
     jvalue value;
     jstring string; jsize size;
@@ -483,7 +483,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
                     if (_check_exception(fd, env, /*send_ok=*/false)) {
                         buffer = build_method_signature(ctx, object, is_ctor);
                         if (buffer == NULL) {
-                           if (check_exception(fd, env))
+                           if (_check_exception(fd, env, /*send_ok=*/false))
                                write_str(fd, "signature is <null>");
                         } else if (check_exception(fd, env)) {
                             method = jmethod_init(method_id, clazz, buffer, &eos, ctx->block_mem);
@@ -496,16 +496,56 @@ bool handle_command(int fd, ClientCtx *ctx) {
                             write_ptr(fd, method);
                         }
                     }
-                    if (!is_ctor)
+                    if (!is_ctor && jname) {
+                        if (name) (*env)->ReleaseStringUTFChars(env, jname, name);
                         (*env)->DeleteLocalRef(env, jname);
+                    }
                 }
             }
             break;
-        /*jmethodID (JNICALL *FromReflectedMethod)  // kind=8
-      (JNIEnv *env, jobject method);
-    jfieldID (JNICALL *FromReflectedField)  // kind=9
-      (JNIEnv *env, jobject field);*/
-        // 9..28
+
+       case 9:
+            object = (jobject) read_ptr(fd, &eos);
+            if (eos) return eos;
+        
+            field_id = (*env)->FromReflectedField(env, object);
+            if (_check_exception(fd, env, /*send_ok=*/false)) {
+                clazz = (jclass)(*env)->CallObjectMethod(env, object, ctx->fieldGetDeclaringClass);
+                jint modifiers = (*env)->CallIntMethod(env, object, ctx->fieldGetModifiers);
+                if (_check_exception(fd, env, /*send_ok=*/false)) {
+                    jstring jname = (jstring)(*env)->CallObjectMethod(env, object, ctx->fieldGetName);
+                    text name = jname ? (*env)->GetStringUTFChars(env, jname, NULL) : NULL;
+                    if (_check_exception(fd, env, /*send_ok=*/false)) {
+                        jobject type_cls = (*env)->CallObjectMethod(env, object, ctx->fieldGetType);
+                        if (_check_exception(fd, env, /*send_ok=*/false)) {
+                            char* buf = (char*) ctx->scratch_mem->buffer;
+                            size_t cap = sizeof(ctx->scratch_mem->buffer);
+                            size_t pos = append_class_type(ctx, type_cls, buf, 0, cap);
+                            if (pos == (size_t)-1) {
+                                if (_check_exception(fd, env, /*send_ok=*/false))
+                                    write_str(fd, "type is <null>");
+                            } else if (check_exception(fd, env)) {
+                                buf[pos] = 0;
+                                field = jfield_init(field_id, buf, &eos, ctx->block_mem);
+                                if (eos) return eos;
+                                write_ptr(fd, clazz);
+                                write_str(fd, name);
+                                write_str(fd, buf);
+                                write_uleb128(fd, modifiers);
+                                write_ptr(fd, field);
+                            }
+                            (*env)->DeleteLocalRef(env, type_cls);
+                        }
+                        if (jname) {
+                            if (name) (*env)->ReleaseStringUTFChars(env, jname, name);
+                            (*env)->DeleteLocalRef(env, jname);
+                        }
+                    }
+                }
+            }
+            break;
+
+        // 10..28
 
         case 29:
             method = (jmethod*) read_ptr(fd, &eos);
@@ -598,7 +638,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             buffer2 = read_str(fd, &eos, scratch_mem);
             if (eos) return eos;
 
-            jfieldID field_id = (*env)->GetFieldID(env, clazz, buffer, buffer2);
+            field_id = (*env)->GetFieldID(env, clazz, buffer, buffer2);
             if (check_exception(fd, env)) {
                 field = jfield_init(field_id, buffer2, &eos, ctx->block_mem);
                 if (eos) return eos;

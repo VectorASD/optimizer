@@ -306,9 +306,9 @@ class JNIError(Exception):
         "unknown error",  # -1
         "success",  # 0
         "no JNIEnv in context",  # 1
-        "java/lang/Class not found",  # 2
-        "java/lang/reflect/Method not found",  # 3
-        "NewGlobalRef failed",  # 4
+        "java.lang.Class not found",  # 2
+        "java.lang.reflect.Method not found",  # 3
+        "java.lang.reflect.Field not found",  # 4
         "Class.getName not found",  # 5
         "Class.getDeclaredMethods not found",  # 6
         "Class.getMethods not found",  # 7
@@ -317,6 +317,10 @@ class JNIError(Exception):
         "Method.getParameterTypes not found",  # 10
         "Method.getReturnType not found",  # 11
         "Method.getModifiers not found",  # 12
+        "Field.getName not found",  # 13
+        "Field.getDeclaringClass not found",  # 14
+        "Field.getType not found",  # 15
+        "Field.getModifiers not found",  # 16
     )
 
     def __init__(self, code):
@@ -354,7 +358,7 @@ class jclass(jobject):
     def __str__(self):
         return self.name
 
-    def inspect(self, is_method: bool = True, is_ctor: bool = False, only_public: bool = False) -> tuple[jmethod | jfield, ...]:
+    def inspect(self, is_method: bool = True, is_ctor: bool = False, only_public: bool = False) -> list[jmethod | jfield]:
         """
         Получает список полей или методов класса.
 
@@ -363,7 +367,7 @@ class jclass(jobject):
         :param only_public:
             True - только public методы, включая унаследованные;
             False - все методы (включая private/protected), объявленные *только* в этом классе.
-        :return: кортеж из методов или полей.
+        :return: список из методов или полей, отсортированных по типу (`*_ctor`, `*_static`) и имени.
         """
         jni = self.jni
         if is_method:
@@ -372,12 +376,16 @@ class jclass(jobject):
             else:
                 getter = jni.getMethods if only_public else jni.getDeclaredMethods
             array = getter(self)
-            methods = [jni.FromReflectedMethod(item, is_ctor) for item in array.object[:]]
-            for method in methods:
-                print(method)
-            print("|methods|:", len(methods))
+            items = [jni.FromReflectedMethod(item, is_ctor) for item in array.object[:]]
         else:
             getter = jni.getFields if only_public else jni.getDeclaredFields
+            array = getter(self)
+            items = [jni.FromReflectedField(item) for item in array.object[:]]
+        result = sorted(items, key = lambda item: (type(item).__name__, item.name))
+        for item in result:
+            print(item)
+        print("|result|:", len(result))
+        return result
 
     def inspect_all(self, is_method=True, is_ctor=False) -> dict:
         """Все члены из всей иерархии наследования (до Object включительно)."""
@@ -412,12 +420,13 @@ class jmethod_base:
             raise AttributeError(f"ret_t {ret_t!r} must consist of exactly one type")
         self.ret_k = self.ret_t2code[ord(ret_s)]
 
+    def __repr__(self, /):
+        return f"<{type(self).__name__} {self.name}({self.args}){self.ret_t}>"
+
 class jmethod(jmethod_base):
     def __init__(self, clazz: jclass, name: str|None, args: str, ret_t: str, inst: int, /):
         jmethod_base.__init__(self, clazz, name, args, ret_t, inst)
         self._call = clazz.jni.CallMethod
-    def __repr__(self, /):
-        return f"<jmethod {self.name}({self.args}){self.ret_t}>"
 
     def __call__(self, object: jobject, /, *args: tuple[jvalue, ...]) -> jobject:
         return self._call(object, self, *args)
@@ -426,8 +435,6 @@ class jmethod_ctor(jmethod_base):
     def __init__(self, clazz: jclass, name: str|None, args: str, ret_t: str, inst: int, /):
         jmethod_base.__init__(self, clazz, name, args, ret_t, inst)
         self._call = clazz.jni.NewObject
-    def __repr__(self, /):
-        return f"<jmethod_ctor {self.name}({self.args}){self.ret_t}>"
 
     def __call__(self, /, *args: tuple[jvalue, ...]) -> jobject:
         return self._call(self, *args)
@@ -436,8 +443,6 @@ class jmethod_static(jmethod_base):
     def __init__(self, clazz: jclass, name: str|None, args: str, ret_t: str, inst: int, /):
         jmethod_base.__init__(self, clazz, name, args, ret_t, inst)
         self._call = clazz.jni.CallStaticMethod
-    def __repr__(self, /):
-        return f"<jmethod_static {self.name}({self.args}){self.ret_t}>"
 
     def __call__(self, /, *args: tuple[jvalue, ...]) -> jobject:
         return self._call(self, *args)
@@ -445,7 +450,7 @@ class jmethod_static(jmethod_base):
 # есть ли смысл поддерживать jmethod_static_ctor для <clinit>?
 
 
-class jfield:
+class jfield_base:
     ret_t2code = jmethod_base.ret_t2code
 
     def __init__(self, clazz, name, type, inst, /):
@@ -457,8 +462,15 @@ class jfield:
         if len(type_s) != 1:
             raise AttributeError(f"type {type_s!r} must consist of exactly one type")
         self.type_k = self.ret_t2code[ord(type_s)]
+
     def __repr__(self, /):
-        return f"<jfield {self.name}:{self.type}>"
+        return f"<{type(self).__name__} {self.name}:{self.type}>"
+
+class jfield(jfield_base):
+    pass
+
+class jfield_static(jfield_base):
+    pass
 
 
 # Даже здесь у меня DSL вылез на boilerplate-код! :)
@@ -654,7 +666,23 @@ class JNIClient:
         args, ret_t = signature.split(')')  # изначально *не* вшивается '('
         return (jmethod_static if is_static else jmethod_ctor if is_ctor else jmethod)(clazz, name, args, ret_t, read_ptr(read))
 
-    # 9..28
+    @synchronized
+    def FromReflectedField(self, object: jobject, /) -> jfield:
+        write = self._write
+        write_byte(write, 9)
+        write_ptr(write, object._o_inst)
+        self._flush()
+    
+        self._check_exception()
+        read = self._read
+        clazz = jclass(self, None, read_ptr(read))
+        name = read_str(read)
+        type_ = read_str(read)
+        modifiers = read_uleb128(read)
+        is_static = modifiers & 0x8
+        return (jfield_static if is_static else jfield)(clazz, name, type_, read_ptr(read))
+
+    # 10..28
 
     @synchronized
     def NewObject(self, ctor: jmethod, /, *args: tuple[jvalue, ...]) -> jobject:
