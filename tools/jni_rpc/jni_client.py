@@ -12,24 +12,37 @@ def synchronized(func, /):
             return func(self, *a, **kw)
     return wrapper
 
+# code = base + 11 * dim, где dim - количество '[' в матче
+_BASE_NAMES = "LRK" + "ZBCSIJFD"
+# 'L' - jobject
+# 'R' - jstring
+# 'K' - jclass
+_BASE_CODE  = {name: i for i, name in enumerate(_BASE_NAMES)}
+_ARRAY_STEP = len(_BASE_NAMES)   # 11
+VOID        = _ARRAY_STEP * 256  # 2816
+PRIMITIVES  = range(3, _ARRAY_STEP)
+_shorty_finditer = re.compile(r"\[*L[\w/$]+;|\[*[ZBCSIJFD]").finditer
+CODE_L, CODE_R, CODE_K = range(3)
+CODE_Z, CODE_B, CODE_C, CODE_S, CODE_I, CODE_J, CODE_F, CODE_D = PRIMITIVES
+
 # Ljava/lang/String; с флагом final, так что наследников нет - детектор jstring тривиален
-def shorty_repl(match):
-    s = match.group(0)
-    # 'L' - jobject
-    # 'R' - jstring
-    # 'A' - jarray
-    # 'K' - jclass
-    return ('A' if s.startswith('[')
-        else 'R' if s == "Ljava/lang/String;"
-        else 'K' if s == "Ljava/lang/Class;"
-        else 'L')
-shorty_sub = re.compile(r"\[*L[\w/$]+;|\[+[ZBCSIJFD]").sub
-def to_shorty(sig: str, /) -> str:
-    return shorty_sub(shorty_repl, sig)
-assert to_shorty("ZBCS[[IIZ[Legg;ZLbeef;IJFD") == "ZBCSAIZAZLIJFD"
-assert to_shorty("[[Landroid/os/Build$VERSION;") == "A"
-assert to_shorty("Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;La;") == "RRARL"
-assert to_shorty("Ljava/lang/Class;[ZLjava/lang/String;") == "KAR"
+def shorty_repl(s: str, /) -> int:
+    dim = s.count('[')
+    base = s[dim:]
+    bc = (1 if base == "Ljava/lang/String;"
+        else 2 if base == "Ljava/lang/Class;"
+        else 0 if base[0] == 'L'
+        else _BASE_CODE[base])
+    return bc + _ARRAY_STEP * dim
+
+def to_shorty(sig: str, /) -> tuple[int, ...]:
+    if sig == 'V':
+        return (VOID,)
+    return tuple(shorty_repl(m.group(0)) for m in _shorty_finditer(sig))
+assert to_shorty("ZBCS[[IIZ[Legg;ZLbeef;IJFD") == (3, 4, 5, 6, 29, 7, 3, 11, 3, 0, 7, 8, 9, 10)
+assert to_shorty("[[Landroid/os/Build$VERSION;") == (22,)
+assert to_shorty("Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;La;") == (1, 1, 12, 1, 0)
+assert to_shorty("Ljava/lang/Class;[ZLjava/lang/String;") == (2, 14, 1)
 
 
 class jobject:
@@ -44,6 +57,7 @@ class jobject:
     # TODO: __del__
 
 jvalue = bool | int | float | jobject
+
 
 class jstring(jobject):
     def __init__(self, jni, inst):
@@ -62,11 +76,13 @@ class jstring(jobject):
 
     # TODO: __del__
 
+
 class jarray(jobject):
-    def __init__(self, jni, inst):
+    def __init__(self, jni, inst, dim):
         self.jni = jni
         self._a_inst = inst
         self._len = jni.GetArrayLength
+        self._dim = dim
 
     def __repr__(self):
         return f"<{type(self).__name__} at {hex(self._a_inst)}>"
@@ -74,16 +90,12 @@ class jarray(jobject):
     def __len__(self):
         return self._len(self)
 
-    @property
-    def object(self):
-        return jobjectArray(self.jni, self._a_inst)
-
     # TODO: __del__
 
 class jobjectArray(jarray):
-    def __init__(self, jni, inst):
-        jarray.__init__(self, jni, inst)
-        self._oa_inst = inst
+    def __init__(self, jni, inst, dim):
+        jarray.__init__(self, jni, inst, dim)
+        self._La_inst = inst
         self._gi = jni.GetObjectArrayElement
         self._si = jni.SetObjectArrayElement
 
@@ -101,6 +113,72 @@ class jobjectArray(jarray):
         if isinstance(index, slice):
             raise ValueError("jobjectArray is not supported slice")
         return self._si(self, index, object)
+
+class jstringArray(jarray):
+    def __init__(self, jni, inst, dim):
+        jarray.__init__(self, jni, inst, dim)
+        self._Ra_inst = inst
+        raise RuntimeError("TODO: jstringArray")
+
+class jclassArray(jarray):
+    def __init__(self, jni, inst, dim):
+        jarray.__init__(self, jni, inst, dim)
+        self._Ka_inst = inst
+        raise RuntimeError("TODO: jclassArray")
+
+class jbooleanArray(jarray):
+    def __init__(self, jni, inst, dim):
+        jarray.__init__(self, jni, inst, dim)
+        self._Za_inst = inst
+        raise RuntimeError("TODO: jbooleanArray")
+
+class jbyteArray(jarray):
+    def __init__(self, jni, inst, dim):
+        jarray.__init__(self, jni, inst, dim)
+        self._Ba_inst = inst
+        raise RuntimeError("TODO: jbyteArray")
+
+class jcharArray(jarray):
+    def __init__(self, jni, inst, dim):
+        jarray.__init__(self, jni, inst, dim)
+        self._Ca_inst = inst
+        raise RuntimeError("TODO: jcharArray")
+
+class jshortArray(jarray):
+    def __init__(self, jni, inst, dim):
+        jarray.__init__(self, jni, inst, dim)
+        self._Sa_inst = inst
+        raise RuntimeError("TODO: jshortArray")
+
+class jintArray(jarray):
+    def __init__(self, jni, inst, dim):
+        jarray.__init__(self, jni, inst, dim)
+        self._Ia_inst = inst
+        raise RuntimeError("TODO: jintArray")
+
+class jlongArray(jarray):
+    def __init__(self, jni, inst, dim):
+        jarray.__init__(self, jni, inst, dim)
+        self._Ja_inst = inst
+        raise RuntimeError("TODO: jlongArray")
+
+class jfloatArray(jarray):
+    def __init__(self, jni, inst, dim):
+        jarray.__init__(self, jni, inst, dim)
+        self._Fa_inst = inst
+        raise RuntimeError("TODO: jfloatArray")
+
+class jdoubleArray(jarray):
+    def __init__(self, jni, inst, dim):
+        jarray.__init__(self, jni, inst, dim)
+        self._Da_inst = inst
+        raise RuntimeError("TODO: jdoubleArray")
+
+_ARRAY_CLASS = (
+    jbooleanArray, jbyteArray, jcharArray, jshortArray, jintArray,
+    jlongArray, jfloatArray, jdoubleArray,
+    jobjectArray, jstringArray, jclassArray,
+)
 
 
 def read_byte(read, /) -> int:
@@ -143,25 +221,54 @@ def read_str(read, bin=False, /) -> str:
     # сервер (utf16_to_utf8) гарантирует корректность кодировки
     return data if bin else data.decode("utf-8")
 
+@cache
+def get_result_dispatch(dim):
+    if dim <= 0:
+        return (
+            lambda jni, /: jobject(jni, read_ptr(jni._read)),
+            lambda jni, /: jstring(jni, read_ptr(jni._read)),
+            lambda jni, /: jclass(jni, None, read_ptr(jni._read)),
+            lambda jni, /: bool(jni._read(1)[0]),  # boolean
+            lambda jni, /: jni._read(1)[0],  # byte
+            lambda jni, /: chr(read_uleb128(jni._read)),  # char
+            lambda jni, /: read_sleb128(jni._read),  # short
+            lambda jni, /: read_sleb128(jni._read),  # int
+            lambda jni, /: read_sleb128(jni._read),  # long
+            lambda jni, /: unpack("=f", jni._read(4))[0],  # float
+            lambda jni, /: unpack("=d", jni._read(8))[0],  # double"""
+        )
+    if dim > 255:
+        return (
+            lambda jni, /: None,  # void"
+        )
+    code = f"""
 result_dispatch = (
-    lambda jni, /: jobject(jni, read_ptr(jni._read)),
-    lambda jni, /: jstring(jni, read_ptr(jni._read)),
-    lambda jni, /: jarray(jni, read_ptr(jni._read)),
-    lambda jni, /: jclass(jni, None, read_ptr(jni._read)),
-    lambda read, /: bool(read(1)[0]),  # boolean
-    lambda read, /: read(1)[0],  # byte
-    lambda read, /: chr(read_uleb128(read)),  # char
-    read_sleb128,  # short
-    read_sleb128,  # int
-    read_sleb128,  # long
-    lambda read, /: unpack("=f", read(4))[0],  # float
-    lambda read, /: unpack("=d", read(8))[0],  # double
-    lambda read, /: None,  # void
-)
+    lambda jni, /: jobjectArray(jni, read_ptr(jni._read), {dim}),
+    lambda jni, /: jstringArray(jni, read_ptr(jni._read), {dim}),
+    lambda jni, /: jclassArray(jni, read_ptr(jni._read), {dim}),
+    lambda jni, /: jbooleanArray(jni, read_ptr(jni._read), {dim}),
+    lambda jni, /: jbyteArray(jni, read_ptr(jni._read), {dim}),
+    lambda jni, /: jcharArray(jni, read_ptr(jni._read), {dim}),
+    lambda jni, /: jshortArray(jni, read_ptr(jni._read), {dim}),
+    lambda jni, /: jintArray(jni, read_ptr(jni._read), {dim}),
+    lambda jni, /: jlongArray(jni, read_ptr(jni._read), {dim}),
+    lambda jni, /: jfloatArray(jni, read_ptr(jni._read), {dim}),
+    lambda jni, /: jdoubleArray(jni, read_ptr(jni._read), {dim}),
+)"""
+  # print(code); exit()
+    _G = {"read_ptr": read_ptr,
+          "jobjectArray": jobjectArray, "jstringArray": jstringArray, "jclassArray": jclassArray,
+          "jbooleanArray": jbooleanArray, "jbyteArray":   jbyteArray,
+          "jcharArray":    jcharArray,    "jshortArray":  jshortArray,
+          "jintArray":     jintArray,     "jlongArray":   jlongArray,
+          "jfloatArray":   jfloatArray,   "jdoubleArray": jdoubleArray}
+    exec(code, _G)
+    return _G["result_dispatch"]
+# get_result_dispatch(1)
+
 def read_value(jni, kind: int, /) -> jvalue:
-    if kind < 4:  # LRAK
-        return result_dispatch[kind](jni)
-    return result_dispatch[kind](jni._read)
+    dim, base = divmod(kind, _ARRAY_STEP)
+    return get_result_dispatch(dim)[base](jni)
 
 
 int2byte = tuple(bytes((i,)) for i in range(256))
@@ -203,10 +310,13 @@ def write_str_bin(write, data: bytes, /) -> None:
     write_uleb128(write, len(data))
     write(data)
 
+
+def _raise(exc):
+    raise exc
+
 value_dispatch = (
     lambda write, v, /: write(pack('P', v._o_inst)),  # jobject
     lambda write, v, /: write(pack('P', v._s_inst)),  # jstring
-    lambda write, v, /: write(pack('P', v._a_inst)),  # jarray
     lambda write, v, /: write(pack('P', v._c_inst)),  # jclass
     lambda write, v, /: write(int2byte[bool(v)]),  # boolean
     lambda write, v, /: write(int2byte[int(v)]),  # byte
@@ -216,81 +326,89 @@ value_dispatch = (
     write_sleb128L,  # long
     lambda write, v, /: write(pack('=f', v)),  # float
     lambda write, v, /: write(pack('=d', v)),  # double
+    *(
+        lambda write, v, /: write(pack('P', v._a_inst)),  # jarray
+    ) * (_ARRAY_STEP * 255),
+    lambda write, v, /: _raise(RuntimeError("don't use V (void) in value_dispatch"))
 )
+assert len(value_dispatch) == VOID + 1
+
 def write_value(write, val: jvalue, type: int, /):
     value_dispatch[type](write, val)
 
-args_dispatch = [None] * 128  # ascii
-args_dispatch[ord('Z')] = "write(int2byte[bool(args[{}])])"
-args_dispatch[ord('B')] = "write(int2byte[int(args[{}])])"
-args_dispatch[ord('C')] = "write_uleb128(write, ord(args[{}]))"
-args_dispatch[ord('S')] = "write_sleb128(write, args[{}])"
-args_dispatch[ord('I')] = "write_sleb128(write, args[{}])"
-args_dispatch[ord('J')] = "write_sleb128L(write, args[{}])"
-args_dispatch[ord('F')] = "write(pack('=f', args[{}]))"
-args_dispatch[ord('D')] = "write(pack('=d', args[{}]))"
+shorty2pack = [None] * VOID
+shorty2pack[CODE_Z] = '?'
+shorty2pack[CODE_B] = 'b'
+shorty2pack[CODE_F] = 'f'
+shorty2pack[CODE_D] = 'd'
 
-shorty2pack = [None] * 128  # ascii
-shorty2pack[ord('Z')] = '?'
-shorty2pack[ord('B')] = 'b'
-shorty2pack[ord('F')] = 'f'
-shorty2pack[ord('D')] = 'd'
-
-shorty2attr = [None] * 128  # ascii
-shorty2attr[ord('L')] = "_o_inst"
-shorty2attr[ord('R')] = "_s_inst"
-shorty2attr[ord('A')] = "_a_inst"
-shorty2attr[ord('K')] = "_c_inst"
+shorty2attr = ["_a_inst"] * VOID
+shorty2attr[CODE_L] = "_o_inst"
+shorty2attr[CODE_R] = "_s_inst"
+shorty2attr[CODE_K] = "_c_inst"
+for i in PRIMITIVES:
+    shorty2attr[i] = None
 # jmethod -> _m_inst
 # jfield -> _j_inst
 # Нет конфликтов в защите указателей
+
+args_dispatch = [None] * PRIMITIVES.stop
+args_dispatch[CODE_Z] = "w(int2byte[bool(a[{}])])"
+args_dispatch[CODE_B] = "w(int2byte[int(a[{}])])"
+args_dispatch[CODE_C] = "write_uleb128(w, ord(a[{}]))"
+args_dispatch[CODE_S] = "write_sleb128(w, a[{}])"
+args_dispatch[CODE_I] = "write_sleb128(w, a[{}])"
+args_dispatch[CODE_J] = "write_sleb128L(w, a[{}])"
+args_dispatch[CODE_F] = "w(p('=f', a[{}]))"
+args_dispatch[CODE_D] = "w(p('=d', a[{}]))"
 
 # знаю про shorty ещё с сентября 2019 года, т.к. пилил весь месяц (свой отпуск) DexReader до финальной
 # но shorty понадобился только сейчас: август 2026 года :)
 @cache
 def args_writer_gen(shorty):
     pos, L = 0, len(shorty)
-    code = ["def func(write, args, /):"]
+    code = ["def func(w, a, /):", "    p = pack"]
     add_line = code.append
     while pos < L:
-        letter = shorty[pos]
-        letter_c = ord(letter)
+        letter_c = shorty[pos]
         next_ = pos + 1
-        if letter in "LRAK":  # jobject | jstring | jarray | jclass
-            while next_ < L and shorty[next_] in "LRAK":
+        if letter_c not in PRIMITIVES:  # jobject | jstring | jarray | jclass
+            while next_ < L and shorty[next_] not in PRIMITIVES:
                 next_ += 1
             count = next_ - pos
             if count == 1:
-                add_line(f"    write(pack('P', args[{pos}].{shorty2attr[letter_c]}))")
+                add_line(f"    w(p('P', a[{pos}].{shorty2attr[letter_c]}))")
             else:
-                args = [f"args[{i}].{shorty2attr[ord(shorty[i])]}" for i in range(pos, next_)]
-                add_line(f"    write(pack({'P' * count !r}, {', '.join(args)}))")
+                args = [f"a[{i}].{shorty2attr[shorty[i]]}" for i in range(pos, next_)]
+                add_line(f"    w(p({'P' * count !r}, {', '.join(args)}))")
             pos = next_
             continue
+        # letter_c in PRIMITIVES
+        # -> letter_c in range(3, 11)
         c = shorty2pack[letter_c]
         packs = []
         if c is not None:
             packs.append(c)
             while next_ < L:
-                c = shorty2pack[ord(shorty[next_])]
+                c = shorty2pack[shorty[next_]]
                 if c is None:
                     break
                 packs.append(c)
                 next_ += 1
         if len(packs) > 1:
-            add_line(f"    write(pack({'=' + ''.join(packs) !r}, *args[{pos if pos else ''}:{next_}]))")
+            add_line(f"    w(p({'=' + ''.join(packs) !r}, *a[{pos if pos else ''}:{next_}]))")
         else:
             add_line("    " + args_dispatch[letter_c].format(pos))
         pos = next_
-  # print('\n'.join(code))
+  # print('\n'.join(code)); exit()
     _G = {"int2byte": int2byte, "write_sleb128": write_sleb128,
           "write_uleb128": write_uleb128,
           "write_sleb128L": write_sleb128L, "pack": pack}
     exec('\n'.join(code), _G)
     return _G["func"]
-# args_writer_gen("LLFLZLFDZBC")
+# args_writer_gen(to_shorty("La;Lb;FLc;Z[IFDZBC"))
 
-def write_args(write, shorty: str, args: tuple[jvalue, ...], /):
+def write_args(write, shorty: tuple[int, ...], args: tuple[jvalue, ...], /):
     assert len(shorty) == len(args)
     if shorty:
         args_writer_gen(shorty)(write, args)
@@ -376,11 +494,11 @@ class jclass(jobject):
             else:
                 getter = jni.getMethods if only_public else jni.getDeclaredMethods
             array = getter(self)
-            items = [jni.FromReflectedMethod(item, is_ctor) for item in array.object[:]]
+            items = [jni.FromReflectedMethod(item, is_ctor) for item in array[:]]
         else:
             getter = jni.getFields if only_public else jni.getDeclaredFields
             array = getter(self)
-            items = [jni.FromReflectedField(item) for item in array.object[:]]
+            items = [jni.FromReflectedField(item) for item in array[:]]
         result = sorted(items, key = lambda item: (type(item).__name__, item.name))
         for item in result:
             print(item)
@@ -403,11 +521,6 @@ class jclass(jobject):
 
 
 class jmethod_base:
-    ret_t2code = [None] * 128
-    for i, ret_t in enumerate("LRAKZBCSIJFDV"):
-        ret_t2code[ord(ret_t)] = i
-    del i, ret_t
-
     def __init__(self, clazz: jclass, name: str|None, args: str, ret_t: str, inst: int, /):
         self.clazz = clazz
         self.name = name
@@ -415,10 +528,10 @@ class jmethod_base:
         self.ret_t = ret_t
         self._m_inst = inst
         self.shorty = to_shorty(args)
-        ret_s = to_shorty(ret_t)
-        if len(ret_s) != 1:
+        ret_k = to_shorty(ret_t)
+        if len(ret_k) != 1:
             raise AttributeError(f"ret_t {ret_t!r} must consist of exactly one type")
-        self.ret_k = self.ret_t2code[ord(ret_s)]
+        self.ret_k = ret_k[0]
 
     def __repr__(self, /):
         return f"<{type(self).__name__} {self.name}({self.args}){self.ret_t}>"
@@ -451,17 +564,15 @@ class jmethod_static(jmethod_base):
 
 
 class jfield_base:
-    ret_t2code = jmethod_base.ret_t2code
-
     def __init__(self, clazz, name, type, inst, /):
         self.clazz = clazz
         self.name = name
         self.type = type
         self._f_inst = inst
-        type_s = to_shorty(type)
-        if len(type_s) != 1:
-            raise AttributeError(f"type {type_s!r} must consist of exactly one type")
-        self.type_k = self.ret_t2code[ord(type_s)]
+        type_k = to_shorty(type)
+        if len(type_k) != 1:
+            raise AttributeError(f"type {type!r} must consist of exactly one type")
+        self.type_k = type_k[0]
 
     def __repr__(self, /):
         return f"<{type(self).__name__} {self.name}:{self.type}>"
@@ -726,7 +837,7 @@ class JNIClient:
 
         self._check_exception()
         ret_kind = method.ret_k
-        if ret_kind != 12:  # 'V'
+        if ret_kind != VOID:
             return read_value(self, ret_kind)
 
     @synchronized
@@ -740,7 +851,7 @@ class JNIClient:
 
         self._check_exception()
         ret_kind = method.ret_k
-        if ret_kind != 12:  # 'V'
+        if ret_kind != VOID:
             return read_value(self, ret_kind)
 
     def GetFieldID(self, clazz: jclass, name: str, type: jclass|str, /) -> jfield:
@@ -809,7 +920,7 @@ class JNIClient:
 
         self._check_exception()
         ret_kind = method.ret_k
-        if ret_kind != 12:  # 'V'
+        if ret_kind != VOID:
             return read_value(self, ret_kind)
 
     # 83..101
@@ -884,24 +995,30 @@ class JNIClient:
         self._check_exception()
         return read_uleb128(self._read)
 
-    @synchronized
     def NewObjectArray(self, size: int, clazz: jclass, init: jobject, /) -> jobjectArray:
-        write = self._write
-        write_byte(write, 111)
-      # write_sleb128(write, size)  # java.lang.NegativeArraySizeException: -1
-        write_uleb128(write, size)
-        write_ptr(write, clazz._c_inst)
-        write_ptr(write, init._o_inst)
-        self._flush()
+        name = clazz.name  # может использовать self._lock
+        code = shorty_repl(name)
+        dim, base = divmod(code, _ARRAY_STEP)
+        assert base == 0, "TODO: NewObjectArray -> NewArray"
 
-        self._check_exception()
-        return jobjectArray(self, read_ptr(self._read))
+        write = self._write
+        with self._lock:
+            write_byte(write, 111)
+          # write_sleb128(write, size)  # java.lang.NegativeArraySizeException: -1
+            write_uleb128(write, size)
+            write_ptr(write, clazz._c_inst)
+            write_ptr(write, init._o_inst)
+            self._flush()
+
+            self._check_exception()
+            ptr = read_ptr(self._read)
+        return jobjectArray(self, ptr, dim+1)
 
     @synchronized
     def GetObjectArrayElement(self, obj_arr: jobjectArray, index: int, /) -> jobject:
         write = self._write
         write_byte(write, 112)
-        write_ptr(write, obj_arr._oa_inst)
+        write_ptr(write, obj_arr._La_inst)
         write_sleb128(write, index)
         self._flush()
 
@@ -912,7 +1029,7 @@ class JNIClient:
     def SetObjectArrayElement(self, obj_arr: jobjectArray, index: int, object: jobject, /):
         write = self._write
         write_byte(write, 113)
-        write_ptr(write, obj_arr._oa_inst)
+        write_ptr(write, obj_arr._La_inst)
         write_sleb128(write, index)
         write_ptr(write, object._o_inst)
         self._flush()

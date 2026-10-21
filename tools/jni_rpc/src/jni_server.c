@@ -504,7 +504,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             }
             break;
 
-       case 9:
+        case 9:
             object = (jobject) read_ptr(fd, &eos);
             if (eos) return eos;
         
