@@ -736,7 +736,70 @@ bool handle_command(int fd, ClientCtx *ctx) {
             fprintf(stderr, "Warning: use 73 (CallStatic<type>MethodA) instead of 74..82\n");
             return true; // eos
 
-        // 83..101
+        case 83: 
+            clazz = (jclass) read_ptr(fd, &eos);
+            if (eos) return eos;
+            buffer = read_str(fd, &eos, scratch_mem);
+            if (eos) return eos;
+            buffer2 = read_str(fd, &eos, scratch_mem);
+            if (eos) return eos;
+
+            field_id = (*env)->GetStaticFieldID(env, clazz, buffer, buffer2);
+            if (check_exception(fd, env)) {
+                field = jfield_init(field_id, buffer2, &eos, ctx->block_mem);
+                if (eos) return eos;
+                write_ptr(fd, field);
+            }
+            break;
+
+        case 84:
+            object = (jobject) read_ptr(fd, &eos);
+            if (eos) return eos;
+            field = (jfield*) read_ptr(fd, &eos);
+            if (eos) return eos;
+
+            switch (field->type) {
+                case 'L': value = (jvalue) (*env)->GetStaticObjectField(env, object, field->ID); break;
+                case 'Z': value = (jvalue) (*env)->GetStaticBooleanField(env, object, field->ID); break;
+                case 'B': value = (jvalue) (*env)->GetStaticByteField(env, object, field->ID); break;
+                case 'C': value = (jvalue) (*env)->GetStaticCharField(env, object, field->ID); break;
+                case 'S': value = (jvalue) (*env)->GetStaticShortField(env, object, field->ID); break;
+                case 'I': value = (jvalue) (*env)->GetStaticIntField(env, object, field->ID); break;
+                case 'J': value = (jvalue) (*env)->GetStaticLongField(env, object, field->ID); break;
+                case 'F': value = (jvalue) (*env)->GetStaticFloatField(env, object, field->ID); break;
+                case 'D': value = (jvalue) (*env)->GetStaticDoubleField(env, object, field->ID); break;
+            }
+            if (check_exception(fd, env))
+                write_value(fd, field->type, value);
+            break;
+        case 85 ... 92:
+            fprintf(stderr, "Warning: use 84 (Get<type>Field) instead of 85..92\n");
+            return true; // eos
+
+        case 93:
+            object = (jobject) read_ptr(fd, &eos);
+            if (eos) return eos;
+            field = (jfield*) read_ptr(fd, &eos);
+            if (eos) return eos;
+            value = read_value(fd, &eos, field->type);
+            if (eos) return eos;
+
+            switch (field->type) {
+                case 'L': (*env)->SetStaticObjectField(env, object, field->ID, value.l); break;
+                case 'Z': (*env)->SetStaticBooleanField(env, object, field->ID, value.z); break;
+                case 'B': (*env)->SetStaticByteField(env, object, field->ID, value.b); break;
+                case 'C': (*env)->SetStaticCharField(env, object, field->ID, value.c); break;
+                case 'S': (*env)->SetStaticShortField(env, object, field->ID, value.s); break;
+                case 'I': (*env)->SetStaticIntField(env, object, field->ID, value.i); break;
+                case 'J': (*env)->SetStaticLongField(env, object, field->ID, value.j); break;
+                case 'F': (*env)->SetStaticFloatField(env, object, field->ID, value.f); break;
+                case 'D': (*env)->SetStaticDoubleField(env, object, field->ID, value.d); break;
+            }
+            check_exception(fd, env);
+            break;
+        case 94 ... 101:
+            fprintf(stderr, "Warning: use 93 (Set<type>Field) instead of 94..101\n");
+            return true; // eos
 
         case 102: {
             int utf8_size;
@@ -829,9 +892,9 @@ bool handle_command(int fd, ClientCtx *ctx) {
             object = (jobject) read_ptr(fd, &eos);
             if (eos) return eos;
 
-            object_arr = (*env)->NewObjectArray(env, /*len=*/size, clazz, /*init=*/object);
+            array = (*env)->NewObjectArray(env, /*len=*/size, clazz, /*init=*/object);
             if (check_exception(fd, env))
-                write_ptr(fd, object_arr);
+                write_ptr(fd, array);
             break;
 
         case 112:
@@ -871,7 +934,72 @@ bool handle_command(int fd, ClientCtx *ctx) {
             check_exception(fd, env);
             break;
 
-        // 114..173
+        case 114:
+            size = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            array = (*env)->NewBooleanArray(env, size);
+            if (check_exception(fd, env))
+                write_ptr(fd, array);
+            break;
+        case 115:
+            size = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            array = (*env)->NewByteArray(env, size);
+            if (check_exception(fd, env))
+                write_ptr(fd, array);
+            break;
+        case 116:
+            size = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            array = (*env)->NewCharArray(env, size);
+            if (check_exception(fd, env))
+                write_ptr(fd, array);
+            break;
+        case 117:
+            size = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            array = (*env)->NewShortArray(env, size);
+            if (check_exception(fd, env))
+                write_ptr(fd, array);
+            break;
+        case 118:
+            size = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            array = (*env)->NewIntArray(env, size);
+            if (check_exception(fd, env))
+                write_ptr(fd, array);
+            break;
+        case 119:
+            size = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            array = (*env)->NewLongArray(env, size);
+            if (check_exception(fd, env))
+                write_ptr(fd, array);
+            break;
+        case 120:
+            size = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            array = (*env)->NewFloatArray(env, size);
+            if (check_exception(fd, env))
+                write_ptr(fd, array);
+            break;
+        case 121:
+            size = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            array = (*env)->NewDoubleArray(env, size);
+            if (check_exception(fd, env))
+                write_ptr(fd, array);
+            break;
+
+        // 122..173
 
         default:
             printf("unknown kind: %d\n", kind);

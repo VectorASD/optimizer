@@ -1,8 +1,9 @@
 import socket
 from struct import pack, unpack, calcsize
 from threading import Lock
-from functools import wraps, cache
+from functools import wraps, cache, cached_property
 import re
+from typing import Optional
 
 
 def synchronized(func, /):
@@ -53,6 +54,12 @@ class jobject:
     def __repr__(self):
         inst = self._o_inst
         return f"<jobject at {hex(inst) if inst else '<null>'}>"
+
+    def __getitem__(self, field: jfield) -> jvalue:
+        return field._gf(self, field)
+
+    def __setitem__(self, field: jfield, value: jvalue):
+        return field._sf(self, field, value)
 
     # TODO: __del__
 
@@ -175,9 +182,9 @@ class jdoubleArray(jarray):
         raise RuntimeError("TODO: jdoubleArray")
 
 _ARRAY_CLASS = (
+    jobjectArray, jstringArray, jclassArray,
     jbooleanArray, jbyteArray, jcharArray, jshortArray, jintArray,
     jlongArray, jfloatArray, jdoubleArray,
-    jobjectArray, jstringArray, jclassArray,
 )
 
 
@@ -454,9 +461,17 @@ class JavaError(Exception):
     pass
 
 
+_PRIM_NAME_TO_CHAR = {
+    "boolean": 'Z', "byte": 'B', "char":  'C', "short":  'S',
+    "int":     'I', "long": 'J', "float": 'F', "double": 'D',
+    "void":    'V',
+}.get
+
 class jclass(jobject):
     def __init__(self, jni, name, inst):
         self.jni = jni
+        if name and not name.startswith('[') and (len(name) > 1 or name not in "ZBCSIJFD"):
+            name = f"L{name};"
         self._name = name
         self._lock = Lock()
         self._c_inst = inst  # для jni-методов, что всегда требуют jclass
@@ -468,13 +483,24 @@ class jclass(jobject):
             name = self._name
             if name is None:
                 jstr = self.jni.c_getName(self).str
-                name = self._name = f"L{jstr.replace('.', '/')};"
+                if jstr.startswith('['):
+                    name = jstr.replace('.', '/')
+                else:
+                    prim = _PRIM_NAME_TO_CHAR(jstr)
+                    name = prim or f"L{jstr.replace('.', '/')};"
+                self._name = name
         return name
 
     def __repr__(self):
         return f"<jclass {self.name}>"
     def __str__(self):
         return self.name
+
+    def __getitem__(self, field: jfield_static) -> jvalue:
+        return field._gsf(self, field)
+
+    def __setitem__(self, field: jfield_static, value: jvalue):
+        return field._ssf(self, field, value)
 
     def inspect(self, is_method: bool = True, is_ctor: bool = False, only_public: bool = False) -> list[jmethod | jfield]:
         """
@@ -564,11 +590,10 @@ class jmethod_static(jmethod_base):
 
 
 class jfield_base:
-    def __init__(self, clazz, name, type, inst, /):
+    def __init__(self, clazz, name, type, /):
         self.clazz = clazz
         self.name = name
         self.type = type
-        self._f_inst = inst
         type_k = to_shorty(type)
         if len(type_k) != 1:
             raise AttributeError(f"type {type!r} must consist of exactly one type")
@@ -578,55 +603,33 @@ class jfield_base:
         return f"<{type(self).__name__} {self.name}:{self.type}>"
 
 class jfield(jfield_base):
-    pass
+    def __init__(self, jni, clazz, name, type, inst, /):
+        jfield_base.__init__(self, clazz, name, type)
+        self._f_inst = inst
+        self._gf = jni._GetField
+        self._sf = jni._SetField
 
 class jfield_static(jfield_base):
-    pass
+    def __init__(self, jni, clazz, name, type, inst, /):
+        jfield_base.__init__(self, clazz, name, type)
+        self._sf_inst = inst
+        self._gsf = jni._GetStaticField
+        self._ssf = jni._SetStaticField
 
 
 # Даже здесь у меня DSL вылез на boilerplate-код! :)
 
-def makeTypeGetter(inits, class_name, _counter=[0], /):
-    n = _counter[0]; _counter[0] += 1
-    cache_name = f"_{n}_type"
-    lock_name = f"_{n}_lock"
-    code = f"""
-def func(self, /) -> jclass:
-    with self.{lock_name}:
-        result = self.{cache_name}
-        if result is None:
-            result = self.{cache_name} = self.FindClass({class_name!r})
-    return result
+def makeTypeGetter(class_name, /):
+    @cached_property
+    def func(self, /) -> jclass:
+        return self.FindClass(class_name)
+    return func
 
-def init(jni, /):
-    jni.{cache_name} = None
-    jni.{lock_name} = Lock()
-inits.append(init)
-"""
-    _G = {"jclass": jclass, "inits": inits, "Lock": Lock}
-    exec(code, _G)
-    return property(_G["func"])
-
-def makeMethodGetter(inits, class_str, method_name, args_str, return_str, _counter=[0], /):
-    n = _counter[0]; _counter[0] += 1
-    cache_name = f"_{n}_method"
-    lock_name = f"_{n}_mlock"
-    code = f"""
-def func(self, /) -> jmethod:
-    with self.{lock_name}:
-        result = self.{cache_name}
-        if result is None:
-            result = self.{cache_name} = self.GetMethodID({class_str}, {method_name!r}, {args_str}, {return_str})
-    return result
-
-def init(jni, /):
-    jni.{cache_name} = None
-    jni.{lock_name} = Lock()
-inits.append(init)
-"""
-    _G = {"jmethod": jmethod, "inits": inits, "Lock": Lock}
-    exec(code, _G)
-    return property(_G["func"])
+def makeMethodGetter(class_fn, method_name, args_fn, ret_fn, /):
+    @cached_property
+    def func(self, /) -> jmethod:
+        return self.GetMethodID(class_fn(self), method_name, args_fn(self), ret_fn(self))
+    return func
 
 
 class JNIClient:
@@ -710,30 +713,76 @@ class JNIClient:
 
     _inits = []
 
-    objectType = makeTypeGetter(_inits, "java/lang/Object")
-    classType = makeTypeGetter(_inits, "java/lang/Class")
-    stringType = makeTypeGetter(_inits, "java/lang/String")
-    methodType = makeTypeGetter(_inits, "java/lang/reflect/Method")
-    fieldType = makeTypeGetter(_inits, "java/lang/reflect/Field")
-    ctorType = makeTypeGetter(_inits, "java/lang/reflect/Constructor")
+    objectType = makeTypeGetter("java/lang/Object")
+    classType  = makeTypeGetter("java/lang/Class")
+    stringType = makeTypeGetter("java/lang/String")
+    methodType = makeTypeGetter("java/lang/reflect/Method")
+    fieldType  = makeTypeGetter("java/lang/reflect/Field")
+    ctorType   = makeTypeGetter("java/lang/reflect/Constructor")
 
-    c_getName = makeMethodGetter(_inits, "self.classType", "getName", (), "self.stringType")
-    getMethods = makeMethodGetter(_inits, "self.classType", "getMethods", (), "f'[{self.methodType}'")
-    getDeclaredMethods = makeMethodGetter(_inits, "self.classType", "getDeclaredMethods", (), "f'[{self.methodType}'")
-    getFields = makeMethodGetter(_inits, "self.classType", "getFields", (), "f'[{self.fieldType}'")
-    getDeclaredFields = makeMethodGetter(_inits, "self.classType", "getDeclaredFields", (), "f'[{self.fieldType}'")
-    getConstructors = makeMethodGetter(_inits, "self.classType", "getConstructors", (), "f'[{self.ctorType}'")
-    getDeclaredConstructors = makeMethodGetter(_inits, "self.classType", "getDeclaredConstructors", (), "f'[{self.ctorType}'")
+    c_getName               = makeMethodGetter(lambda s: s.classType, "getName",                 lambda s: (), lambda s: s.stringType)
+    getMethods              = makeMethodGetter(lambda s: s.classType, "getMethods",              lambda s: (), lambda s: f"[{s.methodType}")
+    getDeclaredMethods      = makeMethodGetter(lambda s: s.classType, "getDeclaredMethods",      lambda s: (), lambda s: f"[{s.methodType}")
+    getFields               = makeMethodGetter(lambda s: s.classType, "getFields",               lambda s: (), lambda s: f"[{s.fieldType}")
+    getDeclaredFields       = makeMethodGetter(lambda s: s.classType, "getDeclaredFields",       lambda s: (), lambda s: f"[{s.fieldType}")
+    getConstructors         = makeMethodGetter(lambda s: s.classType, "getConstructors",         lambda s: (), lambda s: f"[{s.ctorType}")
+    getDeclaredConstructors = makeMethodGetter(lambda s: s.classType, "getDeclaredConstructors", lambda s: (), lambda s: f"[{s.ctorType}")
 
-    m_getName = makeMethodGetter(_inits, "self.methodType", "getName", (), "self.stringType")
-    m_getModifiers = makeMethodGetter(_inits, "self.methodType", "getModifiers", (), "I")
+    m_getName      = makeMethodGetter(lambda s: s.methodType, "getName",      lambda s: (), lambda s: s.stringType)
+    m_getModifiers = makeMethodGetter(lambda s: s.methodType, "getModifiers", lambda s: (), "I")
 
-    f_getName = makeMethodGetter(_inits, "self.fieldType", "getName", (), "self.stringType")
-    f_getModifiers = makeMethodGetter(_inits, "self.fieldType", "getModifiers", (), "I")
+    f_getName      = makeMethodGetter(lambda s: s.fieldType, "getName",      lambda s: (), lambda s: s.stringType)
+    f_getModifiers = makeMethodGetter(lambda s: s.fieldType, "getModifiers", lambda s: (), "I")
 
-    @property
+    @cached_property
     def null(self, /) -> jobject:
         return jobject(self, 0)
+
+    @cached_property
+    def Z(self, /) -> jclass:
+        c = self.FindClass("java/lang/Boolean")
+        f = self.GetStaticFieldID(c, "TYPE", self.classType)
+        return c[f]
+    @cached_property
+    def B(self, /) -> jclass:
+        c = self.FindClass("java/lang/Byte")
+        f = self.GetStaticFieldID(c, "TYPE", self.classType)
+        return c[f]
+    @cached_property
+    def C(self, /) -> jclass:
+        c = self.FindClass("java/lang/Character")
+        f = self.GetStaticFieldID(c, "TYPE", self.classType)
+        return c[f]
+    @cached_property
+    def S(self, /) -> jclass:
+        c = self.FindClass("java/lang/Short")
+        f = self.GetStaticFieldID(c, "TYPE", self.classType)
+        return c[f]
+    @cached_property
+    def I(self, /) -> jclass:
+        c = self.FindClass("java/lang/Integer")
+        f = self.GetStaticFieldID(c, "TYPE", self.classType)
+        return c[f]
+    @cached_property
+    def J(self, /) -> jclass:
+        c = self.FindClass("java/lang/Long")
+        f = self.GetStaticFieldID(c, "TYPE", self.classType)
+        return c[f]
+    @cached_property
+    def F(self, /) -> jclass:
+        c = self.FindClass("java/lang/Float")
+        f = self.GetStaticFieldID(c, "TYPE", self.classType)
+        return c[f]
+    @cached_property
+    def D(self, /) -> jclass:
+        c = self.FindClass("java/lang/Double")
+        f = self.GetStaticFieldID(c, "TYPE", self.classType)
+        return c[f]
+    @cached_property
+    def V(self, /) -> jclass:
+        c = self.FindClass("java/lang/Void")
+        f = self.GetStaticFieldID(c, "TYPE", self.classType)
+        return c[f]
 
     # native methods
 
@@ -757,7 +806,7 @@ class JNIClient:
         self._flush()
 
         self._check_exception()
-        return jclass(self, f"L{class_name};", read_ptr(self._read))
+        return jclass(self, class_name, read_ptr(self._read))
 
     @synchronized
     def FromReflectedMethod(self, object: jobject, is_ctor: bool, /) -> jmethod:
@@ -791,7 +840,7 @@ class JNIClient:
         type_ = read_str(read)
         modifiers = read_uleb128(read)
         is_static = modifiers & 0x8
-        return (jfield_static if is_static else jfield)(clazz, name, type_, read_ptr(read))
+        return (jfield_static if is_static else jfield)(self, clazz, name, type_, read_ptr(read))
 
     # 10..28
 
@@ -868,10 +917,10 @@ class JNIClient:
 
             self._check_exception()
             f_inst = read_ptr(self._read)
-        return jfield(clazz, name, type, f_inst)
+        return jfield(self, clazz, name, type, f_inst)
 
     @synchronized
-    def GetField(self, object: jobject, field: jfield, /) -> jvalue:
+    def _GetField(self, object: jobject, field: jfield, /) -> jvalue:
         write = self._write
         write_byte(write, 54)  # 54..62
         write_ptr(write, object._o_inst)
@@ -882,7 +931,7 @@ class JNIClient:
         return read_value(self, field.type_k)
 
     @synchronized
-    def SetField(self, object: jobject, field: jfield, value: jvalue, /):
+    def _SetField(self, object: jobject, field: jfield, value: jvalue, /):
         write = self._write
         write_byte(write, 63)  # 63..71
         write_ptr(write, object._o_inst)
@@ -923,7 +972,43 @@ class JNIClient:
         if ret_kind != VOID:
             return read_value(self, ret_kind)
 
-    # 83..101
+    def GetStaticFieldID(self, clazz: jclass, name: str, type: jclass|str, /) -> jfield:
+        if isinstance(type, jclass):
+            type = type.name
+
+        write = self._write
+        with self._lock:
+            write_byte(write, 83)
+            write_ptr(write, clazz._c_inst)
+            write_str(write, name)
+            write_str(write, type)
+            self._flush()
+
+            self._check_exception()
+            f_inst = read_ptr(self._read)
+        return jfield_static(self, clazz, name, type, f_inst)
+
+    @synchronized
+    def _GetStaticField(self, object: jobject, field: jfield_static, /) -> jvalue:
+        write = self._write
+        write_byte(write, 84)  # 84..92
+        write_ptr(write, object._o_inst)
+        write_ptr(write, field._sf_inst)
+        self._flush()
+
+        self._check_exception()
+        return read_value(self, field.type_k)
+
+    @synchronized
+    def _SetStaticField(self, object: jobject, field: jfield_static, value: jvalue, /):
+        write = self._write
+        write_byte(write, 93)  # 93..101
+        write_ptr(write, object._o_inst)
+        write_ptr(write, field._sf_inst)
+        write_value(write, value, field.type_k)
+        self._flush()
+
+        self._check_exception()
 
     @synchronized
     def NewString(self, text: str, /) -> jstring:
@@ -995,24 +1080,36 @@ class JNIClient:
         self._check_exception()
         return read_uleb128(self._read)
 
-    def NewObjectArray(self, size: int, clazz: jclass, init: jobject, /) -> jobjectArray:
-        name = clazz.name  # может использовать self._lock
+    def NewArray(self, size: int, clazz: jclass, init: Optional[jobject] = None, /) -> jobjectArray:
+        """
+        Создаёт массив элементов clazz (не массива-результата!).
+
+        Для ссылочных (L, R, K) - NewObjectArray с init (по умолчанию null).
+        Для примитивов - New<Type>Array без init.
+        """
+        # .name может захватить self._lock через c_getName -> до with
+        name = clazz.name
         code = shorty_repl(name)
-        dim, base = divmod(code, _ARRAY_STEP)
-        assert base == 0, "TODO: NewObjectArray -> NewArray"
+        dim_c, base = divmod(code, _ARRAY_STEP)
 
         write = self._write
         with self._lock:
-            write_byte(write, 111)
-          # write_sleb128(write, size)  # java.lang.NegativeArraySizeException: -1
-            write_uleb128(write, size)
-            write_ptr(write, clazz._c_inst)
-            write_ptr(write, init._o_inst)
+            if base < 3 or dim_c:
+                write_byte(write, 111)
+              # write_sleb128(write, size)  # java.lang.NegativeArraySizeException: -1
+                write_uleb128(write, size)
+                write_ptr(write, clazz._c_inst)
+                write_ptr(write, (init or self.null)._o_inst)
+            else:
+                if init is not None:
+                    raise RuntimeError("don't use 'init' for primitive array")
+                write_byte(write, 111 + base)  # 114..121
+                write_uleb128(write, size)
             self._flush()
 
             self._check_exception()
             ptr = read_ptr(self._read)
-        return jobjectArray(self, ptr, dim+1)
+        return _ARRAY_CLASS[base](self, ptr, dim_c + 1)
 
     @synchronized
     def GetObjectArrayElement(self, obj_arr: jobjectArray, index: int, /) -> jobject:
@@ -1074,12 +1171,12 @@ def first_check(jni):
     print("data: ", jni.GetStringUTFChars(result_s))
     print("check:", pow(123456789, 3, 1000000007))
 
-    bigint_signum = jni.GetFieldID(bigint, "signum", "I")
+    bigint_signum = jni.GetFieldID(bigint, "signum", 'I')
     print("signum:", bigint_signum)
-    print("result.signum:", jni.GetField(result, bigint_signum))
+    print("result.signum:", result[bigint_signum])
     for val in (-3, -2, 123456789, -123456789, -1):
-        jni.SetField(result, bigint_signum, val)
-        field_val = jni.GetField(result, bigint_signum)
+        result[bigint_signum] = val
+        field_val = result[bigint_signum]
         print("result.signum:", field_val)
         assert field_val == val
 
@@ -1107,12 +1204,12 @@ def check_arrays(jni):
     string_t = jni.stringType
     bigint = jni.FindClass("java/math/BigInteger")
     bigint_ctor = jni.GetMethodID(bigint, "<init>", (string_t,))
-    bigint_valueOf = jni.GetStaticMethodID(bigint, "valueOf", ("J",), bigint)
+    bigint_valueOf = jni.GetStaticMethodID(bigint, "valueOf", ('J',), bigint)
     toString = jni.GetMethodID(object_t, "toString", (), string_t)
     print("null:", jni.null)
 
     for size in (0, 10):  # range(11):
-        arr = jni.NewObjectArray(size, bigint, jni.null)
+        arr = jni.NewArray(size, bigint)
         print("arr:", arr, "size:", len(arr))
 
     print("idx[0]:", arr[0])
@@ -1136,12 +1233,14 @@ def check_arrays(jni):
     bigint.inspect()
     bigint.inspect(is_method=False)
 
+    print(jni.Z, jni.B, jni.C, jni.S, jni.I, jni.J, jni.F, jni.D, jni.V)
+
 
 if __name__ == "__main__":
     jni = JNIClient()
     jni.CreateOrReuseVM()
     print("version:", ".".join(map(str, jni.GetVersion())))
 
-  # first_check(jni)
-  # check_static(jni)
+    first_check(jni)
+    check_static(jni)
     check_arrays(jni)
