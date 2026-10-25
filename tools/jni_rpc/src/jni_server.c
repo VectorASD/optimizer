@@ -82,6 +82,11 @@ char get_return_type(text src, bool *eos) {
     return src[pos];
 }
 
+static const uint8_t TYPE_KIND[256] = {
+    ['L'] = 0, ['Z'] = 1, ['B'] = 2, ['C'] = 3, ['S'] = 4,
+    ['I'] = 5, ['J'] = 6, ['F'] = 7, ['D'] = 8, ['V'] = 255,
+};
+
 
 uint8_t read_byte(int fd, bool *eos) {
     uint8_t byte;
@@ -160,69 +165,27 @@ char* read_str_with_size(int fd, bool *eos, int *size_p, ScratchPool *pool) {
     *size_p = size;
     return buffer;
 }
-jvalue void_jvalue = (jvalue)(jint) 0;
-jvalue read_value(int fd, bool *eos, const char type) {
-    uint8_t byte;
-    int number;
-
-    jlong long_v;
-    jfloat float_v;
-    jdouble double_v;
-    jobject object_v;
-
-    switch (type) {
-    case 'Z':
-        if (read(fd, &byte, 1) <= 0) { *eos = true; return void_jvalue; }
-        return (jvalue)(jboolean) (byte != 0);
-    case 'B':
-        if (read(fd, &byte, 1) <= 0) { *eos = true; return void_jvalue; }
-        return (jvalue)(jbyte) byte;
-    case 'C':
-        number = read_uleb128(fd, eos);
-        if (*eos) return void_jvalue;
-        return (jvalue)(jchar) number;
-    case 'S':
-        number = read_sleb128(fd, eos);
-        if (*eos) return void_jvalue;
-        return (jvalue)(jshort) number;
-    case 'I':
-        number = read_sleb128(fd, eos);
-        if (*eos) return void_jvalue;
-        return (jvalue)(jint) number;
-    case 'J':
-        long_v = read_sleb128L(fd, eos);
-        if (*eos) return void_jvalue;
-        return (jvalue) long_v;
-    case 'F':
-        if (read(fd, &float_v, 4) <= 0) { *eos = true; return void_jvalue; }
-        return (jvalue) float_v;
-    case 'D':
-        if (read(fd, &double_v, 8) <= 0) { *eos = true; return void_jvalue; }
-        return (jvalue) double_v;
-    case 'L':
-        object_v = (jobject) read_ptr(fd, eos);
-        if (*eos) return void_jvalue;
-        return (jvalue) object_v;
-    }
-    return void_jvalue;
-}
-void read_args(int fd, bool *eos, text sig, jvalue *result) {
-    int pos = 0;
-    uint8_t byte;
-    int number;
-
-    jlong long_v;
-    jfloat float_v;
-    jdouble double_v;
-    jobject object_v;
-
-    while (1) {
-        const char type = sig[pos];
+#define READ_VALUE(fd, kind, out) do {                                                \
+    uint8_t _b; bool _e = false;                                                      \
+    switch (kind) {                                                                   \
+        case 0: out.l = (jobject) read_ptr(fd, &_e);     if (_e) return true; break;  \
+        case 1: if (read(fd, &_b, 1) <= 0) return true; out.z = (_b != 0);    break;  \
+        case 2: if (read(fd, &_b, 1) <= 0) return true; out.b = (jbyte)_b;    break;  \
+        case 3: out.c = (jchar)  read_uleb128(fd, &_e);  if (_e) return true; break;  \
+        case 4: out.s = (jshort) read_sleb128(fd, &_e);  if (_e) return true; break;  \
+        case 5: out.i = (jint)   read_sleb128(fd, &_e);  if (_e) return true; break;  \
+        case 6: out.j =          read_sleb128L(fd, &_e); if (_e) return true; break;  \
+        case 7: if (read(fd, &out.f, 4) <= 0) return true;                    break;  \
+        case 8: if (read(fd, &out.d, 8) <= 0) return true;                    break;  \
+        default: return true;                                                         \
+    }                                                                                 \
+} while (0);
+bool read_args(int fd, text shorty, jvalue *result) {
+    for (int pos = 0; ; pos++) {
+        uint8_t type = shorty[pos];
         if (type == 0)
-            return;
-        result[pos++] = read_value(fd, eos, type);
-        if (*eos)
-            return;
+            return false;
+        READ_VALUE(fd, TYPE_KIND[type], result[pos])
     }
 }
 
@@ -269,25 +232,27 @@ void write_str_with_size(int fd, text str, size_t size) {
 void write_str(int fd, text str) {
     write_str_with_size(fd, str, strlen(str));
 }
-void write_value(int fd, const char kind, jvalue value) {
-    switch (kind) {
-        case 'L': write_ptr(fd, value.l); break;
-        case 'Z': write(fd, &value.z, 1); break;
-        case 'B': write(fd, &value.b, 1); break;
-        case 'C': write_uleb128(fd, value.c); break;
-        case 'S': write_sleb128(fd, value.s); break;
-        case 'I': write_sleb128(fd, value.i); break;
-        case 'J': write_sleb128L(fd, value.j); break;
-        case 'F': write(fd, &value.f, 4); break;
-        case 'D': write(fd, &value.d, 8); break;
-    }
-}
+#define WRITE_VALUE(fd, kind, value) do {                                  \
+    uint8_t _b;                                                            \
+    switch (kind) {                                                        \
+        case 0: write_ptr(fd, (value).l); break;                           \
+        case 1: _b = (uint8_t)((value).z != 0); write(fd, &_b, 1); break;  \
+        case 2: _b = (uint8_t)((value).b);      write(fd, &_b, 1); break;  \
+        case 3: write_uleb128(fd, (value).c);                      break;  \
+        case 4: write_sleb128(fd, (value).s);                      break;  \
+        case 5: write_sleb128(fd, (value).i);                      break;  \
+        case 6: write_sleb128L(fd, (value).j);                     break;  \
+        case 7: write(fd, &(value).f, 4);                          break;  \
+        case 8: write(fd, &(value).d, 8);                          break;  \
+    }                                                                      \
+} while (0);
 
 
 typedef struct jmethod {
     jmethodID ID;
     jclass clazz;
     char ret_t;
+    uint8_t ret_k;
     char shorty[]; // flexible array member
 } jmethod;
 
@@ -308,6 +273,7 @@ jmethod* jmethod_init(jmethodID id, jclass clazz, text signature, bool *eos, Blo
     method->clazz = clazz;
     text ret_s = to_shorty(signature, method->shorty);
     method->ret_t = get_return_type(ret_s, eos);
+    method->ret_k = TYPE_KIND[method->ret_t];
 
     return method;
 }
@@ -316,6 +282,7 @@ jmethod* jmethod_init(jmethodID id, jclass clazz, text signature, bool *eos, Blo
 typedef struct jfield {
     jfieldID ID;
     char type;
+    uint8_t kind;
 } jfield;
 
 jfield* jfield_init(jfieldID id, text type_s, bool *eos, BlockPool *pool) {
@@ -327,6 +294,7 @@ jfield* jfield_init(jfieldID id, text type_s, bool *eos, BlockPool *pool) {
 
     field->ID = id;
     field->type = get_return_type(type_s, eos);
+    field->kind = TYPE_KIND[field->type];
 
     return field;
 }
@@ -554,8 +522,8 @@ bool handle_command(int fd, ClientCtx *ctx) {
         case 29:
             method = (jmethod*) read_ptr(fd, &eos);
             if (eos) return eos;
-            read_args(fd, &eos, method->shorty, args_buffer);
-            if (eos) return eos;
+            if (read_args(fd, method->shorty, args_buffer))
+                return true;
 
             object = (*env)->NewObjectA(env, method->clazz, method->ID, args_buffer);
             if (check_exception(fd, env))
@@ -585,8 +553,8 @@ bool handle_command(int fd, ClientCtx *ctx) {
             if (eos) return eos;
             method = (jmethod*) read_ptr(fd, &eos);
             if (eos) return eos;
-            read_args(fd, &eos, method->shorty, args_buffer);
-            if (eos) return eos;
+            if (read_args(fd, method->shorty, args_buffer))
+                return true;
 
             switch (method->ret_t) {
                 case 'L': value = (jvalue) (*env)->CallObjectMethodA(env, object, method->ID, args_buffer); break;
@@ -601,7 +569,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
                 case 'V': (*env)->CallVoidMethodA(env, object, method->ID, args_buffer); break;
             }
             if (check_exception(fd, env) && method->ret_t != 'V')
-                write_value(fd, method->ret_t, value);
+                WRITE_VALUE(fd, method->ret_k, value)
             break;
         case 34 ... 42:
             fprintf(stderr, "Warning: use 33 (Call<type>MethodA) instead of 34..42\n");
@@ -612,8 +580,8 @@ bool handle_command(int fd, ClientCtx *ctx) {
             if (eos) return eos;
             method = (jmethod*) read_ptr(fd, &eos);
             if (eos) return eos;
-            read_args(fd, &eos, method->shorty, args_buffer);
-            if (eos) return eos;
+            if (read_args(fd, method->shorty, args_buffer))
+                return true;
 
             switch (method->ret_t) {
                 case 'L': value = (jvalue) (*env)->CallNonvirtualObjectMethodA(env, object, method->clazz, method->ID, args_buffer); break;
@@ -628,7 +596,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
                 case 'V': (*env)->CallNonvirtualVoidMethodA(env, object, method->clazz, method->ID, args_buffer); break;
             }
             if (check_exception(fd, env) && method->ret_t != 'V')
-                write_value(fd, method->ret_t, value);
+                WRITE_VALUE(fd, method->ret_k, value)
             break;
         case 44 ... 52:
             fprintf(stderr, "Warning: use 43 (CallNonvirtual<type>MethodA) instead of 44..52\n");
@@ -668,7 +636,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
                 case 'D': value = (jvalue) (*env)->GetDoubleField(env, object, field->ID); break;
             }
             if (check_exception(fd, env))
-                write_value(fd, field->type, value);
+                WRITE_VALUE(fd, field->kind, value)
             break;
         case 55 ... 62:
             fprintf(stderr, "Warning: use 54 (Get<type>Field) instead of 55..62\n");
@@ -679,8 +647,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             if (eos) return eos;
             field = (jfield*) read_ptr(fd, &eos);
             if (eos) return eos;
-            value = read_value(fd, &eos, field->type);
-            if (eos) return eos;
+            READ_VALUE(fd, field->kind, value)
 
             switch (field->type) {
                 case 'L': (*env)->SetObjectField(env, object, field->ID, value.l); break;
@@ -718,8 +685,8 @@ bool handle_command(int fd, ClientCtx *ctx) {
         case 73:
             method = (jmethod*) read_ptr(fd, &eos);
             if (eos) return eos;
-            read_args(fd, &eos, method->shorty, args_buffer);
-            if (eos) return eos;
+            if (read_args(fd, method->shorty, args_buffer))
+                return true;
 
             switch (method->ret_t) {
                 case 'L': value = (jvalue) (*env)->CallStaticObjectMethodA(env, method->clazz, method->ID, args_buffer); break;
@@ -734,7 +701,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
                 case 'V': (*env)->CallStaticVoidMethodA(env, method->clazz, method->ID, args_buffer); break;
             }
             if (check_exception(fd, env) && method->ret_t != 'V')
-                write_value(fd, method->ret_t, value);
+                WRITE_VALUE(fd, method->ret_k, value)
             break;
         case 74 ... 82:
             fprintf(stderr, "Warning: use 73 (CallStatic<type>MethodA) instead of 74..82\n");
@@ -774,7 +741,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
                 case 'D': value = (jvalue) (*env)->GetStaticDoubleField(env, object, field->ID); break;
             }
             if (check_exception(fd, env))
-                write_value(fd, field->type, value);
+                WRITE_VALUE(fd, field->kind, value)
             break;
         case 85 ... 92:
             fprintf(stderr, "Warning: use 84 (Get<type>Field) instead of 85..92\n");
@@ -785,8 +752,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             if (eos) return eos;
             field = (jfield*) read_ptr(fd, &eos);
             if (eos) return eos;
-            value = read_value(fd, &eos, field->type);
-            if (eos) return eos;
+            READ_VALUE(fd, field->kind, value)
 
             switch (field->type) {
                 case 'L': (*env)->SetStaticObjectField(env, object, field->ID, value.l); break;
@@ -947,169 +913,25 @@ bool handle_command(int fd, ClientCtx *ctx) {
                 write_ptr(fd, array);
             break;
 
-        case 122: // Z: GetBooleanArrayElement
+        case 122 ... 129: // Get<type>ArrayElement: base = kind - 122 (0..7)
             array = (jarray) read_ptr(fd, &eos);
             if (eos) return eos;
             start = read_uleb128(fd, &eos);
             if (eos) return eos;
 
-            (*env)->GetBooleanArrayRegion(env, (jbooleanArray) array, start, 1, &value.z);
+            GET_ARRAY_REGION(kind - 122, env, array, start, 1, &value);
             if (check_exception(fd, env))
-                write(fd, &value.z, 1);
+                WRITE_VALUE(fd, 1 + (kind - 122), value); // kind+1: Z=1..D=8
             break;
-        case 123: // B: GetByteArrayElement
+
+        case 130 ... 137: // Set<type>ArrayElement: base = kind - 130 (0..7)
             array = (jarray) read_ptr(fd, &eos);
             if (eos) return eos;
             start = read_uleb128(fd, &eos);
             if (eos) return eos;
 
-            (*env)->GetByteArrayRegion(env, (jbyteArray) array, start, 1, &value.b);
-            if (check_exception(fd, env))
-                write(fd, &value.b, 1);
-            break;
-        case 124: // C: GetCharArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            (*env)->GetCharArrayRegion(env, (jcharArray) array, start, 1, &value.c);
-            if (check_exception(fd, env))
-                write_uleb128(fd, value.c);
-            break;
-        case 125: // S: GetShortArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            (*env)->GetShortArrayRegion(env, (jshortArray) array, start, 1, &value.s);
-            if (check_exception(fd, env))
-                write_sleb128(fd, value.s);
-            break;
-        case 126: // I: GetIntArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            (*env)->GetIntArrayRegion(env, (jintArray) array, start, 1, &value.i);
-            if (check_exception(fd, env))
-                write_sleb128(fd, value.i);
-            break;
-        case 127: // J: GetLongArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            (*env)->GetLongArrayRegion(env, (jlongArray) array, start, 1, &value.j);
-            if (check_exception(fd, env))
-                write_sleb128L(fd, value.j);
-            break;
-        case 128: // F: GetFloatArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            (*env)->GetFloatArrayRegion(env, (jfloatArray) array, start, 1, &value.f);
-            if (check_exception(fd, env))
-                write(fd, &value.f, 4);
-            break;
-        case 129: // D: GetDoubleArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            (*env)->GetDoubleArrayRegion(env, (jdoubleArray) array, start, 1, &value.d);
-            if (check_exception(fd, env))
-                write(fd, &value.d, 8);
-            break;
-
-        case 130: // Z: SetBooleanArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-            if (read(fd, &value.z, 1) <= 0) return true;
-
-            (*env)->SetBooleanArrayRegion(env, (jbooleanArray) array, start, 1, &value.z);
-            check_exception(fd, env);
-            break;
-        case 131: // B: SetByteArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-            if (read(fd, &value.b, 1) <= 0) return true;
-
-            (*env)->SetByteArrayRegion(env, (jbyteArray) array, start, 1, &value.b);
-            check_exception(fd, env);
-            break;
-        case 132: // C: SetCharArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-            value.c = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            (*env)->SetCharArrayRegion(env, (jcharArray) array, start, 1, &value.c);
-            check_exception(fd, env);
-            break;
-        case 133: // S: SetShortArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-            value.s = read_sleb128(fd, &eos);
-            if (eos) return eos;
-
-            (*env)->SetShortArrayRegion(env, (jshortArray) array, start, 1, &value.s);
-            check_exception(fd, env);
-            break;
-        case 134: // I: SetIntArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-            value.i = read_sleb128(fd, &eos);
-            if (eos) return eos;
-
-            (*env)->SetIntArrayRegion(env, (jintArray) array, start, 1, &value.i);
-            check_exception(fd, env);
-            break;
-        case 135: // J: SetLongArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-            value.j = read_sleb128L(fd, &eos);
-            if (eos) return eos;
-
-            (*env)->SetLongArrayRegion(env, (jlongArray) array, start, 1, &value.j);
-            check_exception(fd, env);
-            break;
-        case 136: // F: SetFloatArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-            if (read(fd, &value.f, 4) <= 0) return true;
-
-            (*env)->SetFloatArrayRegion(env, (jfloatArray) array, start, 1, &value.f);
-            check_exception(fd, env);
-            break;
-        case 137: // D: SetDoubleArrayElement
-            array = (jarray) read_ptr(fd, &eos);
-            if (eos) return eos;
-            start = read_uleb128(fd, &eos);
-            if (eos) return eos;
-            if (read(fd, &value.d, 8) <= 0) return true;
-
-            (*env)->SetDoubleArrayRegion(env, (jdoubleArray) array, start, 1, &value.d);
+            READ_VALUE(fd, 1 + (kind - 130), value); // kind+1: Z=1..D=8
+            SET_ARRAY_REGION(kind - 130, env, array, start, 1, &value);
             check_exception(fd, env);
             break;
 
