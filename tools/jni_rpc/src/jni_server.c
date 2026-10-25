@@ -397,6 +397,10 @@ bool handle_command(int fd, ClientCtx *ctx) {
     jstring string; jsize size;
 
     jarray array; jobjectArray object_arr;
+    jsize start, len, span;
+    jint end, step, last;
+    void* region;
+    size_t esize;
 
     switch (kind) {
         case 0: {
@@ -934,72 +938,301 @@ bool handle_command(int fd, ClientCtx *ctx) {
             check_exception(fd, env);
             break;
 
-        case 114:
+        case 114 ... 121:
             size = read_uleb128(fd, &eos);
             if (eos) return eos;
 
-            array = (*env)->NewBooleanArray(env, size);
-            if (check_exception(fd, env))
-                write_ptr(fd, array);
-            break;
-        case 115:
-            size = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            array = (*env)->NewByteArray(env, size);
-            if (check_exception(fd, env))
-                write_ptr(fd, array);
-            break;
-        case 116:
-            size = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            array = (*env)->NewCharArray(env, size);
-            if (check_exception(fd, env))
-                write_ptr(fd, array);
-            break;
-        case 117:
-            size = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            array = (*env)->NewShortArray(env, size);
-            if (check_exception(fd, env))
-                write_ptr(fd, array);
-            break;
-        case 118:
-            size = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            array = (*env)->NewIntArray(env, size);
-            if (check_exception(fd, env))
-                write_ptr(fd, array);
-            break;
-        case 119:
-            size = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            array = (*env)->NewLongArray(env, size);
-            if (check_exception(fd, env))
-                write_ptr(fd, array);
-            break;
-        case 120:
-            size = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            array = (*env)->NewFloatArray(env, size);
-            if (check_exception(fd, env))
-                write_ptr(fd, array);
-            break;
-        case 121:
-            size = read_uleb128(fd, &eos);
-            if (eos) return eos;
-
-            array = (*env)->NewDoubleArray(env, size);
+            NEW_PRIM_ARRAY(kind - 114, env, size, array);
             if (check_exception(fd, env))
                 write_ptr(fd, array);
             break;
 
-        // 122..173
+        case 122: // Z: GetBooleanArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            (*env)->GetBooleanArrayRegion(env, (jbooleanArray) array, start, 1, &value.z);
+            if (check_exception(fd, env))
+                write(fd, &value.z, 1);
+            break;
+        case 123: // B: GetByteArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            (*env)->GetByteArrayRegion(env, (jbyteArray) array, start, 1, &value.b);
+            if (check_exception(fd, env))
+                write(fd, &value.b, 1);
+            break;
+        case 124: // C: GetCharArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            (*env)->GetCharArrayRegion(env, (jcharArray) array, start, 1, &value.c);
+            if (check_exception(fd, env))
+                write_uleb128(fd, value.c);
+            break;
+        case 125: // S: GetShortArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            (*env)->GetShortArrayRegion(env, (jshortArray) array, start, 1, &value.s);
+            if (check_exception(fd, env))
+                write_sleb128(fd, value.s);
+            break;
+        case 126: // I: GetIntArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            (*env)->GetIntArrayRegion(env, (jintArray) array, start, 1, &value.i);
+            if (check_exception(fd, env))
+                write_sleb128(fd, value.i);
+            break;
+        case 127: // J: GetLongArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            (*env)->GetLongArrayRegion(env, (jlongArray) array, start, 1, &value.j);
+            if (check_exception(fd, env))
+                write_sleb128L(fd, value.j);
+            break;
+        case 128: // F: GetFloatArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            (*env)->GetFloatArrayRegion(env, (jfloatArray) array, start, 1, &value.f);
+            if (check_exception(fd, env))
+                write(fd, &value.f, 4);
+            break;
+        case 129: // D: GetDoubleArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            (*env)->GetDoubleArrayRegion(env, (jdoubleArray) array, start, 1, &value.d);
+            if (check_exception(fd, env))
+                write(fd, &value.d, 8);
+            break;
+
+        case 130: // Z: SetBooleanArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+            if (read(fd, &value.z, 1) <= 0) return true;
+
+            (*env)->SetBooleanArrayRegion(env, (jbooleanArray) array, start, 1, &value.z);
+            check_exception(fd, env);
+            break;
+        case 131: // B: SetByteArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+            if (read(fd, &value.b, 1) <= 0) return true;
+
+            (*env)->SetByteArrayRegion(env, (jbyteArray) array, start, 1, &value.b);
+            check_exception(fd, env);
+            break;
+        case 132: // C: SetCharArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+            value.c = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            (*env)->SetCharArrayRegion(env, (jcharArray) array, start, 1, &value.c);
+            check_exception(fd, env);
+            break;
+        case 133: // S: SetShortArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+            value.s = read_sleb128(fd, &eos);
+            if (eos) return eos;
+
+            (*env)->SetShortArrayRegion(env, (jshortArray) array, start, 1, &value.s);
+            check_exception(fd, env);
+            break;
+        case 134: // I: SetIntArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+            value.i = read_sleb128(fd, &eos);
+            if (eos) return eos;
+
+            (*env)->SetIntArrayRegion(env, (jintArray) array, start, 1, &value.i);
+            check_exception(fd, env);
+            break;
+        case 135: // J: SetLongArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+            value.j = read_sleb128L(fd, &eos);
+            if (eos) return eos;
+
+            (*env)->SetLongArrayRegion(env, (jlongArray) array, start, 1, &value.j);
+            check_exception(fd, env);
+            break;
+        case 136: // F: SetFloatArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+            if (read(fd, &value.f, 4) <= 0) return true;
+
+            (*env)->SetFloatArrayRegion(env, (jfloatArray) array, start, 1, &value.f);
+            check_exception(fd, env);
+            break;
+        case 137: // D: SetDoubleArrayElement
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_uleb128(fd, &eos);
+            if (eos) return eos;
+            if (read(fd, &value.d, 8) <= 0) return true;
+
+            (*env)->SetDoubleArrayRegion(env, (jdoubleArray) array, start, 1, &value.d);
+            check_exception(fd, env);
+            break;
+
+        case 138 ... 145: // Get<type>ArraySlice: start, end, step -> len, data
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_sleb128(fd, &eos);
+            if (eos) return eos;
+            end = read_sleb128(fd, &eos);
+            if (eos) return eos;
+            step = read_sleb128(fd, &eos);
+            if (eos) return eos;
+
+            esize = prim_esize[kind - 138];  // base = 4 для int
+
+            if (step == 1) {
+                len = end - start;
+                if (len <= 0) {
+                    write_uleb128(fd, 0); // OK
+                    write_uleb128(fd, 0); // len
+                    break;
+                }
+                region = pool_alloc(ctx->scratch_mem, len * esize);
+                if (!region)
+                    return true;
+                GET_ARRAY_REGION(kind - 138, env, array, start, len, region);
+                if (!check_exception(fd, env))
+                    break;
+                write_uleb128(fd, len);
+                write(fd, region, len * esize);
+            } else if (step > 0) {
+                len = (end - start + step - 1) / step;
+                if (len <= 0) {
+                    write_uleb128(fd, 0); // OK
+                    write_uleb128(fd, 0); // len
+                    break;
+                }
+                span = (len - 1) * step + 1;
+                region = pool_alloc(ctx->scratch_mem, span * esize);
+                if (!region)
+                    return true;
+                GET_ARRAY_REGION(kind - 138, env, array, start, span, region);
+                if (!check_exception(fd, env))
+                    break;
+                write_uleb128(fd, len);
+                for (jsize i = 0; i < span; i += step)
+                    write(fd, (uint8_t*)region + i * esize, esize);
+            } else if (step < 0) {
+                len = (end - start + step + 1) / step;
+                if (len <= 0) {
+                    write_uleb128(fd, 0); // OK
+                    write_uleb128(fd, 0); // len
+                    break;
+                }
+                last = start + (len - 1) * step;
+                span = start - last + 1;
+                region = pool_alloc(ctx->scratch_mem, span * esize);
+                if (!region)
+                    return true;
+                GET_ARRAY_REGION(kind - 138, env, array, last, span, region);
+                if (!check_exception(fd, env))
+                    break;
+                write_uleb128(fd, len);
+                for (jsize i = span - 1; i >= 0; i += step)
+                    write(fd, (uint8_t*)region + i * esize, esize);
+            } else // step == 0
+                eos = true;
+            break;
+
+        case 146 ... 153: // Set<type>ArraySlice: start, step, len, data
+            array = (jarray) read_ptr(fd, &eos);
+            if (eos) return eos;
+            start = read_sleb128(fd, &eos);
+            if (eos) return eos;
+            step = read_sleb128(fd, &eos);
+            if (eos) return eos;
+            len = read_uleb128(fd, &eos);
+            if (eos) return eos;
+
+            esize = prim_esize[kind - 146];  // base = 4 для int
+
+            if (len == 0)
+                break;
+
+            if (step == 1) {
+                region = pool_alloc(ctx->scratch_mem, len * esize);
+                if (!region)
+                    return true;
+                if (read(fd, region, len * esize) != len * esize)
+                    return true;
+                SET_ARRAY_REGION(kind - 146, env, array, start, len, region);
+                check_exception(fd, env);
+            } else if (step > 0) {
+                span = (len - 1) * step + 1;
+                region = pool_alloc(ctx->scratch_mem, span * esize);
+                if (!region)
+                    return true;
+                GET_ARRAY_REGION(kind - 146, env, array, start, span, region);
+                if (!_check_exception(fd, env, /*send_ok=*/false))
+                    break;
+                for (jsize i = 0; i < span; i += step)
+                    if (read(fd, (uint8_t*)region + i * esize, esize) != esize)
+                        return true;
+                SET_ARRAY_REGION(kind - 146, env, array, start, span, region);
+                check_exception(fd, env);
+            } else {
+                last = start + (len - 1) * step;
+                span = start - last + 1;
+                region = pool_alloc(ctx->scratch_mem, span * esize);
+                if (!region)
+                    return true;
+                GET_ARRAY_REGION(kind - 146, env, array, last, span, region);
+                if (!_check_exception(fd, env, /*send_ok=*/false))
+                    break;
+                for (jsize i = span - 1; i >= 0; i += step)
+                    if (read(fd, (uint8_t*)region + i * esize, esize) != esize)
+                        return true;
+                SET_ARRAY_REGION(kind - 146, env, array, last, span, region);
+                check_exception(fd, env);
+            }
+            break;
+
+        // 154..173
 
         default:
             printf("unknown kind: %d\n", kind);
