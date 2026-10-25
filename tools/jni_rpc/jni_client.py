@@ -86,100 +86,159 @@ class jstring(jobject):
 
 class jarray(jobject):
     def __init__(self, jni, inst, dim):
+        jobject.__init__(self, jni, inst)
         self.jni = jni
         self._a_inst = inst
-        self._len = jni.GetArrayLength
         self._dim = dim
+        if dim > 1:
+            self._La_inst = inst
+
+        self._gal = jni.GetArrayLength
+        self._gi = jni._GetObjectArrayElement
+        self._si = jni._SetObjectArrayElement
+        self._se = jni._SetPrimArrayElement
+        self._ge = jni._GetPrimArrayElement
+        self._ss = jni._SetPrimArraySlice
+        self._gs = jni._GetPrimArraySlice
+
+    @cached_property
+    def _len(self):
+        return self._gal(self)
 
     def __repr__(self):
-        return f"<{type(self).__name__} at {hex(self._a_inst)}>"
+        # return f"<{type(self).__name__} at {hex(self._a_inst)}>"
+        return f"<{type(self).__name__}: {self[:]}>"
 
     def __len__(self):
-        return self._len(self)
+        return self._len
+
+    def __getitem__(self, index, /):
+        n = self._len
+        if isinstance(index, slice):
+            start, stop, step = index.indices(n)
+            if self._dim > 1:
+                return [self[i] for i in range(start, stop, step)]
+            return self._gs(self, start, stop, step)
+        if index < 0:
+            index += n
+        if not 0 <= index < n:
+            raise IndexError("array index out of range")
+        if self._dim > 1:
+            elem = self._gi(self, index)
+            if elem._o_inst:
+                return type(self)(self.jni, elem._o_inst, self._dim - 1)
+            return None
+        return self._ge(self, index)
+
+    def __setitem__(self, index, value, /):
+        n = self._len
+        if isinstance(index, slice):
+            start, stop, step = index.indices(n)
+            if self._dim > 1:
+                for i, v in zip(range(start, stop, step), value):
+                    self._si(self, i, v)
+                return
+            self._ss(self, start, stop, step, value)
+            return
+        if index < 0:
+            index += n
+        if not 0 <= index < n:
+            raise IndexError("array index out of range")
+        if self._dim > 1:
+            self._si(self, index, value)
+        else:
+            self._se(self, index, value)
 
     # TODO: __del__
 
 class jobjectArray(jarray):
+    _base = None
     def __init__(self, jni, inst, dim):
         jarray.__init__(self, jni, inst, dim)
         self._La_inst = inst
-        self._gi = jni.GetObjectArrayElement
-        self._si = jni.SetObjectArrayElement
 
-    def __getitem__(self, index: int, /) -> jobject:
+    def __getitem__(self, index, /):
+        if self._dim > 1:
+            return jarray.__getitem__(self, index)
+        n = self._len
         if isinstance(index, slice):
-            step = index.step or 1
-            if step != 1:
-                raise ValueError("jobjectArray is not supported slice with step != 1")
-            # TODO: add support array regions in server
-            _gi = self._gi
-            return [_gi(self, i) for i in range(index.start or 0, index.stop or len(self))]
+            start, stop, step = index.indices(n)
+            return [self[i] for i in range(start, stop, step)]
+        if index < 0:
+            index += n
+        if not 0 <= index < n:
+            raise IndexError("array index out of range")
         return self._gi(self, index)
 
-    def __setitem__(self, index: int, object: jobject, /):
+    def __setitem__(self, index, value, /):
+        if self._dim > 1:
+            jarray.__setitem__(self, index, value)
+            return
+        n = self._len
         if isinstance(index, slice):
-            raise ValueError("jobjectArray is not supported slice")
-        return self._si(self, index, object)
+            start, stop, step = index.indices(n)
+            for i, v in zip(range(start, stop, step), value):
+                self[i] = v
+            return
+        if index < 0:
+            index += n
+        if not 0 <= index < n:
+            raise IndexError("array index out of range")
+        self._si(self, index, value)
 
 class jstringArray(jarray):
+    _base = None
     def __init__(self, jni, inst, dim):
         jarray.__init__(self, jni, inst, dim)
         self._Ra_inst = inst
         raise RuntimeError("TODO: jstringArray")
 
 class jclassArray(jarray):
+    _base = None
     def __init__(self, jni, inst, dim):
         jarray.__init__(self, jni, inst, dim)
         self._Ka_inst = inst
         raise RuntimeError("TODO: jclassArray")
 
 class jbooleanArray(jarray):
-    def __init__(self, jni, inst, dim):
-        jarray.__init__(self, jni, inst, dim)
-        self._Za_inst = inst
-        raise RuntimeError("TODO: jbooleanArray")
+    _base = 0
+    _esize = 1
+    _fmt = '?'
 
 class jbyteArray(jarray):
-    def __init__(self, jni, inst, dim):
-        jarray.__init__(self, jni, inst, dim)
-        self._Ba_inst = inst
-        raise RuntimeError("TODO: jbyteArray")
+    _base = 1
+    _esize = 1
+    _fmt = 'b'
 
 class jcharArray(jarray):
-    def __init__(self, jni, inst, dim):
-        jarray.__init__(self, jni, inst, dim)
-        self._Ca_inst = inst
-        raise RuntimeError("TODO: jcharArray")
+    _base = 2
+    _esize = 2
+    _fmt = 'H'
 
 class jshortArray(jarray):
-    def __init__(self, jni, inst, dim):
-        jarray.__init__(self, jni, inst, dim)
-        self._Sa_inst = inst
-        raise RuntimeError("TODO: jshortArray")
+    _base = 3
+    _esize = 2
+    _fmt = 'h'
 
 class jintArray(jarray):
-    def __init__(self, jni, inst, dim):
-        jarray.__init__(self, jni, inst, dim)
-        self._Ia_inst = inst
-        raise RuntimeError("TODO: jintArray")
+    _base = 4
+    _esize = 4
+    _fmt = 'i'
 
 class jlongArray(jarray):
-    def __init__(self, jni, inst, dim):
-        jarray.__init__(self, jni, inst, dim)
-        self._Ja_inst = inst
-        raise RuntimeError("TODO: jlongArray")
+    _base = 5
+    _esize = 8
+    _fmt = 'q'
 
 class jfloatArray(jarray):
-    def __init__(self, jni, inst, dim):
-        jarray.__init__(self, jni, inst, dim)
-        self._Fa_inst = inst
-        raise RuntimeError("TODO: jfloatArray")
+    _base = 6
+    _esize = 4
+    _fmt = 'f'
 
 class jdoubleArray(jarray):
-    def __init__(self, jni, inst, dim):
-        jarray.__init__(self, jni, inst, dim)
-        self._Da_inst = inst
-        raise RuntimeError("TODO: jdoubleArray")
+    _base = 7
+    _esize = 8
+    _fmt = 'd'
 
 _ARRAY_CLASS = (
     jobjectArray, jstringArray, jclassArray,
@@ -1112,7 +1171,7 @@ class JNIClient:
         return _ARRAY_CLASS[base](self, ptr, dim_c + 1)
 
     @synchronized
-    def GetObjectArrayElement(self, obj_arr: jobjectArray, index: int, /) -> jobject:
+    def _GetObjectArrayElement(self, obj_arr: jobjectArray, index: int, /) -> jobject:
         write = self._write
         write_byte(write, 112)
         write_ptr(write, obj_arr._La_inst)
@@ -1123,7 +1182,7 @@ class JNIClient:
         return jobject(self, read_ptr(self._read))
 
     @synchronized
-    def SetObjectArrayElement(self, obj_arr: jobjectArray, index: int, object: jobject, /):
+    def _SetObjectArrayElement(self, obj_arr: jobjectArray, index: int, object: jobject, /):
         write = self._write
         write_byte(write, 113)
         write_ptr(write, obj_arr._La_inst)
@@ -1133,7 +1192,83 @@ class JNIClient:
 
         self._check_exception()
 
-    # 114..173
+    # 114..121: see NewArray
+
+    @synchronized
+    def _GetPrimArrayElement(self, arr: jarray, index: int, /) -> jvalue:
+        base = arr._base
+
+        write = self._write
+        write_byte(write, 122 + base)  # 122..129
+        write_ptr(write, arr._a_inst)
+        write_uleb128(write, index)
+        self._flush()
+
+        self._check_exception()
+        return read_value(self, base + 3)
+
+    @synchronized
+    def _SetPrimArrayElement(self, arr: jarray, index: int, value: jvalue, /):
+        base = arr._base
+
+        write = self._write
+        write_byte(write, 130 + base)  # 130..137
+        write_ptr(write, arr._a_inst)
+        write_uleb128(write, index)
+        self._flush()
+
+        write_value(write, value, base + 3)
+        self._flush()
+        self._check_exception()
+
+    @synchronized
+    def _GetPrimArraySlice(self, arr: jarray, start: int, stop: int, step: int, /) -> tuple:
+        write = self._write
+        write_byte(write, 138 + arr._base)  # 138..145
+        write_ptr(write, arr._a_inst)
+        write_sleb128(write, start)
+        write_sleb128(write, stop)
+        write_sleb128(write, step)
+        self._flush()
+
+        self._check_exception()
+        count = read_uleb128(self._read)
+        if count == 0:
+            return []
+        esize = arr._esize
+        data = self._read(count * esize)
+        if len(data) != count * esize:
+            raise EOFError("Unexpected end of stream")
+        return unpack(f"={count}{arr._fmt}", data)
+
+    @synchronized
+    def _SetPrimArraySlice(self, arr: jarray, start: int, stop: int, step: int, values, /):
+        if step == 1:
+            count = stop - start
+        elif step > 0:
+            count = (stop - start + step - 1) // step
+        else:
+            count = (stop - start + step + 1) // step
+
+        values = list(values)
+        if count != len(values):
+            raise ValueError(f"expected {count} values, got {len(values)}")
+        if count == 0:
+            return
+
+        write = self._write
+        write_byte(write, 146 + arr._base)  # 146..153
+        write_ptr(write, arr._a_inst)
+        write_sleb128(write, start)
+        write_sleb128(write, step)
+        write_uleb128(write, count)
+        self._flush()
+
+        write(pack(f"={count}{arr._fmt}", *values))
+        self._flush()
+        self._check_exception()
+
+    # 154..173
 
 
 def first_check(jni):
@@ -1234,6 +1369,27 @@ def check_arrays(jni):
     bigint.inspect(is_method=False)
 
     print(jni.Z, jni.B, jni.C, jni.S, jni.I, jni.J, jni.F, jni.D, jni.V)
+
+    int_arr = jni.NewArray(10, jni.I)
+    int_arr[3] = 123
+    int_arr[7:9] = (312, 555)
+    print(int_arr[:], int_arr[8])
+
+    int2d = jni.NewArray(5, jni.FindClass("[I"))
+    print(type(int2d))
+    print(int2d[:])
+    int2d[1] = int_arr
+    print(int2d[:])
+    int2d[1] = jni.null
+    print(int2d[:])
+    int2d[2:4] = int_arr, int_arr
+    int_arr[1] = 4321
+    print(int2d[:])
+    print(int_arr[::2])
+    print(int_arr[1::2])
+    print(int_arr[::-1])
+    print(int_arr[::-2])
+    print(int_arr[-2::-2])
 
 
 if __name__ == "__main__":
