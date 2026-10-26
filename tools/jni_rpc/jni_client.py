@@ -746,11 +746,22 @@ class JNIClient:
         self._flush = file.flush
         self._close = file.close
         self._sock_close = sock.close
-        self._run = False
 
         self._null = jobject(self, 0)
         # чтобы self.null не сломался на NewArray из-за
         # проверки self._lock в конструкторе jobject на deadlock
+
+        self._run = False
+        self._del_counter = None
+        self._totdel = 0
+
+        import atexit, weakref
+        _self_ref = weakref.ref(self)
+        @atexit.register
+        def _start_count():
+            jni = _self_ref()  # weakref -> localref
+            if jni is not None and jni._del_counter is None:
+                jni._del_counter = 0
 
     def __del__(self, /):
         # • Очистка кеша
@@ -828,6 +839,8 @@ class JNIClient:
             self._check_error()
         self._run = False
         print("successfully detached")
+        print(f"totally deleted {self._totdel} localrefs")
+        print(f"after atexit deleted {self._del_counter} localrefs")
 
     # VM helpers
 
@@ -982,6 +995,10 @@ class JNIClient:
             write_byte(write, 24)
             write_ptr(write, ptr)
             self._flush()
+        dc = self._del_counter
+        if isinstance(dc, int):
+            self._del_counter = dc + 1
+        self._totdel += 1
 
     # 25..28
 
@@ -1498,21 +1515,34 @@ def check_refs(jni):
     def create(i):
         data = jni.NewString(str(i))
         num = bigint_ctor(data)
-        return data, num
+        return [data, num, None]
 
     T = time.perf_counter()
     nums = [create(i) for i in range(100, 2000)]
     localrefs = set()
-    for data, num in nums:
-        data2 = toString(num)
+    for record in nums:
+        data, num, _ = record
+        record[2] = data2 = toString(num)
         # print("•", data, num, data2, data2.str)
-        for obj in (data, num, data2):
+        for obj in record:
             localrefs.add(obj._o_inst)
     T2 = time.perf_counter()
 
     print(len(nums))
     print(len(localrefs))
     print("time:", T2 - T)
+
+    # objectType и stringType удерживаются в кеше jni
+    # jni хранится в этих же элементах - циклическая ссылка
+
+    # было:
+    # totally deleted 5703 localrefs
+    # after atexit deleted 2 localrefs
+    cycle = [None, nums]
+    cycle[0] = cycle
+    # стало:
+    # totally deleted 5703 localrefs
+    # after atexit deleted 5702 localrefs
 
 
 if __name__ == "__main__":
