@@ -1060,7 +1060,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
             object = (jobject) read_ptr(fd, &eos);
             if (eos) return eos;
 
-            write_byte(fd, (*env)->GetObjectRefType(env, object));
+            write_byte(fd, env ? (*env)->GetObjectRefType(env, object) : JNIInvalidRefType);
             break;
 
         // 172..173
