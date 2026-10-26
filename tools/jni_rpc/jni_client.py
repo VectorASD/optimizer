@@ -4,9 +4,10 @@ from threading import Lock
 from functools import wraps, cache, cached_property
 import re
 from typing import Optional
+from enum import IntEnum
 
 
-def synchronized(func, /):
+def synchronized(func, /):  # deprecated
     @wraps(func)
     def wrapper(self, *a, **kw):
         with self._lock:
@@ -46,10 +47,21 @@ assert to_shorty("Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/l
 assert to_shorty("Ljava/lang/Class;[ZLjava/lang/String;") == (2, 14, 1)
 
 
+class JNIRefType(IntEnum):
+    INVALID     = 0
+    LOCAL       = 1
+    GLOBAL      = 2
+    WEAK_GLOBAL = 3
+
+    def __str__(self):
+        return self.name
+
 class jobject:
     def __init__(self, jni, inst):
         self.jni = jni
         self._o_inst = inst
+        assert not jni._lock.locked()
+        print(f"✅ {type(self).__name__} at {hex(inst) if inst else '<null>'} ({self.reftype()})")
 
     def __repr__(self):
         inst = self._o_inst
@@ -61,6 +73,9 @@ class jobject:
     def __setitem__(self, field: jfield, value: jvalue):
         return field._sf(self, field, value)
 
+    def reftype(self):
+        return self.jni.GetObjectRefType(self)
+
     # TODO: __del__
 
 jvalue = bool | int | float | jobject
@@ -68,16 +83,16 @@ jvalue = bool | int | float | jobject
 
 class jstring(jobject):
     def __init__(self, jni, inst):
-        self.jni = jni
+        jobject.__init__(self, jni, inst)
         self._s_inst = inst
 
     def __repr__(self):
         return f"<jstring at {hex(self._s_inst)}>"
 
-    @property
+    @cached_property
     def str(self):
         return self.jni.GetStringChars(self)
-    @property
+    @cached_property
     def bin(self):
         return self.jni.GetStringUTFChars(self)
 
@@ -87,13 +102,12 @@ class jstring(jobject):
 class jarray(jobject):
     def __init__(self, jni, inst, dim):
         jobject.__init__(self, jni, inst)
-        self.jni = jni
         self._a_inst = inst
         self._dim = dim
         if dim > 1:
             self._La_inst = inst
+        self._len = jni.GetArrayLength(self)
 
-        self._gal = jni.GetArrayLength
         self._gi = jni._GetObjectArrayElement
         self._si = jni._SetObjectArrayElement
         self._se = jni._SetPrimArrayElement
@@ -101,13 +115,9 @@ class jarray(jobject):
         self._ss = jni._SetPrimArraySlice
         self._gs = jni._GetPrimArraySlice
 
-    @cached_property
-    def _len(self):
-        return self._gal(self)
-
     def __repr__(self):
         # return f"<{type(self).__name__} at {hex(self._a_inst)}>"
-        return f"<{type(self).__name__}: {self[:]}>"
+        return f"<{'[' * self._dim}{self._let}:{self[:]}>"
 
     def __len__(self):
         return self._len
@@ -117,7 +127,7 @@ class jarray(jobject):
         if isinstance(index, slice):
             start, stop, step = index.indices(n)
             if self._dim > 1:
-                return [self[i] for i in range(start, stop, step)]
+                return tuple(self[i] for i in range(start, stop, step))
             return self._gs(self, start, stop, step)
         if index < 0:
             index += n
@@ -153,6 +163,7 @@ class jarray(jobject):
 
 class jobjectArray(jarray):
     _base = None
+    _let = 'L'
     def __init__(self, jni, inst, dim):
         jarray.__init__(self, jni, inst, dim)
         self._La_inst = inst
@@ -163,7 +174,7 @@ class jobjectArray(jarray):
         n = self._len
         if isinstance(index, slice):
             start, stop, step = index.indices(n)
-            return [self[i] for i in range(start, stop, step)]
+            return tuple(self[i] for i in range(start, stop, step))
         if index < 0:
             index += n
         if not 0 <= index < n:
@@ -188,6 +199,7 @@ class jobjectArray(jarray):
 
 class jstringArray(jarray):
     _base = None
+    _let = 'L'
     def __init__(self, jni, inst, dim):
         jarray.__init__(self, jni, inst, dim)
         self._Ra_inst = inst
@@ -195,6 +207,7 @@ class jstringArray(jarray):
 
 class jclassArray(jarray):
     _base = None
+    _let = 'L'
     def __init__(self, jni, inst, dim):
         jarray.__init__(self, jni, inst, dim)
         self._Ka_inst = inst
@@ -204,41 +217,49 @@ class jbooleanArray(jarray):
     _base = 0
     _esize = 1
     _fmt = '?'
+    _let = 'Z'
 
 class jbyteArray(jarray):
     _base = 1
     _esize = 1
     _fmt = 'b'
+    _let = 'B'
 
 class jcharArray(jarray):
     _base = 2
     _esize = 2
     _fmt = 'H'
+    _let = 'C'
 
 class jshortArray(jarray):
     _base = 3
     _esize = 2
     _fmt = 'h'
+    _let = 'S'
 
 class jintArray(jarray):
     _base = 4
     _esize = 4
     _fmt = 'i'
+    _let = 'I'
 
 class jlongArray(jarray):
     _base = 5
     _esize = 8
     _fmt = 'q'
+    _let = 'J'
 
 class jfloatArray(jarray):
     _base = 6
     _esize = 4
     _fmt = 'f'
+    _let = 'F'
 
 class jdoubleArray(jarray):
     _base = 7
     _esize = 8
     _fmt = 'd'
+    _let = 'D'
 
 _ARRAY_CLASS = (
     jobjectArray, jstringArray, jclassArray,
@@ -287,13 +308,23 @@ def read_str(read, bin=False, /) -> str:
     # сервер (utf16_to_utf8) гарантирует корректность кодировки
     return data if bin else data.decode("utf-8")
 
+
+class _Deferred:
+    """Отложенное создание объекта: вызывается после выхода из jni._lock."""
+    __slots__ = ("_ctor", "ptr")
+    def __init__(self, ctor, jni, /):
+        self._ctor = ctor
+        self.ptr = read_ptr(jni._read)
+    def __call__(self, /):
+        return self._ctor(self.ptr)
+
 @cache
 def get_result_dispatch(dim):
     if dim <= 0:
         return (
-            lambda jni, /: jobject(jni, read_ptr(jni._read)),
-            lambda jni, /: jstring(jni, read_ptr(jni._read)),
-            lambda jni, /: jclass(jni, None, read_ptr(jni._read)),
+            lambda jni, /: _Deferred(lambda ptr: jobject(jni, ptr), jni),
+            lambda jni, /: _Deferred(lambda ptr: jstring(jni, ptr), jni),
+            lambda jni, /: _Deferred(lambda ptr: jclass(jni, None, ptr), jni),
             lambda jni, /: bool(jni._read(1)[0]),  # boolean
             lambda jni, /: jni._read(1)[0],  # byte
             lambda jni, /: chr(read_uleb128(jni._read)),  # char
@@ -309,20 +340,20 @@ def get_result_dispatch(dim):
         )
     code = f"""
 result_dispatch = (
-    lambda jni, /: jobjectArray(jni, read_ptr(jni._read), {dim}),
-    lambda jni, /: jstringArray(jni, read_ptr(jni._read), {dim}),
-    lambda jni, /: jclassArray(jni, read_ptr(jni._read), {dim}),
-    lambda jni, /: jbooleanArray(jni, read_ptr(jni._read), {dim}),
-    lambda jni, /: jbyteArray(jni, read_ptr(jni._read), {dim}),
-    lambda jni, /: jcharArray(jni, read_ptr(jni._read), {dim}),
-    lambda jni, /: jshortArray(jni, read_ptr(jni._read), {dim}),
-    lambda jni, /: jintArray(jni, read_ptr(jni._read), {dim}),
-    lambda jni, /: jlongArray(jni, read_ptr(jni._read), {dim}),
-    lambda jni, /: jfloatArray(jni, read_ptr(jni._read), {dim}),
-    lambda jni, /: jdoubleArray(jni, read_ptr(jni._read), {dim}),
+    lambda jni, /: _Deferred(lambda ptr: jobjectArray(jni, ptr, {dim}), jni),
+    lambda jni, /: _Deferred(lambda ptr: jstringArray(jni, ptr, {dim}), jni),
+    lambda jni, /: _Deferred(lambda ptr: jclassArray(jni, ptr, {dim}), jni),
+    lambda jni, /: _Deferred(lambda ptr: jbooleanArray(jni, ptr, {dim}), jni),
+    lambda jni, /: _Deferred(lambda ptr: jbyteArray(jni, ptr, {dim}), jni),
+    lambda jni, /: _Deferred(lambda ptr: jcharArray(jni, ptr, {dim}), jni),
+    lambda jni, /: _Deferred(lambda ptr: jshortArray(jni, ptr, {dim}), jni),
+    lambda jni, /: _Deferred(lambda ptr: jintArray(jni, ptr, {dim}), jni),
+    lambda jni, /: _Deferred(lambda ptr: jlongArray(jni, ptr, {dim}), jni),
+    lambda jni, /: _Deferred(lambda ptr: jfloatArray(jni, ptr, {dim}), jni),
+    lambda jni, /: _Deferred(lambda ptr: jdoubleArray(jni, ptr, {dim}), jni),
 )"""
   # print(code); exit()
-    _G = {"read_ptr": read_ptr,
+    _G = {"_Deferred": _Deferred,
           "jobjectArray": jobjectArray, "jstringArray": jstringArray, "jclassArray": jclassArray,
           "jbooleanArray": jbooleanArray, "jbyteArray":   jbyteArray,
           "jcharArray":    jcharArray,    "jshortArray":  jshortArray,
@@ -528,7 +559,7 @@ _PRIM_NAME_TO_CHAR = {
 
 class jclass(jobject):
     def __init__(self, jni, name, inst):
-        self.jni = jni
+        jobject.__init__(self, jni, inst)
         if name and not name.startswith('[') and (len(name) > 1 or name not in "ZBCSIJFD"):
             name = f"L{name};"
         self._name = name
@@ -704,8 +735,9 @@ class JNIClient:
         self._close = file.close
         self._sock_close = sock.close
 
-        for maker_init_func in self._inits:
-            maker_init_func(self)
+        self._null = jobject(self, 0)
+        # чтобы self.null не сломался на NewArray из-за
+        # проверки self._lock в конструкторе jobject на deadlock
 
     def __del__(self, /):
         try:
@@ -725,39 +757,40 @@ class JNIClient:
 
     # VM methods
 
-    @synchronized
     def CreateJavaVM(self, /) -> None:
-        write_byte(self._write, 0)
-        self._flush()
-        self._check_error()
+        with self._lock:
+            write_byte(self._write, 0)
+            self._flush()
+            self._check_error()
 
-    @synchronized
-    def GetCreatedJavaVMs(self, /) -> None:
-        write_byte(self._write, 1)
-        self._flush()
-        self._check_error()
+    def GetCreatedJavaVMs(self, /) -> int:
+        with self._lock:
+            write_byte(self._write, 1)
+            self._flush()
+            self._check_error()
 
-        vm_count = read_uleb128(self._read)
+            vm_count = read_uleb128(self._read)
         return vm_count
 
-    @synchronized
     def SelectVM(self, index: int, /) -> None:
-        write_byte(self._write, 2)
-        write_byte(self._write, index)
-        self._flush()
-        self._check_error()
+        write = self._write
+        with self._lock:
+            write_byte(write, 2)
+            write_byte(write, index)
+            self._flush()
+            self._check_error()
 
-    @synchronized
     def AttachCurrentThread(self, /) -> None:
-        write_byte(self._write, 3)
-        self._flush()
-        self._check_error()
+        with self._lock:
+            write_byte(self._write, 3)
+            self._flush()
+            self._check_error()
 
-    @synchronized
     def DetachCurrentThread(self, /) -> None:
-        write_byte(self._write, 4)
-        self._flush()
-        self._check_error()
+        with self._lock:
+            write_byte(self._write, 4)
+            self._flush()
+            self._check_error()
 
     # VM helpers
 
@@ -769,8 +802,6 @@ class JNIClient:
         else:
             self.SelectVM(vm_count - 1)  # last VM in list
             self.AttachCurrentThread()
-
-    _inits = []
 
     objectType = makeTypeGetter("java/lang/Object")
     classType  = makeTypeGetter("java/lang/Class")
@@ -793,9 +824,9 @@ class JNIClient:
     f_getName      = makeMethodGetter(lambda s: s.fieldType, "getName",      lambda s: (), lambda s: s.stringType)
     f_getModifiers = makeMethodGetter(lambda s: s.fieldType, "getModifiers", lambda s: (), "I")
 
-    @cached_property
+    @property
     def null(self, /) -> jobject:
-        return jobject(self, 0)
+        return self._null
 
     @cached_property
     def Z(self, /) -> jclass:
@@ -845,74 +876,80 @@ class JNIClient:
 
     # native methods
 
-    @synchronized
     def GetVersion(self, /) -> tuple[int, int]:
-        write_byte(self._write, 5)
-        self._flush()
-
         read = self._read
-        major = read_uleb128(read)
-        minor = read_uleb128(read)
+        with self._lock:
+            write_byte(self._write, 5)
+            self._flush()
+
+            major = read_uleb128(read)
+            minor = read_uleb128(read)
         return major, minor
 
     # TODO: DefineClass (kind=6)
 
-    @synchronized
     def FindClass(self, class_name: str, /) -> jclass:
         write = self._write
-        write_byte(write, 7)
-        write_str(write, class_name)
-        self._flush()
+        with self._lock:
+            write_byte(write, 7)
+            write_str(write, class_name)
+            self._flush()
 
-        self._check_exception()
-        return jclass(self, class_name, read_ptr(self._read))
+            self._check_exception()
+            ptr = read_ptr(self._read)
+        return jclass(self, class_name, ptr)
 
-    @synchronized
     def FromReflectedMethod(self, object: jobject, is_ctor: bool, /) -> jmethod:
-        write = self._write
-        write_byte(write, 8)
-        write_ptr(write, object._o_inst)
-        write_byte(write, is_ctor)
-        self._flush()
+        read, write = self._read, self._write
+        with self._lock:
+            write_byte(write, 8)
+            write_ptr(write, object._o_inst)
+            write_byte(write, is_ctor)
+            self._flush()
 
-        self._check_exception()
-        read = self._read
-        clazz = jclass(jni, None, read_ptr(read))
-        name = "<init>" if is_ctor else read_str(read)
-        signature = read_str(read)
-        modifiers = read_uleb128(read)
+            self._check_exception()
+            c_ptr = read_ptr(read)
+            name = "<init>" if is_ctor else read_str(read)
+            signature = read_str(read)
+            modifiers = read_uleb128(read)
+            m_ptr = read_ptr(read)
         is_static = modifiers & 0x8
         args, ret_t = signature.split(')')  # изначально *не* вшивается '('
-        return (jmethod_static if is_static else jmethod_ctor if is_ctor else jmethod)(clazz, name, args, ret_t, read_ptr(read))
 
-    @synchronized
+        clazz = jclass(self, None, c_ptr)
+        return (jmethod_static if is_static else jmethod_ctor if is_ctor else jmethod)(clazz, name, args, ret_t, m_ptr)
+
     def FromReflectedField(self, object: jobject, /) -> jfield:
-        write = self._write
-        write_byte(write, 9)
-        write_ptr(write, object._o_inst)
-        self._flush()
+        read, write = self._read, self._write
+        with self._lock:
+            write_byte(write, 9)
+            write_ptr(write, object._o_inst)
+            self._flush()
     
-        self._check_exception()
-        read = self._read
-        clazz = jclass(self, None, read_ptr(read))
-        name = read_str(read)
-        type_ = read_str(read)
-        modifiers = read_uleb128(read)
+            self._check_exception()
+            c_ptr = read_ptr(read)
+            name = read_str(read)
+            type_ = read_str(read)
+            modifiers = read_uleb128(read)
+            m_ptr = read_ptr(read)
         is_static = modifiers & 0x8
-        return (jfield_static if is_static else jfield)(self, clazz, name, type_, read_ptr(read))
+
+        clazz = jclass(self, None, c_ptr)
+        return (jfield_static if is_static else jfield)(self, clazz, name, type_, m_ptr)
 
     # 10..28
 
-    @synchronized
     def NewObject(self, ctor: jmethod, /, *args: tuple[jvalue, ...]) -> jobject:
         write = self._write
-        write_byte(write, 29)
-        write_ptr(write, ctor._m_inst)
-        write_args(write, ctor.shorty, args)
-        self._flush()
+        with self._lock:
+            write_byte(write, 29)
+            write_ptr(write, ctor._m_inst)
+            write_args(write, ctor.shorty, args)
+            self._flush()
  
-        self._check_exception()
-        return jobject(self, read_ptr(self._read))
+            self._check_exception()
+            ptr = read_ptr(self._read)
+        return jobject(self, ptr)
 
     # 30..31
 
@@ -934,33 +971,33 @@ class JNIClient:
             m_inst = read_ptr(self._read)
         return (jmethod_ctor if name == "<init>" else jmethod)(clazz, name, args, ret_t, m_inst)
 
-    @synchronized
     def CallMethod(self, object: jobject, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
         write = self._write
-        write_byte(write, 33)  # 33..42
-        write_ptr(write, object._o_inst)
-        write_ptr(write, method._m_inst)
-        write_args(write, method.shorty, args)
-        self._flush()
-
-        self._check_exception()
         ret_kind = method.ret_k
-        if ret_kind != VOID:
-            return read_value(self, ret_kind)
+        with self._lock:
+            write_byte(write, 33)  # 33..42
+            write_ptr(write, object._o_inst)
+            write_ptr(write, method._m_inst)
+            write_args(write, method.shorty, args)
+            self._flush()
 
-    @synchronized
+            self._check_exception()
+            result = read_value(self, ret_kind) if ret_kind != VOID else None
+        return result() if isinstance(result, _Deferred) else result
+
     def CallNonvirtualMethod(self, object: jobject, method: jmethod, /, *args: tuple[jvalue, ...]) -> jvalue|None:
         write = self._write
-        write_byte(write, 43)  # 43..52
-        write_ptr(write, object._o_inst)
-        write_ptr(write, method._m_inst)
-        write_args(write, method.shorty, args)
-        self._flush()
-
-        self._check_exception()
         ret_kind = method.ret_k
-        if ret_kind != VOID:
-            return read_value(self, ret_kind)
+        with self._lock:
+            write_byte(write, 43)  # 43..52
+            write_ptr(write, object._o_inst)
+            write_ptr(write, method._m_inst)
+            write_args(write, method.shorty, args)
+            self._flush()
+
+            self._check_exception()
+            result = read_value(self, ret_kind) if ret_kind != VOID else None
+        return result() if isinstance(result, _Deferred) else result
 
     def GetFieldID(self, clazz: jclass, name: str, type: jclass|str, /) -> jfield:
         if isinstance(type, jclass):
@@ -978,27 +1015,28 @@ class JNIClient:
             f_inst = read_ptr(self._read)
         return jfield(self, clazz, name, type, f_inst)
 
-    @synchronized
     def _GetField(self, object: jobject, field: jfield, /) -> jvalue:
         write = self._write
-        write_byte(write, 54)  # 54..62
-        write_ptr(write, object._o_inst)
-        write_ptr(write, field._f_inst)
-        self._flush()
+        with self._lock:
+            write_byte(write, 54)  # 54..62
+            write_ptr(write, object._o_inst)
+            write_ptr(write, field._f_inst)
+            self._flush()
 
-        self._check_exception()
-        return read_value(self, field.type_k)
+            self._check_exception()
+            result = read_value(self, field.type_k)
+        return result() if isinstance(result, _Deferred) else result
 
-    @synchronized
     def _SetField(self, object: jobject, field: jfield, value: jvalue, /):
         write = self._write
-        write_byte(write, 63)  # 63..71
-        write_ptr(write, object._o_inst)
-        write_ptr(write, field._f_inst)
-        write_value(write, value, field.type_k)
-        self._flush()
+        with self._lock:
+            write_byte(write, 63)  # 63..71
+            write_ptr(write, object._o_inst)
+            write_ptr(write, field._f_inst)
+            write_value(write, value, field.type_k)
+            self._flush()
 
-        self._check_exception()
+            self._check_exception()
 
     def GetStaticMethodID(self, clazz: jclass, name: str, args: tuple[jclass|str, ...] = (), ret_t: jclass|str = 'V', /) -> jmethod_static:
         args = "".join(arg.name if isinstance(arg, jclass) else str(arg) for arg in args)
@@ -1018,18 +1056,18 @@ class JNIClient:
             m_inst = read_ptr(self._read)
         return jmethod_static(clazz, name, args, ret_t, m_inst)
 
-    @synchronized
     def CallStaticMethod(self, method: jmethod_static, /, *args: tuple[jvalue, ...]) -> jvalue|None:
         write = self._write
-        write_byte(write, 73)  # 73..82
-        write_ptr(write, method._m_inst)
-        write_args(write, method.shorty, args)
-        self._flush()
-
-        self._check_exception()
         ret_kind = method.ret_k
-        if ret_kind != VOID:
-            return read_value(self, ret_kind)
+        with self._lock:
+            write_byte(write, 73)  # 73..82
+            write_ptr(write, method._m_inst)
+            write_args(write, method.shorty, args)
+            self._flush()
+
+            self._check_exception()
+            result = read_value(self, ret_kind) if ret_kind != VOID else None
+        return result() if isinstance(result, _Deferred) else result
 
     def GetStaticFieldID(self, clazz: jclass, name: str, type: jclass|str, /) -> jfield:
         if isinstance(type, jclass):
@@ -1047,97 +1085,100 @@ class JNIClient:
             f_inst = read_ptr(self._read)
         return jfield_static(self, clazz, name, type, f_inst)
 
-    @synchronized
     def _GetStaticField(self, object: jobject, field: jfield_static, /) -> jvalue:
         write = self._write
-        write_byte(write, 84)  # 84..92
-        write_ptr(write, object._o_inst)
-        write_ptr(write, field._sf_inst)
-        self._flush()
+        with self._lock:
+            write_byte(write, 84)  # 84..92
+            write_ptr(write, object._o_inst)
+            write_ptr(write, field._sf_inst)
+            self._flush()
 
-        self._check_exception()
-        return read_value(self, field.type_k)
+            self._check_exception()
+            result = read_value(self, field.type_k)
+        return result() if isinstance(result, _Deferred) else result
 
-    @synchronized
     def _SetStaticField(self, object: jobject, field: jfield_static, value: jvalue, /):
         write = self._write
-        write_byte(write, 93)  # 93..101
-        write_ptr(write, object._o_inst)
-        write_ptr(write, field._sf_inst)
-        write_value(write, value, field.type_k)
-        self._flush()
+        with self._lock:
+            write_byte(write, 93)  # 93..101
+            write_ptr(write, object._o_inst)
+            write_ptr(write, field._sf_inst)
+            write_value(write, value, field.type_k)
+            self._flush()
 
-        self._check_exception()
+            self._check_exception()
 
-    @synchronized
     def NewString(self, text: str, /) -> jstring:
         write = self._write
-        write_byte(write, 102)
-        write_str(write, text)
-        self._flush()
+        with self._lock:
+            write_byte(write, 102)
+            write_str(write, text)
+            self._flush()
 
-        self._check_exception()
-        return jstring(self, read_ptr(self._read))
-    @synchronized
+            self._check_exception()
+            ptr = read_ptr(self._read)
+        return jstring(self, ptr)
     def GetStringLength(self, jstr: jstring) -> int:
         write = self._write
-        write_byte(write, 103)
-        write_ptr(write, jstr._s_inst)
-        self._flush()
+        with self._lock:
+            write_byte(write, 103)
+            write_ptr(write, jstr._s_inst)
+            self._flush()
 
-        self._check_exception()
-        return read_uleb128(self._read)
-    @synchronized
+            self._check_exception()
+            return read_uleb128(self._read)
     def GetStringChars(self, jstr: jstring) -> str:
         write = self._write
-        write_byte(write, 104)
-        write_ptr(write, jstr._s_inst)
-        self._flush()
+        with self._lock:
+            write_byte(write, 104)
+            write_ptr(write, jstr._s_inst)
+            self._flush()
 
-        self._check_exception()
-        return read_str(self._read)
+            self._check_exception()
+            return read_str(self._read)
     def ReleaseStringChars():
         raise RuntimeError("Warning: ReleaseStringChars (kind 105) is deprecated and not implemented")
 
-    @synchronized
     def NewStringUTF(self, text: bytes, /) -> jstring:
         write = self._write
-        write_byte(write, 106)
-        write_str_bin(write, text)
-        self._flush()
+        with self._lock:
+            write_byte(write, 106)
+            write_str_bin(write, text)
+            self._flush()
 
-        self._check_exception()
-        return jstring(self, read_ptr(self._read))
-    @synchronized
+            self._check_exception()
+            ptr = read_ptr(self._read)
+        return jstring(self, ptr)
     def GetStringUTFLength(self, jstr: jstring) -> int:
         write = self._write
-        write_byte(write, 107)
-        write_ptr(write, jstr._s_inst)
-        self._flush()
+        with self._lock:
+            write_byte(write, 107)
+            write_ptr(write, jstr._s_inst)
+            self._flush()
 
-        self._check_exception()
-        return read_uleb128(self._read)
-    @synchronized
+            self._check_exception()
+            return read_uleb128(self._read)
     def GetStringUTFChars(self, jstr: jstring) -> bytes:
         write = self._write
-        write_byte(write, 108)
-        write_ptr(write, jstr._s_inst)
-        self._flush()
+        with self._lock:
+            write_byte(write, 108)
+            write_ptr(write, jstr._s_inst)
+            self._flush()
 
-        self._check_exception()
-        return read_str(self._read, True)
+            self._check_exception()
+            return read_str(self._read, True)
     def ReleaseStringUTFChars():
         raise RuntimeError("Warning: ReleaseStringUTFChars (kind 109) is deprecated and not implemented")
 
-    @synchronized
     def GetArrayLength(self, array: jarray, /) -> int:
         write = self._write
-        write_byte(write, 110)
-        write_ptr(write, array._a_inst)
-        self._flush()
+        with self._lock:
+            write_byte(write, 110)
+            write_ptr(write, array._a_inst)
+            self._flush()
 
-        self._check_exception()
-        return read_uleb128(self._read)
+            self._check_exception()
+            return read_uleb128(self._read)
 
     def NewArray(self, size: int, clazz: jclass, init: Optional[jobject] = None, /) -> jobjectArray:
         """
@@ -1170,78 +1211,75 @@ class JNIClient:
             ptr = read_ptr(self._read)
         return _ARRAY_CLASS[base](self, ptr, dim_c + 1)
 
-    @synchronized
     def _GetObjectArrayElement(self, obj_arr: jobjectArray, index: int, /) -> jobject:
         write = self._write
-        write_byte(write, 112)
-        write_ptr(write, obj_arr._La_inst)
-        write_sleb128(write, index)
-        self._flush()
+        with self._lock:
+            write_byte(write, 112)
+            write_ptr(write, obj_arr._La_inst)
+            write_sleb128(write, index)
+            self._flush()
 
-        self._check_exception()
-        return jobject(self, read_ptr(self._read))
+            self._check_exception()
+            ptr = read_ptr(self._read)
+        return jobject(self, ptr)
 
-    @synchronized
     def _SetObjectArrayElement(self, obj_arr: jobjectArray, index: int, object: jobject, /):
         write = self._write
-        write_byte(write, 113)
-        write_ptr(write, obj_arr._La_inst)
-        write_sleb128(write, index)
-        write_ptr(write, object._o_inst)
-        self._flush()
+        with self._lock:
+            write_byte(write, 113)
+            write_ptr(write, obj_arr._La_inst)
+            write_sleb128(write, index)
+            write_ptr(write, object._o_inst)
+            self._flush()
 
-        self._check_exception()
+            self._check_exception()
 
     # 114..121: see NewArray
 
-    @synchronized
     def _GetPrimArrayElement(self, arr: jarray, index: int, /) -> jvalue:
         base = arr._base
-
         write = self._write
-        write_byte(write, 122 + base)  # 122..129
-        write_ptr(write, arr._a_inst)
-        write_uleb128(write, index)
-        self._flush()
+        with self._lock:
+            write_byte(write, 122 + base)  # 122..129
+            write_ptr(write, arr._a_inst)
+            write_uleb128(write, index)
+            self._flush()
 
-        self._check_exception()
-        return read_value(self, base + 3)
+            self._check_exception()
+            result = read_value(self, base + 3)
+        return result() if isinstance(result, _Deferred) else result
 
-    @synchronized
     def _SetPrimArrayElement(self, arr: jarray, index: int, value: jvalue, /):
         base = arr._base
-
         write = self._write
-        write_byte(write, 130 + base)  # 130..137
-        write_ptr(write, arr._a_inst)
-        write_uleb128(write, index)
-        self._flush()
+        with self._lock:
+            write_byte(write, 130 + base)  # 130..137
+            write_ptr(write, arr._a_inst)
+            write_uleb128(write, index)
+            write_value(write, value, base + 3)
+            self._flush()
+            self._check_exception()
 
-        write_value(write, value, base + 3)
-        self._flush()
-        self._check_exception()
-
-    @synchronized
     def _GetPrimArraySlice(self, arr: jarray, start: int, stop: int, step: int, /) -> tuple:
         write = self._write
-        write_byte(write, 138 + arr._base)  # 138..145
-        write_ptr(write, arr._a_inst)
-        write_sleb128(write, start)
-        write_sleb128(write, stop)
-        write_sleb128(write, step)
-        self._flush()
-
-        self._check_exception()
-        count = read_uleb128(self._read)
-        if count == 0:
-            return []
         esize = arr._esize
-        data = self._read(count * esize)
+        with self._lock:
+            write_byte(write, 138 + arr._base)  # 138..145
+            write_ptr(write, arr._a_inst)
+            write_sleb128(write, start)
+            write_sleb128(write, stop)
+            write_sleb128(write, step)
+            self._flush()
+
+            self._check_exception()
+            count = read_uleb128(self._read)
+            if count == 0:
+                return []
+            data = self._read(count * esize)
         if len(data) != count * esize:
             raise EOFError("Unexpected end of stream")
         return unpack(f"={count}{arr._fmt}", data)
 
-    @synchronized
     def _SetPrimArraySlice(self, arr: jarray, start: int, stop: int, step: int, values, /):
         if step == 1:
             count = stop - start
@@ -1257,18 +1295,30 @@ class JNIClient:
             return
 
         write = self._write
-        write_byte(write, 146 + arr._base)  # 146..153
-        write_ptr(write, arr._a_inst)
-        write_sleb128(write, start)
-        write_sleb128(write, step)
-        write_uleb128(write, count)
-        self._flush()
+        with self._lock:
+            write_byte(write, 146 + arr._base)  # 146..153
+            write_ptr(write, arr._a_inst)
+            write_sleb128(write, start)
+            write_sleb128(write, step)
+            write_uleb128(write, count)
+            self._flush()
 
-        write(pack(f"={count}{arr._fmt}", *values))
-        self._flush()
-        self._check_exception()
+            write(pack(f"={count}{arr._fmt}", *values))
+            self._flush()
+            self._check_exception()
 
-    # 154..173
+    # 154..170
+
+    def GetObjectRefType(self, object: jobject, /) -> JNIRefType:
+        write = self._write
+        with self._lock:
+            write_byte(write, 171)
+            write_ptr(write, object._o_inst)
+            self._flush()
+
+            return JNIRefType(read_byte(self._read))
+
+    # 172..173
 
 
 def first_check(jni):
@@ -1373,23 +1423,25 @@ def check_arrays(jni):
     int_arr = jni.NewArray(10, jni.I)
     int_arr[3] = 123
     int_arr[7:9] = (312, 555)
-    print(int_arr[:], int_arr[8])
+    print(int_arr, int_arr[8])
 
     int2d = jni.NewArray(5, jni.FindClass("[I"))
     print(type(int2d))
-    print(int2d[:])
+    print(int2d)
     int2d[1] = int_arr
-    print(int2d[:])
+    print(int2d)
     int2d[1] = jni.null
-    print(int2d[:])
+    print(int2d)
     int2d[2:4] = int_arr, int_arr
     int_arr[1] = 4321
-    print(int2d[:])
+    print(int2d)
     print(int_arr[::2])
     print(int_arr[1::2])
     print(int_arr[::-1])
     print(int_arr[::-2])
     print(int_arr[-2::-2])
+
+    # print(jstring(jni, 0).str)  # Segmentation fault...
 
 
 if __name__ == "__main__":

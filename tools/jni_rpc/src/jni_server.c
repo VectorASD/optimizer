@@ -1054,7 +1054,16 @@ bool handle_command(int fd, ClientCtx *ctx) {
             }
             break;
 
-        // 154..173
+        // 154..170
+
+        case 171:
+            object = (jobject) read_ptr(fd, &eos);
+            if (eos) return eos;
+
+            write_byte(fd, (*env)->GetObjectRefType(env, object));
+            break;
+
+        // 172..173
 
         default:
             printf("unknown kind: %d\n", kind);
