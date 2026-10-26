@@ -350,7 +350,7 @@ bool handle_command(int fd, ClientCtx *ctx) {
     uint8_t kind = read_byte(fd, &eos);
     if (eos)
         return eos;
-    printf("(S) kind: %d\n", kind);
+    // printf("(S) kind: %d\n", kind);
 
     JNIEnv* env = ctx->env;
     ScratchPool* scratch_mem = ctx->scratch_mem;

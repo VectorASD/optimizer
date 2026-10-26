@@ -5,6 +5,7 @@ from functools import wraps, cache, cached_property
 import re
 from typing import Optional
 from enum import IntEnum
+import time
 
 
 def synchronized(func, /):  # deprecated
@@ -60,8 +61,8 @@ class jobject:
     def __init__(self, jni, inst):
         self.jni = jni
         self._o_inst = inst
-        assert not jni._lock.locked()
-        print(f"✅ {type(self).__name__} at {hex(inst) if inst else '<null>'} ({self.reftype()})")
+        # assert not jni._lock.locked()
+        # print(f"✅ {type(self).__name__} at {hex(inst) if inst else '<null>'} ({self.reftype()})")
 
     def __repr__(self):
         inst = self._o_inst
@@ -795,7 +796,7 @@ class JNIClient:
     # VM helpers
 
     def CreateOrReuseVM(self, /) -> None:
-        vm_count = jni.GetCreatedJavaVMs()
+        vm_count = self.GetCreatedJavaVMs()
         print("vm count:", vm_count)
         if vm_count == 0:
             self.CreateJavaVM()
@@ -1322,9 +1323,9 @@ class JNIClient:
 
 
 def first_check(jni):
-    jbase = jni.FindClass("java/lang/Object")
+    jbase = jni.objectType
     bigint = jni.FindClass("java/math/BigInteger")
-    string = jni.FindClass("java/lang/String")
+    string = jni.stringType
     print("object:", jbase)
     print("bigint:", bigint)
     print("string:", string)
@@ -1375,7 +1376,7 @@ def first_check(jni):
     print("utf8_str:", repr(jni.GetStringChars(utf16_str)))
 
 def check_static(jni):
-    object_t = jni.FindClass("java/lang/Object")
+    object_t = jni.objectType
     class_t = jni.classType
     string_t = jni.stringType
     forName = jni.GetStaticMethodID(class_t, "forName", (string_t,), class_t)
@@ -1385,7 +1386,7 @@ def check_static(jni):
     print("Field:", field_t)
 
 def check_arrays(jni):
-    object_t = jni.FindClass("java/lang/Object")
+    object_t = jni.objectType
     string_t = jni.stringType
     bigint = jni.FindClass("java/math/BigInteger")
     bigint_ctor = jni.GetMethodID(bigint, "<init>", (string_t,))
@@ -1443,12 +1444,38 @@ def check_arrays(jni):
 
     # print(jstring(jni, 0).str)  # Segmentation fault...
 
+def check_refs(jni):
+    object_t = jni.objectType
+    string_t = jni.stringType
+    bigint = jni.FindClass("java/math/BigInteger")
+    bigint_ctor = jni.GetMethodID(bigint, "<init>", (string_t,))
+    toString = jni.GetMethodID(object_t, "toString", (), string_t)
+    def create(i):
+        data = jni.NewString(str(i))
+        num = bigint_ctor(data)
+        return data, num
+
+    T = time.perf_counter()
+    nums = [create(i) for i in range(100, 2000)]
+    localrefs = set()
+    for data, num in nums:
+        data2 = toString(num)
+        # print("•", data, num, data2, data2.str)
+        for obj in (data, num, data2):
+            localrefs.add(obj._o_inst)
+    T2 = time.perf_counter()
+
+    print(len(nums))
+    print(len(localrefs))
+    print("time:", T2 - T)
+
 
 if __name__ == "__main__":
-    jni = JNIClient()
-    jni.CreateOrReuseVM()
-    print("version:", ".".join(map(str, jni.GetVersion())))
+    _jni = JNIClient()
+    _jni.CreateOrReuseVM()
+    print("version:", ".".join(map(str, _jni.GetVersion())))
 
-    first_check(jni)
-    check_static(jni)
-    check_arrays(jni)
+    # first_check(_jni)
+    # check_static(_jni)
+    # check_arrays(_jni)
+    check_refs(_jni)

@@ -27,7 +27,7 @@ else
     echo "ccache is not installed. Compilation will proceed without it." >&2
     echo "To install: pkg install ccache" >&2
 fi
-CFLAGS=("-I$INCLUDE" "-I$JNI_INCLUDE" "-fPIC" "-MMD")
+CFLAGS=("-I$INCLUDE" "-I$JNI_INCLUDE" "-fPIC" "-MMD" "-O3" "-g" "-DNDEBUG")
 
 mkdir -p "$OBJ"
 
