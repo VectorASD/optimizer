@@ -6,6 +6,8 @@ import re
 from typing import Optional
 from enum import IntEnum
 import time
+import gc
+import warnings
 
 
 def synchronized(func, /):  # deprecated
@@ -77,7 +79,18 @@ class jobject:
     def reftype(self):
         return self.jni.GetObjectRefType(self)
 
-    # TODO: __del__
+    def __del__(self):
+        ptr = self._o_inst
+        if ptr:
+            if self.jni._run:
+                # print(f"🗑️ DEL {type(self).__name__} at {hex(ptr)}")
+                self.jni._DeleteLocalRef(ptr)
+            else:
+                warnings.warn(
+                    f"UNPOINTER {hex(ptr)}: detach already done, "
+                    f"{type(self).__name__} still alive",
+                    RuntimeWarning, stacklevel=2,
+                )
 
 jvalue = bool | int | float | jobject
 
@@ -96,8 +109,6 @@ class jstring(jobject):
     @cached_property
     def bin(self):
         return self.jni.GetStringUTFChars(self)
-
-    # TODO: __del__
 
 
 class jarray(jobject):
@@ -136,8 +147,10 @@ class jarray(jobject):
             raise IndexError("array index out of range")
         if self._dim > 1:
             elem = self._gi(self, index)
-            if elem._o_inst:
-                return type(self)(self.jni, elem._o_inst, self._dim - 1)
+            ptr = elem._o_inst
+            if ptr:
+                elem._o_inst = 0  # elem больше не владеет этой ссылкой
+                return type(self)(self.jni, ptr, self._dim - 1)
             return None
         return self._ge(self, index)
 
@@ -159,8 +172,6 @@ class jarray(jobject):
             self._si(self, index, value)
         else:
             self._se(self, index, value)
-
-    # TODO: __del__
 
 class jobjectArray(jarray):
     _base = None
@@ -735,16 +746,37 @@ class JNIClient:
         self._flush = file.flush
         self._close = file.close
         self._sock_close = sock.close
+        self._run = False
 
         self._null = jobject(self, 0)
         # чтобы self.null не сломался на NewArray из-за
         # проверки self._lock в конструкторе jobject на deadlock
 
     def __del__(self, /):
+        # • Очистка кеша
+        for attr, value in self.__dict__.copy().items():
+            if isinstance(value, (jobject, jmethod_base)):
+              # if hasattr(value, 'clazz'):
+              #     value.clazz = None
+              # if hasattr(value, '_o_inst'):
+              #     value._o_inst = 0  ПОЧЕМУ ОНО ФИКСИТ?!
+                delattr(self, attr)
+        # • На случай появления циклических ссылок
+        gc.collect()  # Использование этого не удалило то, что в
+                      # value._o_inst, значит циклические ссылки не причём?!
+        del value  # СЕРЬЁЗНО?! Удержание value = удержание value._o_inst до конца
+                   # локального фрейма текущего __del__! Просто выдал миллион IQ за
+                   # наносекунду, что вообще вспомнил об value после завершения цикла!
+        # • Вот теперь можно детачиться!
+        try:
+            self.DetachCurrentThread()
+        except Exception:
+            pass  # сервер мог антиоживиться, сокет закрыт, лок не тот - не важно
         try:
             self._close()
             self._sock_close()
-        except AttributeError: pass
+        except Exception:
+            pass  # fd уже закрыт ОС при shutdown, или file в странном состоянии
 
     def _check_error(self, /):
         error = read_sleb128(self._read)
@@ -763,6 +795,7 @@ class JNIClient:
             write_byte(self._write, 0)
             self._flush()
             self._check_error()
+        self._run = True
 
     def GetCreatedJavaVMs(self, /) -> int:
         with self._lock:
@@ -786,12 +819,15 @@ class JNIClient:
             write_byte(self._write, 3)
             self._flush()
             self._check_error()
+        self._run = True
 
     def DetachCurrentThread(self, /) -> None:
         with self._lock:
             write_byte(self._write, 4)
             self._flush()
             self._check_error()
+        self._run = False
+        print("successfully detached")
 
     # VM helpers
 
@@ -938,7 +974,16 @@ class JNIClient:
         clazz = jclass(self, None, c_ptr)
         return (jfield_static if is_static else jfield)(self, clazz, name, type_, m_ptr)
 
-    # 10..28
+    # 10..23
+
+    def _DeleteLocalRef(self, ptr: int, /):
+        write = self._write
+        with self._lock:
+            write_byte(write, 24)
+            write_ptr(write, ptr)
+            self._flush()
+
+    # 25..28
 
     def NewObject(self, ctor: jmethod, /, *args: tuple[jvalue, ...]) -> jobject:
         write = self._write

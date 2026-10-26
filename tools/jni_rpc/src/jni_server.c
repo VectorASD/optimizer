@@ -517,7 +517,17 @@ bool handle_command(int fd, ClientCtx *ctx) {
             }
             break;
 
-        // 10..28
+        // 10..23
+
+        case 24:
+            object = (jobject) read_ptr(fd, &eos);
+            if (eos) return eos;
+
+            if (env)
+                (*env)->DeleteLocalRef(env, object);
+            break;
+
+        // 25..28
 
         case 29:
             method = (jmethod*) read_ptr(fd, &eos);
